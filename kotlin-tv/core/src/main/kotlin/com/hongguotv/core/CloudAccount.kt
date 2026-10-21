@@ -42,6 +42,8 @@ internal fun cloudResponse(response: okhttp3.Response): String {
     return text
 }
 
+data class CloudReservation(val series: Series,val online: Boolean,val publishAt: Long,val publishText: String="")
+
 class CloudAccountClient(private val http: OkHttpClient) {
     fun registerDevice(): DeviceRegister.Registered? {
         val body=DeviceRegister.payload(VendorConstants.device)
@@ -88,6 +90,16 @@ class CloudAccountClient(private val http: OkHttpClient) {
         }
         return progress.map { it.copy(series=series[it.series.id] ?: it.series.copy(title="剧集 ${it.series.id}")) }
     }
+    /** Protocol reference: charlie901208/HGTV feat/phone-login, accountReserves.
+     * Keep the two upstream categories separate; an unpublished series is never playable.
+     * The upstream pagination contract is unverified, so expose only this requested batch.
+     */
+    fun reservations(credentials: AccountCredentials,online: Boolean): List<CloudReservation> {
+        val raw=json(credentials,"/reading/user/subscribe/list/v0/",mapOf(
+            "offset" to "0","limit" to "20","is_online" to online.toString(),"tab_type" to "13",
+            "subscribe_order_type" to "0","swipe_type" to "0","need_calendar_schema" to "false","subscribe_offset" to "0"))
+        return parseReservations(raw,online)
+    }
     fun upload(credentials: AccountCredentials,progress: CloudProgress,episodeCount: Int) {
         require(progress.series.id.matches(Regex("[0-9]{1,30}")) && progress.episodeId.matches(Regex("[0-9]{1,30}")))
         val entry=JSONObject().put("book_id",progress.series.id).put("item_id",progress.episodeId)
@@ -100,6 +112,31 @@ class CloudAccountClient(private val http: OkHttpClient) {
         json(credentials,"/reading/bookapi/read_progress/upload/v1/",body=body)
     }
     companion object {
+        fun parseReservations(raw: JSONObject,online: Boolean): List<CloudReservation> {
+            val data=raw.optJSONObject("data") ?: throw IOException("预约数据格式已变化，请稍后重试")
+            // A null list is the upstream's empty category; missing/non-array data is an error.
+            if(!data.has("subscribe_items")) throw IOException("预约列表格式已变化，请稍后重试")
+            val rows=if(data.isNull("subscribe_items")) JSONArray() else data.optJSONArray("subscribe_items")
+                ?: throw IOException("预约列表格式已变化，请稍后重试")
+            val result=rows.objects().mapNotNull { row ->
+                val video=row.optJSONObject("subscribe_data") ?: row.optJSONObject("video_data") ?: row
+                val seriesId=video.str("series_id").ifBlank { row.str("series_id") }.ifBlank { row.str("book_id") }
+                // Unpublished entries use a flat reservation item, without a playable series ID.
+                // Namespace that key so it can never be mistaken for a playback ID.
+                val id=if(seriesId.matches(Regex("[0-9]{1,30}"))) seriesId
+                    else if(!online && video===row && row.str("item_id").matches(Regex("[0-9]{1,30}"))) "reservation:"+row.str("item_id")
+                    else return@mapNotNull null
+                val title=row.str("series_title").ifBlank { video.str("title") }.ifBlank { video.str("book_name") }.ifBlank { row.str("name") }
+                if(title.isBlank()) return@mapNotNull null
+                if(row.has("is_online") && row.optBoolean("is_online")!=online) return@mapNotNull null
+                val cover=row.str("series_cover_url").ifBlank { video.str("cover") }.ifBlank { video.str("cover_url") }.ifBlank { video.str("thumb_url") }
+                val stamp=row.optLong("schedule_publish_time").coerceAtLeast(0).let { if(it in 1..9999999999L) it*1000 else it }
+                val series=Series(id,title,cleanUrl(cover),video.str("video_desc").ifBlank { row.str("abstract") }.ifBlank { row.str("item_desc") },if(online) "已上线" else "待上线",video.str("category"))
+                CloudReservation(series,online,stamp,row.str("expected_rec_text"))
+            }.distinctBy { it.series.id }
+            if(rows.length()>0 && result.isEmpty()) throw IOException("预约条目格式已变化，请稍后重试")
+            return result
+        }
         fun parseProgress(rows: JSONArray): List<CloudProgress> = rows.objects().mapNotNull { row ->
             val id=row.str("series_id").ifEmpty { row.str("book_id") }; val episode=row.str("vid")
             if(!id.matches(Regex("[0-9]{1,30}")) || !episode.matches(Regex("[0-9]{1,30}"))) return@mapNotNull null
