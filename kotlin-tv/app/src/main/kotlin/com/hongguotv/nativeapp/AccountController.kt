@@ -64,6 +64,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
     private var credentials: AccountCredentials?=null
     private var profile: CloudProfile?=null
     private var history=emptyList<CloudProgress>()
+    private val acceptedReservations=mutableSetOf<String>()
     private var reservations=emptyMap<Boolean,ReservationState>()
     private var status="未登录"
     private var busy=false
@@ -82,6 +83,22 @@ class AccountController(private val activity: Activity,private val play: (CloudP
     fun historyRows(): List<CloudProgress> = if(signedIn) history.toList() else emptyList()
     fun refreshHistory() { refresh(false) }
     internal fun reservationState(online: Boolean): ReservationState = if(signedIn) reservations[online] ?: ReservationState() else ReservationState(message="未登录")
+    fun reservationLabel(work: RelatedWork): String = when {
+        !signedIn -> "登录后预约"
+        reservationState(false).rows.any { it.series.id==work.series.id || it.series.id=="reservation:${work.series.id}" } -> "已预约"
+        work.series.id in acceptedReservations -> "刷新预约状态"
+        else -> "预约"
+    }
+    fun reserve(work: RelatedWork,done: (String)->Unit) {
+        val account=credentials ?: run { show(); return }
+        if(busy) { toast("账号操作进行中，请稍候"); return }
+        if(reservationLabel(work)=="已预约") { done("该作品已在当前账号的预约列表中"); return }
+        if(work.series.id in acceptedReservations) { refreshReservations(); done("正在刷新预约列表，请稍后核对；未显示前暂不能确认预约生效。"); return }
+        task({ client.reserve(account,work) },{
+            acceptedReservations+=work.series.id; changed()
+            done("红果已接受预约请求，尚未在账号列表确认。请刷新预约状态，或在手机红果核对是否新增。")
+        },{ done("预约未完成：${safeError(it)}") })
+    }
     fun refreshReservations() {
         val account=credentials ?: return
         if(closed || reservations.values.any { it.loading }) return
@@ -183,7 +200,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
         return next to account
     }
     private fun acceptAccount(next: AccountCredentials,account: CloudProfile) {
-        credentials=next; profile=account; history=emptyList(); reservations=emptyMap(); generation++
+        credentials=next; profile=account; history=emptyList(); reservations=emptyMap(); acceptedReservations.clear(); generation++
         status="已登录，正在读取云端记录"; lastUpload=0; lastEpisode=""; lastProgress=null; pending=null; draining=false
         changed(); toast("已登录 ${account.nickname}"); refresh(true)
     }
@@ -291,7 +308,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
             .setNegativeButton("关闭",null))
     }
     private fun logout() {
-        generation++; busy=false; credentials=null; profile=null; history=emptyList(); reservations=emptyMap(); pending=null; lastProgress=null; draining=false
+        generation++; busy=false; credentials=null; profile=null; history=emptyList(); reservations=emptyMap(); acceptedReservations.clear(); pending=null; lastProgress=null; draining=false
         http.dispatcher.cancelAll(); status="已退出账号，自动同步已停止"; changed()
         worker.execute { val result=runCatching { store.clear() }; main.post { toast(if(result.isSuccess) status else "清除登录态失败，请重试退出") } }
     }
