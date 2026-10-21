@@ -59,6 +59,8 @@ class AccountHistoryTest {
             field(account,"credentials",AccountCredentials("test-only"))
             field(account,"profile",CloudProfile("a","账号 A"))
             field(account,"history",listOf(row))
+            field(account,"reservations",mapOf(true to ReservationState(listOf(CloudReservation(row.series,true,0)),loaded=true)))
+            assertEquals(1,account.reservationState(true).rows.size)
             assertEquals(row,account.progress("123"))
             var notifications=0
             account.onHistoryChanged={ notifications++ }
@@ -68,13 +70,16 @@ class AccountHistoryTest {
                 .invoke(account,AccountCredentials("test-only-b"),CloudProfile("b","账号 B"))
             assertTrue(account.signedIn)
             assertEquals("账号 B",account.accountLabel)
+            assertTrue(account.reservationState(true).rows.isEmpty())
             assertTrue(account.historyRows().isEmpty())
             assertNull(account.progress("123"))
             assertEquals(1,notifications)
             field(account,"history",listOf(row))
+            field(account,"reservations",mapOf(false to ReservationState(listOf(CloudReservation(row.series,false,0)),loaded=true)))
             val scope=account.historyScope
             AccountController::class.java.getDeclaredMethod("logout").apply { isAccessible=true }.invoke(account)
             assertFalse(account.signedIn)
+            assertTrue(account.reservationState(false).rows.isEmpty())
             assertTrue(account.historyScope>scope)
             assertTrue(account.historyRows().isEmpty())
             assertNull(account.progress("123"))
