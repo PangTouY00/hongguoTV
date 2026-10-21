@@ -2,6 +2,57 @@ package com.hongguotv.core
 
 fun main(args: Array<String>) {
     val repository=ContentRepository()
+    if(args.contains("--official-qr-login")) {
+        try {
+            val login=WebLogin(repository.http)
+            val qr=login.qr()
+            java.io.File("/tmp/hongguotv-official-login.png").writeBytes(qr.image)
+            println("officialQrReady=true; image=/tmp/hongguotv-official-login.png; expiresIn=${qr.expiresIn}")
+            val deadline=System.currentTimeMillis()+180_000
+            while(System.currentTimeMillis()<deadline) {
+                Thread.sleep(3000)
+                if(!login.poll()) continue
+                println("officialWebLogin=true")
+                val web=login.credentials()
+                val client=CloudAccountClient(repository.http)
+                val device=checkNotNull(client.registerDevice()) { "Device registration failed" }
+                val account=web.copy(deviceId=device.deviceId,installId=device.installId)
+                val profile=client.profile(account)
+                println("mobileAccountVerified=true; idPresent=${profile.id.isNotBlank()}")
+                val history=client.history(account)
+                println("cloudHistoryLoaded=true; items=${history.size}")
+                return
+            }
+            println("qrExpired=true")
+        } catch(error: Exception) { println("loginTestFailed=${error.message?.take(180)}") }
+        finally {
+            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        }
+        return
+    }
+    if(args.contains("--account-register")) {
+        try {
+            val registered=CloudAccountClient(repository.http).registerDevice()
+            check(registered!=null) { "Account device registration rejected" }
+            println("accountDeviceRegistered=true; credentialsRequested=false; smsSent=false")
+        } finally {
+            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        }
+        return
+    }
+    if(args.contains("--search-all")) {
+        try {
+            val keyword=args.getOrNull(args.indexOf("--search-all")+1) ?: "大佬"
+            for(page in 1..2) {
+                val result=repository.searchAll(keyword,page)
+                println("allSearchPage=$page; items=${result.items.size}; hasMore=${result.hasMore}; titles=${result.items.take(5).joinToString { it.title }}")
+                if(!result.hasMore) break
+            }
+        } finally {
+            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        }
+        return
+    }
     if(args.contains("--ranking")) {
         try {
             val first=repository.comicRanking()

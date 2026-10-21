@@ -1,0 +1,111 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Account endpoint shapes referenced from charlie901208/HGTV feat/phone-login, 2026-10-21.
+package com.hongguotv.core
+
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
+import org.json.JSONArray
+import java.io.IOException
+
+data class AccountCredentials(val cookie: String, val deviceId: String = "", val installId: String = "",
+    val device: Map<String,String> = emptyMap()) {
+    fun toJson() = JSONObject().put("cookie",cookie).put("deviceId",deviceId).put("installId",installId).put("device",JSONObject(device)).toString()
+    override fun toString() = "AccountCredentials([redacted])"
+    companion object {
+        fun fromJson(value: String): AccountCredentials {
+            val json=JSONObject(value); val device=json.optJSONObject("device") ?: JSONObject()
+            return AccountCredentials(json.getString("cookie"),json.str("deviceId"),json.str("installId"),
+                device.keys().asSequence().associateWith { device.getString(it) })
+        }
+    }
+}
+internal object AccountCredentialsParser {
+    fun parseHeader(value: String) = AccountCredentials(value)
+}
+data class CloudProfile(val id: String,val nickname: String)
+data class CloudProgress(val series: Series,val episodeId: String,val episodeIndex: Int,val position: Long,val duration: Long,val updatedAt: Long)
+
+internal fun cloudResponse(response: okhttp3.Response): String {
+    if(!response.isSuccessful) throw IOException("账号请求失败（HTTP ${response.code}）")
+    val body=response.body ?: throw IOException("账号接口响应为空")
+    val limit=2*1024*1024L
+    if(body.contentLength()>limit) throw IOException("账号接口响应过大")
+    val out=java.io.ByteArrayOutputStream(); val buffer=ByteArray(8192); val input=body.byteStream()
+    while(out.size()<=limit) { val n=input.read(buffer); if(n<0) break; out.write(buffer,0,n) }
+    val bytes=out.toByteArray()
+    if(bytes.size>limit) throw IOException("账号接口响应过大")
+    val text=String(bytes,Charsets.UTF_8)
+    if(text.isBlank()) throw IOException("账号接口返回空响应，请稍后重试")
+    return text
+}
+
+class CloudAccountClient(private val http: OkHttpClient) {
+    fun registerDevice(): DeviceRegister.Registered? {
+        val body=DeviceRegister.payload(VendorConstants.device)
+        val request=Request.Builder().url(DeviceRegister.url())
+        DeviceRegister.headers(body,VendorConstants.device).forEach { (k,v) -> request.header(k,v) }
+        request.post(body.toRequestBody("application/octet-stream".toMediaType()))
+        return http.newCall(request.build()).execute().use {
+            DeviceRegister.parse(cloudResponse(it),it.headers("Set-Cookie"))
+        }
+    }
+    private fun json(credentials: AccountCredentials,path: String,params: Map<String,String> = emptyMap(),body: ByteArray? = null): JSONObject {
+        val device=VendorConstants.device.toMutableMap().apply {
+            putAll(credentials.device); put("device_id",credentials.deviceId); put("iid",credentials.installId)
+            for(key in listOf("version_code","manifest_version_code","update_version_code","pv_player")) put(key,if(body!=null) "73932" else "72232")
+            put("version_name",if(body!=null) "7.3.9.32" else "7.2.2.32")
+        }
+        val signed=Signer(device=device).sign("https://api5-normal-sinfonlinea.fqnovel.com$path",device+params,body)
+        val request=Request.Builder().url(signed.url).header("Cookie",credentials.cookie)
+        signed.headers.forEach { (k,v)->request.header(k,v) }
+        if(body!=null) request.post(body.toRequestBody("application/json; charset=utf-8".toMediaType()))
+        return http.newCall(request.build()).execute().use { response ->
+            val json=JSONObject(cloudResponse(response))
+            val code=json.optInt("code",-1)
+            if(code!=0) throw IOException("账号接口不可用（错误码 $code），请重新登录或稍后重试")
+            json
+        }
+    }
+    fun profile(credentials: AccountCredentials): CloudProfile {
+        val data=json(credentials,"/reading/user/info/v1/").optJSONObject("data") ?: throw IOException("账号资料为空")
+        val id=data.str("biz_user_id")
+        if(id.isBlank()) throw IOException("登录态未通过账号验证，请重新登录")
+        return CloudProfile(id,data.str("user_name").ifBlank { "红果用户" })
+    }
+    fun history(credentials: AccountCredentials): List<CloudProgress> {
+        val data=json(credentials,"/reading/bookapi/read_progress/list/v1/",mapOf("book_types" to "2","limit" to "50"))
+        val rows=data.optJSONArray("video_data") ?: data.optJSONObject("data")?.optJSONArray("video_data")
+            ?: throw IOException("云端历史数据格式已变化")
+        val progress=parseProgress(rows)
+        if(progress.isEmpty()) return emptyList()
+        val details=json(credentials,"/reading/bookapi/multi-detail/v1/",mapOf("book_id" to progress.map { it.series.id }.joinToString(","),"book_type" to "2"))
+            .optJSONArray("data") ?: throw IOException("云端剧集资料格式已变化")
+        val series=details.objects().associate { row ->
+            row.str("book_id") to Series(row.str("book_id"),row.str("book_name"),cleanUrl(row.str("thumb_url")),row.str("abstract"))
+        }
+        return progress.map { it.copy(series=series[it.series.id] ?: it.series.copy(title="剧集 ${it.series.id}")) }
+    }
+    fun upload(credentials: AccountCredentials,progress: CloudProgress,episodeCount: Int) {
+        require(progress.series.id.matches(Regex("[0-9]{1,30}")) && progress.episodeId.matches(Regex("[0-9]{1,30}")))
+        val entry=JSONObject().put("book_id",progress.series.id).put("item_id",progress.episodeId)
+            .put("vid_index",progress.episodeIndex+1).put("current_play_time",progress.position.coerceAtLeast(0))
+            .put("current_total_time",progress.duration.coerceAtLeast(0)).put("episode_count",episodeCount)
+            .put("read_timestamp_ms",progress.updatedAt).put("book_type",2)
+            .put("progress_rate",if(progress.duration>0) (progress.position.toDouble()/progress.duration).coerceIn(0.0,1.0).toString() else "0")
+            .put("player_cumulative_total_duration",progress.position.coerceAtLeast(0))
+        val body=JSONObject().put("books",JSONArray().put(entry)).put("write_mode",1).toString().toByteArray()
+        json(credentials,"/reading/bookapi/read_progress/upload/v1/",body=body)
+    }
+    companion object {
+        fun parseProgress(rows: JSONArray): List<CloudProgress> = rows.objects().mapNotNull { row ->
+            val id=row.str("series_id").ifEmpty { row.str("book_id") }; val episode=row.str("vid")
+            if(!id.matches(Regex("[0-9]{1,30}")) || !episode.matches(Regex("[0-9]{1,30}"))) return@mapNotNull null
+            val stamp=row.optLong("last_watch_time").let { if(it in 1..9999999999L) it*1000 else it }
+            CloudProgress(Series(id,""),episode,(row.optInt("vid_index",1)-1).coerceAtLeast(0),
+                row.optLong("current_play_time").coerceAtLeast(0),row.optLong("current_total_time").coerceAtLeast(0),stamp)
+        }.distinctBy { it.series.id }.sortedByDescending { it.updatedAt }
+    }
+}

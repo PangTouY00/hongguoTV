@@ -1,3 +1,5 @@
+> 自用维护仓库：15104932170/hongguoTV；当前稳定功能、版本与分支约定见 [主说明](../README.md)。下面的旧版本章节保留为历史记录；更新发布流程以 [AUTO_UPDATES.md](AUTO_UPDATES.md) 为准。
+
 # 红果 TV 原生独立版
 
 这是独立的 **Kotlin + Android 原生 View + Media3** 工程，最低 Android 8.0 / API 26。安装一个 APK，联网后可直接浏览和播放，无需部署 Node、Docker 或填写服务器地址。
@@ -7,7 +9,7 @@
 - 收藏和历史独立保存在本机，不自动迁移旧版数据。
 - APK 不含 JNI 库，可由 Android 在 ARM32、ARM64、x86、x86_64 上运行；视频解码能力依赖设备。
 - 源码分支：`codex/kotlin-standalone`。
-- [下载正式签名 APK](https://github.com/N3urda/hongguoTV-updates/releases/latest)
+- [下载正式签名 APK](https://github.com/15104932170/hongguoTV/releases)
 
 0.2.1 修复简介与设置切换后的焦点跳转，并适配放大字号的卡片高度。可直接覆盖安装 0.2.0，保留收藏和观看记录；见 [交付与验证记录](DELIVERY.md)。
 

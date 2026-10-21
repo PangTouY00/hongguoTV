@@ -1,42 +1,47 @@
-# GitHub 自动发布与电视应用内更新
+# 应用内更新与发布
 
-公开渠道：`N3urda/hongguoTV-updates`。原开发仓库仍为私有。首次需要手动把带更新功能的正式 APK 安装到电视，此后不用逐次传文件。
+当前仓库及更新源：`15104932170/hongguoTV`。
+
+App 从 `https://github.com/15104932170/hongguoTV/releases/latest/download/update.json` 检查新版，再从同仓库指定标签下载 APK。从 0.9.6 开始改用这个地址，之前安装的 0.9.5 仍指向原作者更新源，需要手动覆盖安装迁移版一次。
+
+## 开发与发布分别进行
+
+`main` 保存稳定功能，后续在 `codex/<功能名>` 开发，经 PR 合并回主分支。原生 CI 运行 JVM 测试、Android lint 并生成开发 APK，供下载验证；CI Artifact 不会自动成为 Release，也不保证使用电视当前的签名。
+
+本仓库已经移除原作者的跨仓库同步与发布模板，不再推送到 `N3urda/hongguoTV-updates`。目前没有启用自动发布或配置发布密钥；发布时由维护者上传附件。
+
+## 发布一个更新
+
+1. 在 `kotlin-tv/app/build.gradle.kts` 增加 `versionCode`，调整 `versionName`，保留包名 `com.hongguotv.nativeapp` 和原签名。0.9.6 的内部版本号为 15，下个版本至少为 16。
+2. 完成检查并构建 APK。当前电视安装的是本次开发使用的签名，分发包必须沿用它，不能直接换成其他开发机或 GitHub Actions 默认生成的 Debug 签名。不要提交签名文件或密码。
+3. APK 命名如 `hongguotv-kotlin-0.9.6-android8.apk`。创建同仓库 Release，标签如 `kotlin-v0.9.6`；上传 APK 与 `update.json`，并正式发布、设为 Latest。草稿和预发布不作为此稳定更新源。
+4. `update.json` 的版本、大小（字节）与 SHA256 必须与上传 APK 完全一致。例如下方结构中的 `size` 和 `sha256` 必须填入实际值，不能原样使用占位内容。
+
+```json
+{
+  "schema": 1,
+  "packageName": "com.hongguotv.nativeapp",
+  "versionCode": 15,
+  "versionName": "0.9.6",
+  "minSdk": 26,
+  "tag": "kotlin-v0.9.6",
+  "apk": {
+    "name": "hongguotv-kotlin-0.9.6-android8.apk",
+    "size": 12345678,
+    "sha256": "填写实际64位小写SHA256"
+  },
+  "notes": "本次更新说明"
+}
+```
+
+APK 名称必须满足 `hongguotv-kotlin-版本标识-android8.apk`，标签必须以 `kotlin-v` 开头。文件名与标签允许数字、英文字母、点号、加号和短横线。维护发布时附上相应源码或源码链接，保留 GPL 许可。
 
 ## 电视上的行为
 
-- 前台浏览时每 6 小时检查一次最新正式版；首次进入应用延迟 8 秒，避免抢首屏。播放或离开前台会取消更新请求，返回浏览页后可继续下载。
-- 默认自动检查并下载，设置 → 版本与更新可以关闭，也可以手动检查。下载失败保留当前应用；部分文件清理，自动下载重试至少间隔 30 分钟。
-- 下载完显示版本信息，选择「安装新版」。第一次需允许本应用安装未知来源应用，之后调用系统安装确认。普通 Android 8 没有静默安装权限，仍须确认。
-- 选择「稍后」推迟该版本提醒一天；不会中断正在播放的视频。同版本、旧版本和要求更高 Android 版本的安装包不会自动安装。
-- APK 写入应用私有缓存，仅临时授权系统安装程序读取。下载使用 HTTPS、文件长度和 SHA-256 校验，并验证 APK 实际包名、版本号、最低 SDK 和当前安装应用的签名；不在 APK 中保存 GitHub 令牌。
+- 前台浏览时每 6 小时检查一次，首次进入延迟 8 秒；播放时不打扰。
+- 默认自动检查并下载，设置里可关闭，也可以手动检查。
+- 下载后核对大小、SHA256、实际包名、版本及签名，确认后调用系统安装，保留账号与本机记录。
+- 普通电视仍需允许安装未知来源应用并确认安装，不能静默安装。
+- 没有发布过 Release 或缺少 `update.json` 时提示暂无可用更新。网络无法访问 GitHub 时不会影响现有播放功能。
 
-## 从推送到发布
-
-1. 向私有仓库 `codex/kotlin-standalone` 推送原生客户端改动。
-2. `kotlin-public-sync.yml` 导出 HEAD 中跟踪的原生工程、构建文件及许可证到公开仓库 main。不会复制私有 Git 历史、未跟踪文件、构建目录或本地签名材料。
-3. 公开仓库 `release.yml` 执行 JVM 测试、Release lint 和正式签名构建。
-4. 构建成功后，先创建草稿、上传 APK、源码 ZIP、`update.json` 与 `SHA256SUMS`，确认 GitHub 附件摘要一致，再正式发布并设为 latest。构建失败不替换旧版。
-5. 电视通过公开 Release 的 `latest/download/update.json` 获取新版本，无需 GitHub 登录。
-
-同步只对原生代码、构建和同步流程相关路径触发；不因旧 React Native 服务或无关研究资料的提交发布 APK。旧的验证 workflow 继续保留。
-
-## 签名与同步配置
-
-配置动作需仓库所有者授权。公开仓库的 Actions Secrets：
-
-- `HONGGUOTV_KEYSTORE_B64`：与旧正式版相同的 keystore 的 Base64 编码。
-- `HONGGUOTV_STORE_PASSWORD`、`HONGGUOTV_KEY_ALIAS`、`HONGGUOTV_KEY_PASSWORD`：原签名配置。
-
-私有仓库的 `TV_UPDATES_DEPLOY_KEY` 是独立 SSH 私钥，对应公钥只授予公开更新仓库写入权限。签名私钥只在运行签名构建的临时目录中恢复，任务结束删除；源码和 APK 均不包含这些凭据。
-
-完成授权及凭据配置后，将私有仓库 Actions variable `TV_UPDATES_ENABLED` 设为 `true`，下一次相关推送即启用同步。在未启用时，同步任务跳过，常规构建验证照常执行。
-
-不要改成在 APK 中嵌入 PAT，也不要向公开仓库同步私有 Git 历史。撤销自动发布时可禁用同步工作流并删除该部署密钥；签名 Secrets 可以单独撤销。
-
-## 版本规则与本地构建
-
-云端 `versionCode = 10000 + release workflow run_number`，显示版本为 `0.9.0+run_number`。同一次已发布构建的重跑不覆盖原 APK；旧构建重跑也不能取代更新的 latest。保留此工作流的递增编号，后续调整版本显示名称时仍维持 versionCode 单调递增。
-
-本地未传环境变量时生成 0.9.0 / versionCode 9，供首次验证。复现云端源码时，应从该 Release 的 `update.json` 读取版本，传入 `HONGGUOTV_VERSION_CODE` 和 `HONGGUOTV_VERSION_NAME`；本地低版本号的 APK 无法覆盖较高云端版本。正式分发以云端签名包为准。
-
-电视系统没有安装器、禁止未知来源或无法访问 GitHub 时，自动更新不能完成；旧版仍可继续使用。最低 API 26 不等于 Android 8 实体电视已验收。
+仓库必须能让电视匿名访问公开 Release；App 不保存 GitHub 令牌，不支持从私有仓库下载更新。

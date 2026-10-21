@@ -4,9 +4,9 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-    paths-ignore: ['docs/**', 'README.md']
+    paths: ['server/**', 'src/**', '__tests__/**', 'package.json', 'package-lock.json', 'tsconfig.json', 'docker-compose.yml', 'compose.yaml', 'scripts/smoke-docker.sh', '.github/workflows/verify-publish.yml']
   pull_request:
-    paths-ignore: ['docs/**', 'README.md']
+    paths: ['server/**', 'src/**', '__tests__/**', 'package.json', 'package-lock.json', 'tsconfig.json', 'docker-compose.yml', 'compose.yaml', 'scripts/smoke-docker.sh', '.github/workflows/verify-publish.yml']
   workflow_dispatch:
 
 permissions:

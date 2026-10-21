@@ -1,12 +1,16 @@
 # hongguoTV
 
-当前分支提供 **Kotlin 原生独立 APK**：安装后联网即可使用，无需 Node / Docker。最低 Android 8.0，电视遥控器操作。
+本仓库为自用维护版，基于原项目 [N3urda/hongguoTV](https://github.com/N3urda/hongguoTV)，保留原提交历史与 GPL-3.0 许可证。
 
-**[下载原生版 APK](https://github.com/N3urda/hongguoTV-updates/releases/latest)** · [原生版说明与构建](kotlin-tv/README.md)
+**当前稳定代码在 `main`**。Kotlin 原生独立 APK，最低 Android 8.0，安装后联网即可使用，无需 Node / Docker。保留全部搜索、播放兼容修复、本地收藏与历史，以及红果官方扫码登录和云端继续观看。扫码登录和云端最近 50 部记录读取已实测成功；用户已确认电视登录成功，手机端对电视上传进度的续播效果仍需核对。
 
-0.9.0 增加应用内更新：推送原生代码后自动同步至公开发布仓库、构建签名 APK；电视在浏览时检查并下载新版，确认系统安装即可，无需逐次传文件。播放中不检查，覆盖安装保留本机记录。见 [自动更新说明](kotlin-tv/AUTO_UPDATES.md)。
+**[版本发布与 APK](https://github.com/15104932170/hongguoTV/releases)** · [原生构建说明](kotlin-tv/README.md) · [更新发布说明](kotlin-tv/AUTO_UPDATES.md) · [分支开发流程](CONTRIBUTING.md)
 
-原生工程位于 `kotlin-tv/`，包名 `com.hongguotv.nativeapp`，可与旧版并存。以下为保留的 React Native 版说明。
+从 0.9.6 起，应用内更新源指向本仓库 Releases。尚未发布 Release 时，App 会提示暂无可用更新；推送源码和 Actions 构建附件都不会自动成为在线更新。正式发布需上传 APK 与 `update.json`，并沿用相同签名。
+
+后续功能从 `main` 新建 `codex/<功能名>` 分支，测试通过后通过 Pull Request 合并回 `main`。自动检查覆盖主分支与针对主分支的原生代码 PR。
+
+原生工程位于 `kotlin-tv/`，包名 `com.hongguotv.nativeapp`。以下为保留的旧 React Native 版说明，其中原作者历史发布链接仅供参考。
 
 ---
 

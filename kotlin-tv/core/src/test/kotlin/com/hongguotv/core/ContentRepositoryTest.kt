@@ -12,6 +12,61 @@ import org.junit.Test
 import java.io.IOException
 
 class ContentRepositoryTest {
+    @Test fun allSearchUsesWebsiteDirectlyAndKeepsBothContentTypes() {
+        var calls=0
+        val repo=repository { request ->
+            calls++
+            assertEquals("hongguoduanju.com",request.url.host)
+            assertEquals("/search/大佬",request.url.encodedPath.let { java.net.URLDecoder.decode(it,"UTF-8") })
+            assertEquals("2",request.url.queryParameter("page"))
+            assertNull(request.url.queryParameter("tab_type"))
+            assertNull(request.header("x-gorgon"))
+            """<script>_ROUTER_DATA={"loaderData":{"search_page":{"searchList":[{"series_id":"123","series_name":"真人短剧"},{"series_id":"456","series_name":"动画漫剧"}]}}}};</script>"""
+        }
+        val page=repo.searchAll("大佬",2)
+        assertEquals(listOf("123","456"),page.items.map { it.id })
+        assertEquals(1,calls)
+        assertTrue(page.hasMore)
+    }
+
+    @Test fun allSearchDoesNotTurnNetworkFailureIntoEmptyResults() {
+        val repo=repository { throw IOException("offline") }
+        assertThrows(IOException::class.java) { repo.searchAll("大佬") }
+    }
+
+    @Test fun playbackUsesUnsignedIndependentIdentifiersAndKeepsThemAcrossEpisodes() {
+        val requests=mutableListOf<Request>()
+        val repo=repository { request ->
+            requests+=request
+            """{"Code":110001}"""
+        }
+        repeat(2) {
+            val error=assertThrows(IOException::class.java) { repo.stream("123") }
+            assertTrue(error.message.orEmpty().contains("110001"))
+        }
+        for(request in requests) {
+            assertEquals("POST",request.method)
+            for(header in listOf("x-gorgon","x-medusa","x-argus","x-ladon")) assertNull(request.header(header))
+            assertTrue(request.header("User-Agent").orEmpty().contains("tt-ok/"))
+            for(key in listOf("iid","device_id")) {
+                val value=request.url.queryParameter(key)!!
+                assertTrue(value.matches(Regex("3[0-9]{18}")))
+                assertNotEquals(VendorConstants.device[key],value)
+                assertEquals(requests.first().url.queryParameter(key),value)
+            }
+            assertEquals(requests.first().url.queryParameter("cdid"),request.url.queryParameter("cdid"))
+            val body=okio.Buffer()
+            request.body!!.writeTo(body)
+            assertEquals("123",JSONObject(body.readUtf8()).getJSONObject("mixed_video_id_map").getJSONArray("1004").getString(0))
+        }
+    }
+
+    @Test fun emptyPlaybackResponseReportsActionableError() {
+        val repo=repository { "   " }
+        val error=assertThrows(IOException::class.java) { repo.stream("123") }
+        assertTrue(error.message.orEmpty().contains("空响应"))
+    }
+
     private fun streamRepository(vararg variants: Triple<Int,String,String>) = repository { request ->
         if(request.url.host=="example.com") {
             val rows=JSONObject()
@@ -210,6 +265,8 @@ class ContentRepositoryTest {
         var requests=0
         val repo=repository { request ->
             requests++
+            assertNotNull(request.header("x-gorgon"))
+            assertEquals(VendorConstants.device["device_id"],request.url.queryParameter("device_id"))
             assertEquals("19",request.url.queryParameter("tab_type"))
             assertEquals(if(requests==1) "0" else "20",request.url.queryParameter("offset"))
             assertEquals("修仙",request.url.queryParameter("query"))

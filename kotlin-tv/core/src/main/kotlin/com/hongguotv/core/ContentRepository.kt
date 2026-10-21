@@ -8,6 +8,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import org.json.JSONObject
 import org.json.JSONArray
 import java.io.IOException
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 internal fun JSONArray.objects() = (0 until length()).mapNotNull { optJSONObject(it) }
@@ -27,6 +28,16 @@ class SearchSessionExpiredException: IOException("搜索结果已过期，请从
 class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).callTimeout(45,TimeUnit.SECONDS).build(), private val clock: () -> Long = System::currentTimeMillis) {
     private val signer = Signer()
     private val site = "https://hongguoduanju.com"
+    // Compatibility approach from upstream PR #22. Keep search signing separate.
+    // Identifiers remain stable for this repository's lifetime, including episode changes.
+    private val playerDevice = VendorConstants.device + mapOf(
+        "iid" to newPlayerDeviceId(), "device_id" to newPlayerDeviceId(),
+        "cdid" to UUID.randomUUID().toString()
+    )
+    private fun newPlayerDeviceId() = buildString {
+        append('3')
+        repeat(18) { append(kotlin.random.Random.nextInt(10)) }
+    }
     private data class SearchCursor(val searchId: String, val passback: String, val offset: Int?, val updatedAt: Long)
     private val searchCursors=linkedMapOf<Triple<ContentType,String,Int>,SearchCursor>()
     private fun text(url: String, signed: Signer.Request? = null): String {
@@ -70,6 +81,11 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         // The website search does not constrain content type. Never use it for comics.
         if(type==ContentType.COMIC) return appSearch(keyword,page,type)
         try { val result=appSearch(keyword,page,type); if(result.items.isNotEmpty() || !result.hasMore) return result } catch (e: Exception) { if(e is SearchSessionExpiredException) throw e; /* Website fallback for short dramas only. */ }
+        return searchAll(keyword,page)
+    }
+    /** Website search includes both short dramas and comics without a category-specific API. */
+    fun searchAll(keyword: String, page: Int = 1): CatalogPage {
+        require(keyword.isNotBlank() && keyword.length<=80 && page in 1..100)
         val data=router("$site/search/${Signer.encode(keyword)}?page=$page")
         val section=data.optJSONObject("search_(keyword)/page") ?: data.optJSONObject("search_page") ?: throw IOException("搜索数据暂不可用")
         val rows=section.optJSONArray("searchList") ?: throw IOException("搜索数据结构已变化")
@@ -126,9 +142,17 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     fun stream(id: String, maxQuality: Int = 1080): StreamInfo {
         require(id.matches(Regex("[0-9]{1,30}")))
         val payload="""{"biz_param":{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}""".toByteArray()
-        val signed=signer.sign("https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/",VendorConstants.device,payload)
-        val data=JSONObject(text(signed.url,signed))
-        if(data.optInt("Code",data.optInt("code",0))!=0) throw IOException("播放接口暂不可用")
+        val query=Signer.encode(playerDevice + ("_rticket" to clock().toString()))
+        val playerUrl="https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/?$query"
+        val request=Signer.Request(playerUrl,mapOf(
+            "User-Agent" to "com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)",
+            "Accept" to "application/json; charset=utf-8,application/x-protobuf"
+        ),payload)
+        val response=text(playerUrl,request)
+        if(response.isBlank()) throw IOException("播放接口返回空响应，请稍后重试或更新应用")
+        val data=JSONObject(response)
+        val code=data.optInt("Code",data.optInt("code",0))
+        if(code!=0) throw IOException("播放接口暂不可用（错误码 $code）")
         val map=data.optJSONObject("data") ?: throw IOException("播放信息为空")
         val entry=map.optJSONObject(id) ?: map.keys().asSequence().mapNotNull { map.optJSONObject(it) }.firstOrNull() ?: throw IOException("播放信息为空")
         val model=entry.optJSONObject("video_model") ?: JSONObject(entry.str("video_model"))
