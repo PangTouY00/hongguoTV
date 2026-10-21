@@ -78,6 +78,9 @@ class MainActivity: Activity() {
     private lateinit var library: Library
     private lateinit var tvTools: TvTools
     private lateinit var updater: AppUpdater
+    private data class DetailVisit(val detail: Detail,val episode: Int,val group: Int)
+    private val detailTrail=java.util.ArrayDeque<DetailVisit>()
+    private var relatedSection: RelatedWorksView?=null
     private var reservationOnline=true
     private val reservationFilters=mutableListOf<View>()
     private var accountHistoryScope=0
@@ -202,6 +205,9 @@ class MainActivity: Activity() {
             openDetail(remote.series,true,cloudProgress=remote)
         }
         cloudAccount.onHistoryChanged={
+            relatedSection?.refreshLabels()
+            if(screen=="detail" && relatedSection!=null && cloudAccount.signedIn && cloudAccount.reservationState(false).message=="尚未读取预约记录")
+                cloudAccount.refreshReservations()
             tabState.remove(5); tabState.remove(6)
             if(accountHistoryScope!=cloudAccount.historyScope) {
                 accountHistoryScope=cloudAccount.historyScope; tabFocus.remove(5); tabFocus.remove(6)
@@ -261,6 +267,7 @@ class MainActivity: Activity() {
         generation++; cancelWork(); artwork.cancelPage()
     }
     private fun releaseCatalogViews() {
+        relatedSection=null
         homeScreen?.let { homePosition=it.capturePosition() }
         catalogScroll?.let { scrollPositions[catalogPageKey]=it.scrollY }
         catalogBody=null
@@ -335,6 +342,7 @@ class MainActivity: Activity() {
         else -> when(tab) { 3 -> library.favorites(); 5 -> cloudAccount.historyRows().map { it.series }; 6 -> cloudAccount.reservationState(reservationOnline).rows.map { it.series }; else -> library.history().map { it.series } }
     }
     private fun showCatalog(load: Boolean=false,focusNav: Boolean=false,focusType: Boolean=false) {
+        relatedSection=null; detailTrail.clear()
         reservationFilters.clear()
         initialCatalogPending=false; restoreStoppedPage=false; pendingDetail=null
         // Never cache a new page number with the previous page's results while a request is pending.
@@ -804,7 +812,9 @@ class MainActivity: Activity() {
             }
         })
     }
-    private fun openDetail(series: Series,resume: Boolean=false,autoplay: Boolean=true,cloudProgress: CloudProgress?=null) {
+    private fun openDetail(series: Series,resume: Boolean=false,autoplay: Boolean=true,cloudProgress: CloudProgress?=null,fromRelated: Boolean=false) {
+        if(!fromRelated) detailTrail.clear()
+        relatedSection=null
         val accountScope=cloudAccount.historyScope
         pendingDetail=series; detailAutoplay=autoplay
         invalidatePage(); releaseCatalogViews(); screen="detail"; directPlayback=resume; detail=null; synopsisExpanded=false
@@ -819,7 +829,7 @@ class MainActivity: Activity() {
             if(resume) playEpisode(target.index,target.position,autoplay=detailAutoplay) else showDetail(false)
         }, { problem -> error(body,problem) {
             if(cloudProgress!=null && accountScope!=cloudAccount.historyScope) showCatalog()
-            else openDetail(series,resume,detailAutoplay,cloudProgress)
+            else openDetail(series,resume,detailAutoplay,cloudProgress,fromRelated)
         } })
     }
     private fun showDetail(focusEpisode: Boolean) {
@@ -871,6 +881,30 @@ class MainActivity: Activity() {
             content.addView(line,lp(-1,dp(49)))
         }
         episodes.forEachIndexed { i,v -> v.nextFocusLeftId=if(i%10==0) v.id else episodes[i-1].id; v.nextFocusRightId=if(i%10==9 || i==episodes.lastIndex) v.id else episodes[i+1].id; if(i>=10) v.nextFocusUpId=episodes[i-10].id; v.nextFocusDownId=if(i+10<episodes.size) episodes[i+10].id else v.id }
+        lateinit var section: RelatedWorksView
+        fun loadRelated(force: Boolean=false) {
+            section.loading()
+            work({ repository.related(data.series.id,force) },{ rows -> section.show(rows) },{ section.failed() })
+        }
+        section=RelatedWorksView(this,episodes,::loadCover,cloudAccount::reservationLabel,{ related,anchor ->
+            if(related.upcoming) {
+                if(!cloudAccount.signedIn) cloudAccount.show()
+                else tvTools.choose(related.series.title,listOf(cloudAccount.reservationLabel(related)),anchor,{ _ ->
+                    val scope=cloudAccount.historyScope
+                    cloudAccount.reserve(related) { message ->
+                        if(screen=="detail" && detail?.series?.id==data.series.id && scope==cloudAccount.historyScope)
+                            tvTools.info("预约状态",message,anchor)
+                    }
+                })
+            } else {
+                if(detailTrail.size>=10) detailTrail.removeFirst()
+                detailTrail.addLast(DetailVisit(data,episodeIndex,group))
+                openDetail(related.series,fromRelated=true)
+            }
+        },{ loadRelated(true) })
+        relatedSection=section; content.addView(section)
+        if(cloudAccount.signedIn && cloudAccount.reservationState(false).message=="尚未读取预约记录") cloudAccount.refreshReservations()
+        loadRelated()
         if(focusEpisode) episodes.getOrNull((episodeIndex-group*20).coerceIn(0,episodes.lastIndex))?.requestFocus() else play.requestFocus()
     }
     private fun playEpisode(index: Int,position: Long=0,autoplay: Boolean=true,recovering: Boolean=false) {
@@ -1230,7 +1264,12 @@ class MainActivity: Activity() {
         if(!library.isLoaded) { finish(); return }
         when(screen) {
             "player" -> if(hud.visibility==View.VISIBLE && !playError) hidePlaybackOverlay() else returnToDetail()
-            "detail" -> showCatalog()
+            "detail" -> {
+                val previous=detailTrail.pollLast()
+                if(previous==null) showCatalog() else {
+                    detail=previous.detail; episodeIndex=previous.episode; group=previous.group; showDetail(false)
+                }
+            }
             else -> if(collection!=null) { leaveCollection(); showCatalog() } else if(nav.any { it.hasFocus() }) { if(tab!=0) { switchTab(0); nav[0].requestFocus() } else finish() } else nav.getOrNull(tab)?.requestFocus()
         }
     }

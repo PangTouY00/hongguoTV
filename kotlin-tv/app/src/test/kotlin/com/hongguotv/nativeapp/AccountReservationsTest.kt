@@ -57,6 +57,31 @@ class AccountReservationsTest {
             }
         } finally { account.destroy(); activity.pause().stop().destroy() }
     }
+    @Test fun acceptedReservationDoesNotPretendAccountListHasConfirmedIt() {
+        val activity=Robolectric.buildActivity(Activity::class.java).setup()
+        val account=AccountController(activity.get()) {}
+        try {
+            flush(account); ShadowLooper.idleMainLooper()
+            var calls=0
+            val http=OkHttpClient.Builder().addInterceptor { chain ->
+                calls++
+                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                    .body("""{"code":0}""".toResponseBody()).build()
+            }.build()
+            set(account,"client",CloudAccountClient(http)); set(account,"credentials",AccountCredentials("test-only"))
+            val work=RelatedWork(Series("123","待上线测试剧"),"第3季",true)
+            var message=""
+            account.reserve(work) { message=it }; flush(account); ShadowLooper.idleMainLooper()
+            assertEquals(1,calls)
+            assertTrue(message.contains("尚未在账号列表确认"))
+            assertEquals("刷新预约状态",account.reservationLabel(work))
+            assertTrue(account.reservationState(false).rows.isEmpty())
+            set(account,"reservations",mapOf(false to ReservationState(listOf(CloudReservation(Series("reservation:123","待上线测试剧"),false,0)),loaded=true)))
+            assertEquals("已预约",account.reservationLabel(work))
+            AccountController::class.java.getDeclaredMethod("logout").apply { isAccessible=true }.invoke(account)
+            assertEquals("登录后预约",account.reservationLabel(work))
+        } finally { account.destroy(); activity.pause().stop().destroy() }
+    }
     @Test fun reservationFiltersShowSeparateCountsAndPendingCardsDoNotStartPlayback() {
         val controller=Robolectric.buildActivity(MainActivity::class.java).create()
         val activity=controller.get()
