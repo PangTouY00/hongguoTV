@@ -2,9 +2,9 @@
 
 > Android 6 特性分支：本分支测试版本为 `0.0.2-android6` / `versionCode=17`，`minSdk=23`。更新解析兼容 `android6.apk` 和旧 `android8.apk`；Android 6 会跳过要求 API 26 的稳定版。此分支只供手动安装验证，未发布稳定 Release，也未合并主分支；下方 0.0.1 是主分支发布基线。
 
-当前仓库及更新源：`15104932170/hongguoTV`。
+当前仓库及更新源：`tsukiyo-zero/hongguoTV`。
 
-App 从 `https://github.com/15104932170/hongguoTV/releases/latest/download/update.json` 检查新版，再从同仓库指定标签下载 APK。当前自用维护版编号为 0.0.1，沿用迁移后的更新地址；之前安装的 0.9.5 仍指向原作者更新源，需要手动覆盖安装当前版本一次。
+App 从 `https://github.com/tsukiyo-zero/hongguoTV/releases/latest/download/update.json` 检查新版，再从同仓库指定标签下载 APK。当前自用维护版编号为 0.0.1，沿用迁移后的更新地址；之前安装的 0.9.5 仍指向原作者更新源，需要手动覆盖安装当前版本一次。
 
 ## 开发与发布分别进行
 
