@@ -1,0 +1,50 @@
+# 开发与排查笔记
+
+本文件保存仍适用于当前代码的排查结论，替代旧交付报告和按日期堆积的实验记录。涉及接口行为的结论有时效性，改动前对照源码和真实反馈；不将自动化测试当成设备验收。
+
+## 项目基线
+
+- 当前原生工程在 `kotlin-tv/`；`main` 是统一 Android 6+ 基线，不分别维护 Android 6、Android 8 产品线。
+- minSdk 23、compileSdk/targetSdk 36、JDK 17；原生构建和发布入口见 [构建说明](../kotlin-tv/README.md)。
+- 保留上游 Git 历史、旧 RN/Node 源码、许可证和第三方声明。历史文档可从 Git 恢复，不必保留在根目录。
+- 每项需求从最新 main 开短期分支。未合并的功能需要到对应分支读取文档，不能把测试分支描述成已发布功能。
+- 只由用户操作电视、模拟器并反馈；自动化检查和打包由开发侧执行。
+
+## 内容与播放
+
+- 搜索使用 `ContentRepository.searchAll()` 的网站搜索，覆盖短剧和漫剧。首页分类与搜索独立；不要重新引入已失败的漫剧搜索链路。
+- 首页、搜索正常但播放超时时，先核对播放请求路由、设备标识和响应是否为空。
+- 当前播放使用独立的随机设备标识，同一 Repository 实例内保持稳定；不附带搜索签名头。参考来源和许可见 [NOTICE](../kotlin-tv/NOTICE.md)。不要把其他社区项目的播放路由直接替换进来而不验证本项目已有效的链路。
+- 保留响应大小限制、请求取消、媒体解密、视频轨道检查和原有清晰度筛选。空响应或平台拒绝不应伪装成空列表或成功播放。
+- 只有明确的前后台页面、会话代次允许异步结果更新 UI；离开页面或切换账号后丢弃旧结果。
+
+## 登录与账户
+
+- 红果官网扫码流程可用；业务登录以账号资料存在有效身份为准。匿名设备注册成功或短信发出均不等于账号已登录。
+- 短信曾被滑块和会话过期拦截。不要枚举验证码、重复发送、猜测多个验码端点；错误状态要明确显示。
+- Android 的 OnDismissListener 异步派发曾导致 busy 未及时清除，后续保存任务被跳过。主动关闭 QR 时先解除旧监听，再同步释放操作状态，防止旧回调干扰后继任务。
+- AccountStore 使用 Android Keystore AES-GCM；账号凭据不进入片单备份、文档、Git 或日志。
+- 云端历史限制最近 50 部；本机续播与云端续播来源分开，退出、换号立即清空云端资料并使旧请求失效。
+
+## 预约与相关季
+
+- 预约列表为 `/reading/user/subscribe/list/v0/`，`tab_type=13`，`is_online=true/false` 分别取两类；单类失败不能伪装成无记录。
+- 已上线通常提供 subscribe_data / video_data 嵌套资料；待上线实际返回外层 name、cover、item_desc、item_id、expected_rec_text。不得因缺少嵌套对象而把整批待上线丢掉。
+- 没有可播放 series_id 的预约条目使用带 `reservation:` 前缀的内部显示键，不把它拿去播放。
+- 相关季接口为 `/reading/bookapi/plan/v:version/`，`scene=10`、`from=detail_page_more_related`。相关 cell 为 show_type 547；content_type 1004 是短剧，1007 是待上线，即使 disable_play=false 也不能播放。原著小说不在当前展示范围。
+- 预约提交必须使用目标季身份，不误用其他预约项编号。请求接受不等于账户列表已确认，不提前显示成功；详见 [相关作品说明](../kotlin-tv/RELATED_WORKS.md)。
+
+## Android 6 兼容
+
+- Base64 使用已有 Bouncy Castle 实现，避免调用 Android 6 不具备的 java.util.Base64。
+- 有界封面队列使用旧系统具备的带容量构造方法。
+- Android 6 使用 NetworkRequest 监听网络；Android 7+ 才调用默认网络监听。
+- Android 8+ 使用逐应用安装权限流程；旧系统交给系统安装器。读取 minSdkVersion 等较新 API 必须做版本判断。
+- 分发 APK 保持签名连续，并兼容 Android 6 的 v1 签名；覆盖前核对包名、内部版本和签名。
+
+## 更新与测试
+
+- versionCode 按所有分发包递增，测试包也算；versionName、分支名和 Release 标签没有自动关联。
+- update.json 是本项目自定义更新协议，当前不会随构建自动产生；版本、附件名、大小、SHA256 必须与实际 APK 一致。
+- 旧更新源或旧最低系统更新逻辑的已安装 APK，可能需要手动覆盖一次才能切换本仓库更新源。推送或合并源码不会修改已安装 APK。
+- 当前构建步骤见 [构建说明](../kotlin-tv/README.md)，发布步骤见 [在线更新说明](../kotlin-tv/AUTO_UPDATES.md)。只有文档改动不需要重新构建 Android；检查相对链接和 Git diff 即可。

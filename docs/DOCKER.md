@@ -1,3 +1,5 @@
+> 仅适用于保留的旧 React Native / Node 服务。当前 Kotlin 原生 APK 不依赖此服务，无需按本文部署。
+
 # Docker 部署
 
 Docker 运行独立内容服务，电视安装 APK 后连接它。目标为家庭网络中的电脑或 NAS，提供 `linux/amd64` 和 `linux/arm64` 镜像。收藏与观看进度保存在电视本地，服务无需挂载数据卷。

@@ -1,6 +1,6 @@
 # 相关作品与下一季预约
 
-开发分支：`feature-related-works`，测试版 `0.0.6-related-works` / versionCode 22。
+相关作品已由用户验收并合并 main。原开发分支为 `feature-related-works`，验收包为 `0.0.6-related-works` / versionCode 22。本文保留协议和验证边界，不作为当前 APK 版本说明。
 
 ## 已核对的读取协议
 
