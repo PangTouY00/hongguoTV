@@ -45,6 +45,6 @@
 ## 更新与测试
 
 - versionCode 按所有分发包递增，测试包也算；versionName、分支名和 Release 标签没有自动关联。
-- update.json 是本项目自定义更新协议，当前不会随构建自动产生；版本、附件名、大小、SHA256 必须与实际 APK 一致。
+- update.json 是本项目自定义更新协议，运行 scripts/build-kotlin.sh 会从实际 APK 自动生成配套清单；普通 Gradle 构建不生成。版本、附件名、大小、SHA256 必须与实际 APK 一致。
 - 旧更新源或旧最低系统更新逻辑的已安装 APK，可能需要手动覆盖一次才能切换本仓库更新源。推送或合并源码不会修改已安装 APK。
 - 当前构建步骤见 [构建说明](../kotlin-tv/README.md)，发布步骤见 [在线更新说明](../kotlin-tv/AUTO_UPDATES.md)。只有文档改动不需要重新构建 Android；检查相对链接和 Git diff 即可。
