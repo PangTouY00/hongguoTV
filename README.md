@@ -8,7 +8,7 @@
 
 当前版本的应用内更新源指向本仓库 Releases。尚未发布 Release 时，App 会提示暂无可用更新；推送源码和 Actions 构建附件都不会自动成为在线更新。正式发布需上传 APK 与 `update.json`，并沿用相同签名。
 
-后续功能从 `main` 新建 `codex/<功能名>` 分支，测试通过后通过 Pull Request 合并回 `main`。自动检查覆盖主分支与针对主分支的原生代码 PR。
+后续功能从 `main` 新建 `feature-<功能名>` 或 `fix-<问题名>` 分支，测试通过后通过 Pull Request 合并回 `main`。自动检查覆盖主分支与针对主分支的原生代码 PR。
 
 原生工程位于 `kotlin-tv/`，包名 `com.hongguotv.nativeapp`。以下为保留的旧 React Native 版说明，其中原作者历史发布链接仅供参考。
 

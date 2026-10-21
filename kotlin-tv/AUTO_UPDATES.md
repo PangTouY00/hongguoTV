@@ -6,7 +6,7 @@ App 从 `https://github.com/tsukiyo-zero/hongguoTV/releases/latest/download/upda
 
 ## 开发与发布分别进行
 
-`main` 保存稳定功能，后续在 `codex/<功能名>` 开发，经 PR 合并回主分支。原生 CI 运行 JVM 测试、Android lint 并生成开发 APK，供下载验证；CI Artifact 不会自动成为 Release，也不保证使用电视当前的签名。
+`main` 保存稳定功能，后续在 `feature-<功能名>` 或 `fix-<问题名>` 开发，经 PR 合并回主分支。原生 CI 运行 JVM 测试、Android lint 并生成开发 APK，供下载验证；CI Artifact 不会自动成为 Release，也不保证使用电视当前的签名。
 
 本仓库已经移除原作者的跨仓库同步与发布模板，不再推送到 `N3urda/hongguoTV-updates`。目前没有启用自动发布或配置发布密钥；发布时由维护者上传附件。
 

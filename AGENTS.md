@@ -1,7 +1,9 @@
 # Repository workflow
 
 - The stable branch is `main`. Keep existing upstream history and GPL notices.
-- For subsequent features and fixes, branch from the latest `main` using `codex/<short-description>`. Implement and validate there, then use a pull request to merge into `main`; do not directly push new feature work to `main` unless the user explicitly authorizes it.
+- The user prefers flat branch names without `codex/` or other grouping prefixes. Use `feature-...`, `fix-...`, and the independent compatibility branch `android6-support`.
+- `main` currently supports Android 8+. Keep Android 6 changes separate until explicitly authorized to merge; discussing a unified Android 6+ main is not merge authorization.
+- For subsequent features and fixes, branch from the latest `main` using `feature-<short-description>` or `fix-<short-description>`. Implement and validate there, then use a pull request to merge into `main`; do not directly push new feature work to `main` unless the user explicitly authorizes it.
 - The initial migration of the existing working features into this repository's `main` is authorized directly by the user.
 - The active Android client is `kotlin-tv/`. Keep historical React Native sources unless the task specifically concerns their removal.
 - Run relevant checks. Native changes normally require `:core:test :app:assembleDebug :app:lintDebug`; documentation-only changes do not need Android builds.
