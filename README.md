@@ -1,6 +1,6 @@
 # hongguoTV
 
-> 当前为独立特性分支 `codex/android6-support`：最低系统改为 Android 6.0（API 23），测试版 `0.0.2-android6` / 内部版本 17。**暂未合并 `main`**；主分支仍为 0.0.1、最低 Android 8。兼容性说明见 [Android 6 支持](docs/ANDROID6_SUPPORT.md)。
+> 当前为独立特性分支 `android6-support`：最低系统改为 Android 6.0（API 23），测试版 `0.0.2-android6` / 内部版本 17。**暂未合并 `main`**；主分支仍为 0.0.1、最低 Android 8。兼容性说明见 [Android 6 支持](docs/ANDROID6_SUPPORT.md)。
 
 本仓库为自用维护版，基于原项目 [N3urda/hongguoTV](https://github.com/N3urda/hongguoTV)，保留原提交历史与 GPL-3.0 许可证。
 

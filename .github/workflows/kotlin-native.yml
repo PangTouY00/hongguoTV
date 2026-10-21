@@ -1,7 +1,7 @@
 name: Verify Kotlin standalone APK
 on:
   push:
-    branches: [main, 'codex/android6-support']
+    branches: [main, 'android6-support']
     tags: ['kotlin-v*']
   pull_request:
     branches: [main]

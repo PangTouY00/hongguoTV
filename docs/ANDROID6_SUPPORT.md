@@ -1,6 +1,6 @@
 # Android 6 兼容特性分支
 
-分支：`codex/android6-support`，基于 `main` 的 `be2d8e8`（0.0.1 / versionCode 16）。按用户要求作为独立特性，暂不合并主分支，不发布稳定 Release。
+分支：`android6-support`，基于 `main` 的 `be2d8e8`（0.0.1 / versionCode 16）。按用户要求作为独立特性，暂不合并主分支，不发布稳定 Release。
 
 本分支测试版本：`0.0.2-android6`，内部版本号 17。最低系统为 Android 6.0 / API 23；compileSdk 与 targetSdk 保持 36，不通过降低目标版本掩盖兼容问题。
 
