@@ -20,6 +20,14 @@ class AppUpdatesTest {
         val dir = Files.createTempDirectory("update-test").toFile()
         try { block(File(dir, "update.apk")) } finally { dir.deleteRecursively() }
     }
+    @Test fun android6AndLegacyAndroid8UpdatesRespectTheirMinimumSdk() {
+        val metadata=json().put("versionCode",17).put("versionName","0.0.2-android6").put("minSdk",23).put("tag","kotlin-v0.0.2-android6")
+        metadata.getJSONObject("apk").put("name","hongguotv-kotlin-0.0.2-android6.apk")
+        val compatible=AppUpdate.parse(metadata.toString())
+        assertTrue(compatible.newerThan(16,23)); assertFalse(compatible.newerThan(16,22))
+        assertFalse(update().newerThan(16,23))
+        assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(metadata.put("minSdk",22).toString()) }
+    }
     @Test fun onlyHigherCompatibleVersionsAreUpdates() {
         val update = update()
         assertTrue(update.newerThan(9, 26)); assertFalse(update.newerThan(10001, 36)); assertFalse(update.newerThan(10002, 36)); assertFalse(update.newerThan(9, 25))

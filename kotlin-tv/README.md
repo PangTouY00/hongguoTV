@@ -1,3 +1,5 @@
+> 本分支提供 Android 6.0+ 测试 APK，暂未合并主分支；详见 [Android 6 兼容说明](../docs/ANDROID6_SUPPORT.md)。
+
 > 自用维护仓库：15104932170/hongguoTV；当前稳定功能、版本与分支约定见 [主说明](../README.md)。下面的旧版本章节保留为历史记录；更新发布流程以 [AUTO_UPDATES.md](AUTO_UPDATES.md) 为准。
 
 # 红果 TV 原生独立版

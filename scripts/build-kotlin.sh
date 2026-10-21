@@ -13,6 +13,12 @@ fi
 mkdir -p "$repo_dir/outputs"
 native_version="${HONGGUOTV_VERSION_NAME:-$(sed -n 's/.*versionName = .*?: "\([^"]*\)".*/\1/p' "$repo_dir/kotlin-tv/app/build.gradle.kts")}"
 [[ "$native_version" =~ ^[0-9][0-9A-Za-z.+-]*$ ]] || { echo "Invalid APK version" >&2; exit 1; }
-native_apk="$repo_dir/outputs/hongguotv-kotlin-$native_version-android8.apk"
+native_min_sdk="$(sed -n 's/.*minSdk = \([0-9]*\).*/\1/p' "$repo_dir/kotlin-tv/app/build.gradle.kts")"
+case "$native_min_sdk" in
+  23) native_android=android6 ;;
+  26) native_android=android8 ;;
+  *) echo "Unsupported minimum SDK for APK naming: $native_min_sdk" >&2; exit 1 ;;
+esac
+native_apk="$repo_dir/outputs/hongguotv-kotlin-${native_version%-$native_android}-$native_android.apk"
 cp "$repo_dir/kotlin-tv/app/build/outputs/apk/release/app-release.apk" "$native_apk"
 if command -v shasum >/dev/null; then shasum -a 256 "$native_apk"; else sha256sum "$native_apk"; fi

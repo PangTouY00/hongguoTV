@@ -1,5 +1,7 @@
 # 应用内更新与发布
 
+> Android 6 特性分支：本分支测试版本为 `0.0.2-android6` / `versionCode=17`，`minSdk=23`。更新解析兼容 `android6.apk` 和旧 `android8.apk`；Android 6 会跳过要求 API 26 的稳定版。此分支只供手动安装验证，未发布稳定 Release，也未合并主分支；下方 0.0.1 是主分支发布基线。
+
 当前仓库及更新源：`15104932170/hongguoTV`。
 
 App 从 `https://github.com/15104932170/hongguoTV/releases/latest/download/update.json` 检查新版，再从同仓库指定标签下载 APK。当前自用维护版编号为 0.0.1，沿用迁移后的更新地址；之前安装的 0.9.5 仍指向原作者更新源，需要手动覆盖安装当前版本一次。
@@ -34,7 +36,7 @@ App 从 `https://github.com/15104932170/hongguoTV/releases/latest/download/updat
 }
 ```
 
-APK 名称必须满足 `hongguotv-kotlin-版本标识-android8.apk`，标签必须以 `kotlin-v` 开头。文件名与标签允许数字、英文字母、点号、加号和短横线。维护发布时附上相应源码或源码链接，保留 GPL 许可。
+APK 名称支持 `hongguotv-kotlin-版本标识-android6.apk` 或旧 `hongguotv-kotlin-版本标识-android8.apk`，标签必须以 `kotlin-v` 开头。文件名与标签允许数字、英文字母、点号、加号和短横线。维护发布时附上相应源码或源码链接，保留 GPL 许可。
 
 ## 电视上的行为
 

@@ -18,7 +18,7 @@ git push -u origin codex/account-page
 原生客户端检查：
 
 ```sh
-./kotlin-tv/gradlew -p kotlin-tv :core:test :app:assembleDebug :app:lintDebug
+./kotlin-tv/gradlew -p kotlin-tv :core:test :app:testDebugUnitTest :app:assembleDebug :app:lintDebug
 ```
 
 需要 JDK 17 和 Android SDK 36。构建签名仅保存在本机或仓库 Secrets，不提交到 Git。每次分发 APK 增加内部 `versionCode`，沿用之前安装包的签名。
