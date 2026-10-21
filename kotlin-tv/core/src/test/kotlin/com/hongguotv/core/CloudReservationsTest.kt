@@ -52,6 +52,17 @@ class CloudReservationsTest {
             assertThrows(IOException::class.java) { CloudAccountClient.parseReservations(JSONObject(raw),true) }
         }
     }
+    @Test fun unpublishedFlatItemsKeepMetadataWithoutInventingPlayableSeriesIds() {
+        val raw=JSONObject("""{"data":{"subscribe_items":[{"is_online":false,"item_id":"777","name":"待上线示例","item_desc":"剧集简介","cover":"https://example.com/poster.jpg","expected_rec_text":"明天上线","category":"漫剧"}]}}""")
+        val item=CloudAccountClient.parseReservations(raw,false).single()
+        assertEquals("reservation:777",item.series.id)
+        assertEquals("待上线示例",item.series.title)
+        assertEquals("https://example.com/poster.jpg",item.series.cover)
+        assertEquals("剧集简介",item.series.description)
+        assertEquals("明天上线",item.publishText)
+        assertFalse(item.online)
+        assertThrows(IOException::class.java) { CloudAccountClient.parseReservations(raw,true) }
+    }
     @Test fun rejectedSessionIsNotReportedAsNoReservations() {
         val http=OkHttpClient.Builder().addInterceptor { chain ->
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")

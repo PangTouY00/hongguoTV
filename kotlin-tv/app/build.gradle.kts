@@ -11,8 +11,8 @@ android {
         applicationId = "com.hongguotv.nativeapp"
         minSdk = 23
         targetSdk = 36
-        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 20
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.0.4-account-reservations"
+        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 21
+        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.0.5-reservations-fix"
     }
     buildFeatures { buildConfig = true }
     testOptions {

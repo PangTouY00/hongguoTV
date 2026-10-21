@@ -611,6 +611,7 @@ class MainActivity: Activity() {
     }
     private fun reservationDescription(row: CloudReservation): String {
         if(row.online) return "已上线 · 可观看"
+        if(row.publishText.isNotBlank()) return "待上线 · ${row.publishText}"
         return if(row.publishAt>0) "待上线 · 预计 "+java.text.SimpleDateFormat("yyyy-MM-dd HH:mm",java.util.Locale.CHINA).format(java.util.Date(row.publishAt))
             else "待上线 · 上线时间暂未公布"
     }
