@@ -1,6 +1,6 @@
 # 自用仓库迁移
 
-目标：`git@github.com:15104932170/hongguoTV.git`，稳定分支 `main`。
+目标：`git@github.com:tsukiyo-zero/hongguoTV.git`，稳定分支 `main`。
 
 保留原 Git 历史与许可证，将当前全部搜索、播放修复、官方扫码登录、云端记录读取及电视登录状态保存修复作为现有功能基线。原远端保留为 `upstream`，用户仓库作为 `origin`。
 

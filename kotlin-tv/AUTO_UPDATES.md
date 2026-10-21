@@ -1,8 +1,8 @@
 # 应用内更新与发布
 
-当前仓库及更新源：`15104932170/hongguoTV`。
+当前仓库及更新源：`tsukiyo-zero/hongguoTV`。
 
-App 从 `https://github.com/15104932170/hongguoTV/releases/latest/download/update.json` 检查新版，再从同仓库指定标签下载 APK。当前自用维护版编号为 0.0.1，沿用迁移后的更新地址；之前安装的 0.9.5 仍指向原作者更新源，需要手动覆盖安装当前版本一次。
+App 从 `https://github.com/tsukiyo-zero/hongguoTV/releases/latest/download/update.json` 检查新版，再从同仓库指定标签下载 APK。当前自用维护版编号为 0.0.1，沿用迁移后的更新地址；之前安装的 0.9.5 仍指向原作者更新源，需要手动覆盖安装当前版本一次。
 
 ## 开发与发布分别进行
 
