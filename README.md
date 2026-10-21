@@ -2,11 +2,11 @@
 
 本仓库为自用维护版，基于原项目 [N3urda/hongguoTV](https://github.com/N3urda/hongguoTV)，保留原提交历史与 GPL-3.0 许可证。
 
-**当前稳定代码在 `main`**。Kotlin 原生独立 APK，最低 Android 8.0，安装后联网即可使用，无需 Node / Docker。保留全部搜索、播放兼容修复、本地收藏与历史，以及红果官方扫码登录和云端继续观看。扫码登录和云端最近 50 部记录读取已实测成功；用户已确认电视登录成功，手机端对电视上传进度的续播效果仍需核对。
+**当前稳定代码在 `main`，自用维护版从 `0.0.1` 开始编号**（内部 `versionCode=16`，继续兼容此前安装包升级）。Kotlin 原生独立 APK，最低 Android 8.0，安装后联网即可使用，无需 Node / Docker。保留全部搜索、播放兼容修复、本地收藏与历史，以及红果官方扫码登录和云端继续观看。扫码登录和云端最近 50 部记录读取已实测成功；用户已确认电视登录成功，手机端对电视上传进度的续播效果仍需核对。
 
 **[版本发布与 APK](https://github.com/15104932170/hongguoTV/releases)** · [原生构建说明](kotlin-tv/README.md) · [更新发布说明](kotlin-tv/AUTO_UPDATES.md) · [分支开发流程](CONTRIBUTING.md)
 
-从 0.9.6 起，应用内更新源指向本仓库 Releases。尚未发布 Release 时，App 会提示暂无可用更新；推送源码和 Actions 构建附件都不会自动成为在线更新。正式发布需上传 APK 与 `update.json`，并沿用相同签名。
+当前版本的应用内更新源指向本仓库 Releases。尚未发布 Release 时，App 会提示暂无可用更新；推送源码和 Actions 构建附件都不会自动成为在线更新。正式发布需上传 APK 与 `update.json`，并沿用相同签名。
 
 后续功能从 `main` 新建 `codex/<功能名>` 分支，测试通过后通过 Pull Request 合并回 `main`。自动检查覆盖主分支与针对主分支的原生代码 PR。
 

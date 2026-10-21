@@ -2,7 +2,7 @@
 
 当前仓库及更新源：`15104932170/hongguoTV`。
 
-App 从 `https://github.com/15104932170/hongguoTV/releases/latest/download/update.json` 检查新版，再从同仓库指定标签下载 APK。从 0.9.6 开始改用这个地址，之前安装的 0.9.5 仍指向原作者更新源，需要手动覆盖安装迁移版一次。
+App 从 `https://github.com/15104932170/hongguoTV/releases/latest/download/update.json` 检查新版，再从同仓库指定标签下载 APK。当前自用维护版编号为 0.0.1，沿用迁移后的更新地址；之前安装的 0.9.5 仍指向原作者更新源，需要手动覆盖安装当前版本一次。
 
 ## 开发与发布分别进行
 
@@ -12,21 +12,21 @@ App 从 `https://github.com/15104932170/hongguoTV/releases/latest/download/updat
 
 ## 发布一个更新
 
-1. 在 `kotlin-tv/app/build.gradle.kts` 增加 `versionCode`，调整 `versionName`，保留包名 `com.hongguotv.nativeapp` 和原签名。0.9.6 的内部版本号为 15，下个版本至少为 16。
+1. 在 `kotlin-tv/app/build.gradle.kts` 增加 `versionCode`，调整 `versionName`，保留包名 `com.hongguotv.nativeapp` 和原签名。当前显示版本为 0.0.1，内部版本号为 16；此前 0.9.6 的内部版本号为 15。显示版本重新编号，内部编号仍递增；下次可用 0.0.2 / 17。
 2. 完成检查并构建 APK。当前电视安装的是本次开发使用的签名，分发包必须沿用它，不能直接换成其他开发机或 GitHub Actions 默认生成的 Debug 签名。不要提交签名文件或密码。
-3. APK 命名如 `hongguotv-kotlin-0.9.6-android8.apk`。创建同仓库 Release，标签如 `kotlin-v0.9.6`；上传 APK 与 `update.json`，并正式发布、设为 Latest。草稿和预发布不作为此稳定更新源。
+3. APK 命名如 `hongguotv-kotlin-0.0.1-android8.apk`。创建同仓库 Release，标签如 `kotlin-v0.0.1`；上传 APK 与 `update.json`，并正式发布、设为 Latest。草稿和预发布不作为此稳定更新源。
 4. `update.json` 的版本、大小（字节）与 SHA256 必须与上传 APK 完全一致。例如下方结构中的 `size` 和 `sha256` 必须填入实际值，不能原样使用占位内容。
 
 ```json
 {
   "schema": 1,
   "packageName": "com.hongguotv.nativeapp",
-  "versionCode": 15,
-  "versionName": "0.9.6",
+  "versionCode": 16,
+  "versionName": "0.0.1",
   "minSdk": 26,
-  "tag": "kotlin-v0.9.6",
+  "tag": "kotlin-v0.0.1",
   "apk": {
-    "name": "hongguotv-kotlin-0.9.6-android8.apk",
+    "name": "hongguotv-kotlin-0.0.1-android8.apk",
     "size": 12345678,
     "sha256": "填写实际64位小写SHA256"
   },
