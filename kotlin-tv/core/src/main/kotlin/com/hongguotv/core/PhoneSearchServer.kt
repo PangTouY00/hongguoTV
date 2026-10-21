@@ -18,12 +18,13 @@ class PhoneSearchServer(
     address: String,
     private val onQuery: (String)->Unit,
     private val onExpired: ()->Unit = {},
-    ttlMillis: Long = 300_000
+    ttlMillis: Long = 300_000,
+    private val onConnected: ()->Unit = {}
 ): Closeable {
     private val stopped=AtomicBoolean(false)
     private val consumed=AtomicBoolean(false)
     private val localAddress=InetAddress.getByName(address).also { require(it.isLoopbackAddress || it.isSiteLocalAddress) }.hostAddress
-    private val listener=ServerSocket(0,4).apply { soTimeout=500 }
+    private val listener=ServerSocket(0,4,InetAddress.getByName(localAddress)).apply { soTimeout=500 }
     private val deadline=System.nanoTime()+ttlMillis.coerceIn(1,300_000)*1_000_000
     private val token=ByteArray(16).also { SecureRandom().nextBytes(it) }.joinToString("") { "%02x".format(it.toInt() and 255) }
     private val host="$localAddress:${listener.localPort}"
@@ -77,7 +78,8 @@ class PhoneSearchServer(
         if(stopped.get() || consumed.get() || System.nanoTime()>=deadline) return respond(socket,410,"二维码已失效，请在电视上重新打开手机输入")
         if(headers["host"]!=host || request[1] !in listOf("/$token","/$token/submit")) return respond(socket,404,"页面不存在")
         if(request[0]=="GET" && request[1]=="/$token") {
-            return respond(socket,200,"""<h1>在电视上搜索</h1><p>输入剧名，电视会按当前选择的漫剧或短剧分类搜索。</p><form method="post" action="/$token/submit"><input name="query" maxlength="80" required autofocus placeholder="输入剧名或关键词" autocomplete="off"><button>发送到电视</button></form><p>页面仅在电视的手机输入窗口打开期间有效，最长 5 分钟。</p>""")
+            onConnected()
+            return respond(socket,200,"""<h1>在电视上搜索</h1><p>输入剧名，电视会搜索全部短剧和漫剧。</p><form method="post" action="/$token/submit"><input name="query" maxlength="80" required autofocus placeholder="输入剧名或关键词" autocomplete="off"><button>发送到电视</button></form><p>页面仅在电视的手机输入窗口打开期间有效，最长 5 分钟。</p>""")
         }
         if(request[0]!="POST" || request[1]!="/$token/submit") return respond(socket,405,"不支持的操作")
         if(headers["origin"]!=null && headers["origin"]!="http://$host") return respond(socket,403,"来源不匹配")

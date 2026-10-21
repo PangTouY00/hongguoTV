@@ -30,6 +30,17 @@ class PhoneSearchServerTest {
             assertTrue(runCatching { request(server) }.isFailure)
         }
     }
+    @Test fun `connection status only reports a valid phone page request`() {
+        var connections=0
+        PhoneSearchServer("127.0.0.1",{},onConnected={ connections++ }).use { server ->
+            request(server,path="/wrong")
+            assertEquals(0,connections)
+            val page=request(server)
+            assertEquals(1,connections)
+            assertTrue(page.contains("全部短剧和漫剧"))
+            assertFalse(page.contains("按当前选择"))
+        }
+    }
     @Test fun `wrong token host and cross site posts cannot submit`() {
         var submitted=false
         PhoneSearchServer("127.0.0.1",{ submitted=true }).use { server ->

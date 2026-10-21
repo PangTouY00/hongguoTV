@@ -33,8 +33,8 @@ class TvTools(private val activity: Activity) {
     private fun label(value: String,size: Float=17f)=TextView(activity).apply { text=value; textSize=size; setTextColor(Color.WHITE); setPadding(dp(8),dp(4),dp(8),dp(4)) }
     private fun column()=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(16),dp(4),dp(16),dp(8)) }
     private fun open(next: AlertDialog,anchor: View?) {
-        dialog?.dismiss(); dialog=next
-        next.setOnDismissListener { if(dialog===next) { phone?.close(); phone=null; dialog=null }; if(anchor?.isAttachedToWindow==true) anchor.requestFocus() }
+        val previous=dialog; dialog=null; phone?.close(); phone=null; previous?.dismiss(); dialog=next
+        next.setOnDismissListener { if(dialog===next) { phone?.close(); phone=null; dialog=null; if(anchor?.isAttachedToWindow==true) anchor.requestFocus() } }
         next.show()
     }
     fun close() { dialog?.dismiss(); phone?.close(); phone=null }
@@ -101,30 +101,45 @@ class TvTools(private val activity: Activity) {
         contentDescription="二维码"
     }
     fun phoneInput(anchor: View?,submit: (String)->Unit) {
-        val connectivity=activity.getSystemService(ConnectivityManager::class.java)
-        val network=connectivity.activeNetwork
-        val capabilities=connectivity.getNetworkCapabilities(network)
-        val address=connectivity.getLinkProperties(network)?.linkAddresses?.map { it.address }?.firstOrNull { it is Inet4Address && it.isSiteLocalAddress }?.hostAddress
-        if(address==null || capabilities==null || !(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
-            info("手机输入","请让电视和手机连接同一局域网（Wi-Fi 或有线网络）后重试。",anchor); return
+        val addresses=runCatching { LanInputAddresses.find(activity.getSystemService(ConnectivityManager::class.java)) }.getOrDefault(emptyList())
+        if(addresses.isEmpty()) {
+            info("手机输入","未找到可用的 Wi-Fi 或网线局域网地址。请检查电视网络；手机和电视需要在可互通的局域网内。",anchor); return
         }
-        val content=column(); val status=label("正在生成二维码…"); content.addView(status)
-        val next=AlertDialog.Builder(activity).setTitle("手机输入剧名").setView(content).setNegativeButton("关闭",null).create()
-        open(next,anchor)
+        showPhoneInput(anchor,submit,addresses,0)
+    }
+    private fun showPhoneInput(anchor: View?,submit: (String)->Unit,addresses: List<LanInputAddress>,index: Int) {
+        val selected=addresses[index]
+        val content=column(); val status=label("正在开启手机输入…"); content.addView(status)
+        val builder=AlertDialog.Builder(activity).setTitle("手机输入剧名").setView(content).setNegativeButton("关闭",null)
+            .setPositiveButton("连接帮助",null)
+        if(addresses.size>1) builder.setNeutralButton("切换地址",null)
+        val next=builder.create(); open(next,anchor)
+        next.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            val message="请依次检查：\n1. 用手机浏览器打开二维码地址；扫码软件内打不开时，选择在浏览器打开。\n2. 手机不要只用移动数据；手机和电视需处于可互通的局域网。\n3. 访客 Wi-Fi、路由器设备隔离、VPN 可能阻断连接。\n4. 多个网络可尝试切换地址；电脑模拟器的内部地址通常无法被手机访问。\n\n返回时会重新生成二维码，旧地址随窗口关闭失效。"
+            val help=AlertDialog.Builder(activity).setTitle("手机连接不上").setMessage(message)
+                .setPositiveButton("重新生成二维码") { _,_-> showPhoneInput(anchor,submit,addresses,index) }.setNegativeButton("关闭",null).create()
+            open(help,anchor)
+        }
+        if(addresses.size>1) next.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+            choose("选择电视网络地址",addresses.map { "${it.label} · ${it.address}" },anchor,{ chosen -> showPhoneInput(anchor,submit,addresses,chosen) })
+        }
         worker.execute {
             try {
-                val session=PhoneSearchServer(address,{ query -> main.post { if(dialog===next) { next.dismiss(); submit(query) } } },{ main.post { if(dialog===next) { content.removeAllViews(); content.addView(label("二维码已过期，请关闭后重新打开。")) } } })
+                val session=PhoneSearchServer(selected.address,{ query -> main.post { if(dialog===next) { next.dismiss(); submit(query) } } },
+                    { main.post { if(dialog===next) status.text="二维码已过期，请关闭后重新打开。" } },
+                    onConnected={ main.post { if(dialog===next) status.text="手机已连接，请在手机上输入剧名并发送。" } })
                 main.post {
                     if(dialog!==next) { session.close(); return@post }
                     phone=session; content.removeAllViews()
                     val row=LinearLayout(activity).apply { gravity=Gravity.CENTER_VERTICAL }
                     row.addView(qr(session.url),LinearLayout.LayoutParams(dp(185),dp(185)))
                     val instructions=column()
-                    instructions.addView(label("手机扫码后用浏览器打开，输入剧名发送到电视。\n需连接同一局域网；关闭窗口即失效，最长 5 分钟。",16f))
+                    instructions.addView(label("${selected.label} · ${selected.address}\n手机扫码后，用浏览器打开并发送剧名。\n需要同一局域网；二维码有效 5 分钟。",16f))
                     instructions.addView(label(session.url,12f))
                     row.addView(instructions,LinearLayout.LayoutParams(0,-2,1f)); content.addView(row)
+                    status.text="等待手机连接…"; content.addView(status)
                 }
-            } catch(_: Exception) { main.post { if(dialog===next) status.text="无法开启手机输入，请检查网络后重试。" } }
+            } catch(_: Exception) { main.post { if(dialog===next) status.text="此地址无法开启手机输入，请关闭重试，或切换其他网络地址。" } }
         }
     }
     fun libraryTransfer(backup: String,anchor: View?,restore: (BackupData,Boolean)->Unit) {
