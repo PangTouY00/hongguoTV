@@ -41,7 +41,7 @@ Release 构建读取 `kotlin-tv/keystore.properties`（已忽略）或对应环�
 ./scripts/build-kotlin.sh
 ```
 
-脚本执行测试、Release lint、Release 构建，并将 APK 复制到 `outputs/`；它不会生成 `update.json`、推送代码或创建 GitHub Release。发布完整步骤见 [AUTO_UPDATES.md](AUTO_UPDATES.md)。
+脚本执行测试、Release lint、Release 构建，从实际 APK 读取版本和最低系统，计算大小与 SHA256，自动在 `outputs/releases/<tag>/` 生成配套 APK 和 `update.json`。需要 Python 3，以及 Android SDK 中的 aapt。它不会推送代码或创建 GitHub Release。发布完整步骤见 [AUTO_UPDATES.md](AUTO_UPDATES.md)。
 
 ## 验证边界
 
