@@ -8,10 +8,33 @@
 
 1. 在 `app/build.gradle.kts` 调整 versionName，增加 versionCode。内部版本号必须超过此前所有分发 APK，包含内部测试包。允许跳过未公开的版本号，无需补发每个中间版本。环境变量可覆盖默认版本，打包后核对 APK 实际元数据。
 2. 使用同一包名 `com.hongguotv.nativeapp` 和现有签名构建，检查最低系统、版本和签名。不要换用新 Debug 签名或将签名密钥提交到仓库。构建方法见 [README](README.md)。
-3. 根据实际 APK 单独生成 `update.json`。目前 Gradle 和 `scripts/build-kotlin.sh` 都不自动生成此文件。
+3. 执行 `./scripts/build-kotlin.sh`，自动在 `outputs/releases/<tag>/` 生成配套 APK 和 `update.json`。清单从实际 APK 提取版本、包名、最低系统，并计算大小和 SHA256；环境变量覆盖后的版本也会正确读取。直接运行 Gradle 或 IDEA 的普通构建任务仍只生成 APK。
 4. 创建同仓库 Release。Target 选择实际打包所用的提交或分支；APK 若来自尚未合并的功能分支，不能误选 main。
 5. 上传配套 APK 和 `update.json`，正式发布并设为 Latest。草稿和 Pre-release 不用于稳定在线更新。
 6. 在较旧版本的设备上检查更新，核对下载与覆盖安装。推送代码、合并 main 或生成 Actions Artifact 不等于发布在线更新。
+
+## 自动生成参数
+
+默认从 APK 的三段版本号生成标签，例如 `0.0.8-search-input` 对应 `kotlin-v0.0.8`。发布时 GitHub 标签必须与清单一致。脚本不会自动增加版本号。
+
+可以指定标签及 UTF-8 更新说明文件（最多 1500 字；不指定时说明为空）：
+
+```sh
+HONGGUOTV_RELEASE_TAG=kotlin-v0.0.8 \
+HONGGUOTV_RELEASE_NOTES_FILE=/绝对路径/更新说明.txt \
+./scripts/build-kotlin.sh
+```
+
+默认读取 Android SDK 的 aapt，也可用 `HONGGUOTV_AAPT` 指定工具路径。已有 APK 可以单独生成清单：
+
+```sh
+python3 scripts/prepare-kotlin-release.py \
+  --apk /绝对路径/app-release.apk \
+  --aapt "$ANDROID_HOME/build-tools/36.0.0/aapt" \
+  --output outputs/releases
+```
+
+同一标签再次生成会覆盖该目录的 `update.json`；上传前确认附件名和清单一致。生成清单不代表验证了签名连续性，发布前仍需核对签名和已分发的最高 versionCode。
 
 ## 清单格式
 

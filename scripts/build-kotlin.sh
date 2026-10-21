@@ -10,15 +10,22 @@ if [[ -z "${ANDROID_HOME:-}" && -d "$HOME/.cache/hongguotv/android-sdk" ]]; then
   export ANDROID_HOME="$HOME/.cache/hongguotv/android-sdk"
 fi
 "$repo_dir/kotlin-tv/gradlew" -p "$repo_dir/kotlin-tv" :core:test :app:lintRelease :app:assembleRelease --console=plain
-mkdir -p "$repo_dir/outputs"
-native_version="${HONGGUOTV_VERSION_NAME:-$(sed -n 's/.*versionName = .*?: "\([^"]*\)".*/\1/p' "$repo_dir/kotlin-tv/app/build.gradle.kts")}"
-[[ "$native_version" =~ ^[0-9][0-9A-Za-z.+-]*$ ]] || { echo "Invalid APK version" >&2; exit 1; }
-native_min_sdk="$(sed -n 's/.*minSdk = \([0-9]*\).*/\1/p' "$repo_dir/kotlin-tv/app/build.gradle.kts")"
-case "$native_min_sdk" in
-  23) native_android=android6 ;;
-  26) native_android=android8 ;;
-  *) echo "Unsupported minimum SDK for APK naming: $native_min_sdk" >&2; exit 1 ;;
-esac
-native_apk="$repo_dir/outputs/hongguotv-kotlin-${native_version%-$native_android}-$native_android.apk"
-cp "$repo_dir/kotlin-tv/app/build/outputs/apk/release/app-release.apk" "$native_apk"
-if command -v shasum >/dev/null; then shasum -a 256 "$native_apk"; else sha256sum "$native_apk"; fi
+# Use the APK metadata rather than parsing Gradle defaults (environment overrides apply).
+command -v python3 >/dev/null || { echo "Python 3 is required" >&2; exit 1; }
+native_sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+if [[ -z "$native_sdk" && -f "$repo_dir/kotlin-tv/local.properties" ]]; then
+  native_sdk="$(sed -n 's/^sdk.dir=//p' "$repo_dir/kotlin-tv/local.properties")"
+fi
+native_aapt="${HONGGUOTV_AAPT:-}"
+if [[ -z "$native_aapt" ]]; then
+  for native_tool in "$native_sdk"/build-tools/*/aapt; do
+    if [[ -x "$native_tool" ]]; then native_aapt="$native_tool"; fi
+  done
+fi
+[[ -x "$native_aapt" ]] || { echo "Cannot find aapt; set ANDROID_HOME or HONGGUOTV_AAPT" >&2; exit 1; }
+native_args=()
+if [[ -n "${HONGGUOTV_RELEASE_TAG:-}" ]]; then native_args+=(--tag "$HONGGUOTV_RELEASE_TAG"); fi
+if [[ -n "${HONGGUOTV_RELEASE_NOTES_FILE:-}" ]]; then native_args+=(--notes-file "$HONGGUOTV_RELEASE_NOTES_FILE"); fi
+python3 "$repo_dir/scripts/prepare-kotlin-release.py" \
+  --apk "$repo_dir/kotlin-tv/app/build/outputs/apk/release/app-release.apk" \
+  --aapt "$native_aapt" --output "$repo_dir/outputs/releases" "${native_args[@]}"
