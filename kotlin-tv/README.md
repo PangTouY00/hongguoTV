@@ -1,14 +1,16 @@
+> 当前 `main` 统一支持 Android 6.0+（含 Android 8+），版本 0.0.2 / 18；兼容实现见 [Android 6 说明](../docs/ANDROID6_SUPPORT.md)。
+
 > 自用维护仓库：tsukiyo-zero/hongguoTV；当前稳定功能、版本与分支约定见 [主说明](../README.md)。下面的旧版本章节保留为历史记录；更新发布流程以 [AUTO_UPDATES.md](AUTO_UPDATES.md) 为准。
 
 # 红果 TV 原生独立版
 
-这是独立的 **Kotlin + Android 原生 View + Media3** 工程，最低 Android 8.0 / API 26。安装一个 APK，联网后可直接浏览和播放，无需部署 Node、Docker 或填写服务器地址。
+这是独立的 **Kotlin + Android 原生 View + Media3** 工程，最低 Android 6.0 / API 23。安装一个 APK，联网后可直接浏览和播放，无需部署 Node、Docker 或填写服务器地址。
 
 - 应用名称：红果 TV 原生版
 - 包名：`com.hongguotv.nativeapp`，与旧版 `com.hongguotv` 可以并存。
 - 收藏和历史独立保存在本机，不自动迁移旧版数据。
 - APK 不含 JNI 库，可由 Android 在 ARM32、ARM64、x86、x86_64 上运行；视频解码能力依赖设备。
-- 源码分支：`codex/kotlin-standalone`。
+- 稳定源码分支：`main`，后续从主分支新建 `feature-...` 或 `fix-...` 开发。
 - [下载正式签名 APK](https://github.com/tsukiyo-zero/hongguoTV/releases)
 
 0.2.1 修复简介与设置切换后的焦点跳转，并适配放大字号的卡片高度。可直接覆盖安装 0.2.0，保留收藏和观看记录；见 [交付与验证记录](DELIVERY.md)。
@@ -16,7 +18,7 @@
 ## 0.9.0 新增
 
 - 应用内更新：浏览时自动检查、下载公开发布仓库中的新版，校验文件和签名后由系统确认安装；设置中可手动检查或关闭自动下载。播放与后台会取消更新请求。
-- 推送 `codex/kotlin-standalone` 的原生代码后，自动导出对应原生源码到公开仓库，由 CI 验证、签名并发布 APK、源码及更新元数据。电视无需 GitHub 凭据。
+- 旧版的跨仓库自动导出已停用；当前发布流程以 AUTO_UPDATES.md 为准。电视检查公开更新无需 GitHub 凭据。
 - 首次仍需手动安装这版；Android 8 首次需开启本应用的安装权限，之后每次确认系统安装。覆盖安装保留本机记录。
 
 [自动更新、发布配置与版本规则](AUTO_UPDATES.md)。云端构建编号从 10001 起递增，正式包沿用旧发布签名。
@@ -154,7 +156,7 @@ node kotlin-tv/tools/signing-oracle.cjs
 **0.7.0 最终验证待填写，发布前替换本段。** 首轮 69 项 JVM 测试通过，Release lint 为 0 错误、28 警告；后续回归仍在进行。最终 APK、签名与覆盖安装、遥控器焦点、播放器复用和性能证据见 [0.7.0 交付与验证](RELEASE_0.7.0.md)，不得将首轮结果当作最终验收。
 <!-- FINAL_0_7_0_VERIFICATION_END -->
 
-既往版本已进行 JVM 单元测试、Android lint、正式 APK 构建及 Android TV API 36 模拟器上的真实播放和遥控器检查；本版最终结果以上述发布记录为准。最低 API 26 配置和静态检查不等同于实体电视验收；**Android 8.0 实体电视的芯片解码、音频输出和长期稳定性尚待实机验证**。遇到设备解码失败可尝试 720P，仍失败需对应电视的日志。
+既往版本已进行 JVM 单元测试、Android lint、正式 APK 构建及 Android TV API 36 模拟器上的真实播放和遥控器检查；本版最终结果以上述发布记录为准。当前最低 API 23，静态检查不等同于所有实体电视验收；**Android 8.0 实体电视的芯片解码、音频输出和长期稳定性尚待实机验证**。遇到设备解码失败可尝试 720P，仍失败需对应电视的日志。
 
 内容来自第三方接口；接口、签名、内容可用性或地区网络变化可能需要更新 APK。此版本不是内容平台官方客户端。
 

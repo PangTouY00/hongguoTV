@@ -9,12 +9,16 @@ android {
     compileSdk = 36
     defaultConfig {
         applicationId = "com.hongguotv.nativeapp"
-        minSdk = 26
+        minSdk = 23
         targetSdk = 36
-        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 16
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.0.1"
+        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 18
+        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.0.2"
     }
     buildFeatures { buildConfig = true }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all { it.systemProperty("robolectric.dependency.repo.url","https://repo.maven.apache.org/maven2") }
+    }
     signingConfigs {
         create("delivery") {
             storeFile = signingValue("HONGGUOTV_KEYSTORE", "storeFile")?.let { file(it) }
@@ -29,6 +33,11 @@ android {
     packaging { resources.excludes += setOf("META-INF/versions/**", "META-INF/*.kotlin_module") }
 }
 dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1") {
+        // API 23 tests use legacy graphics, without the cross-platform native renderer.
+        exclude(group="org.robolectric",module="nativeruntime-dist-compat")
+    }
     implementation("androidx.core:core:1.8.0")
     implementation("com.google.zxing:core:3.5.3")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")

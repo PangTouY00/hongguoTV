@@ -55,7 +55,7 @@ class WebLogin(http: OkHttpClient) {
         val encoded=data.getString("qrcode").substringAfter("base64,")
         val expiry=data.optLong("expire_time",180)
         val seconds=if(expiry>1_000_000_000) (expiry-System.currentTimeMillis()/1000).coerceAtLeast(0).coerceAtMost(600).toInt() else expiry.coerceIn(0,600).toInt()
-        return Qr(java.util.Base64.getDecoder().decode(encoded),seconds)
+        return Qr(decode64(encoded),seconds)
     }
     /** Returns false while awaiting the user's scan/confirmation. */
     fun poll(): Boolean {
