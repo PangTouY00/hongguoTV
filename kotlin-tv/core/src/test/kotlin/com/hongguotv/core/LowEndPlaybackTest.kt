@@ -56,6 +56,18 @@ class LowEndPlaybackTest {
         assertFalse(PrefetchPolicy.nearEnd(0,0,1f))
         assertFalse(PrefetchPolicy.nearEnd(0,180_000,Float.NaN))
     }
+    @Test fun nextEpisodeWarmupUsesThirtySecondsAndStableBufferedPlayback() {
+        assertTrue(PrefetchPolicy.canStart(32000,60000,1f,1500,5000))
+        assertTrue(PrefetchPolicy.canStart(150000,180000,1f,3000,10000))
+        assertFalse(PrefetchPolicy.canStart(149999,180000,1f,3000,10000))
+        assertFalse(PrefetchPolicy.canStart(32000,60000,1f,1499,10000))
+        assertFalse(PrefetchPolicy.canStart(32000,60000,1f,3000,4999))
+        assertTrue(PrefetchPolicy.canStart(58000,60000,1f,3000,2000))
+        assertFalse(PrefetchPolicy.canStart(0,0,1f,3000,10000))
+        assertFalse(PrefetchPolicy.canStart(60000,60000,1f,3000,10000))
+        assertFalse(PrefetchPolicy.canStart(0,60000,Float.NaN,3000,10000))
+        assertEquals(2*1024*1024,PrefetchPolicy.WARM_BYTES)
+    }
     @Test fun expiredPrefetchCanBeReplacedAfterLongPauseWithoutReturningOldResource() {
         var now=0L
         class Resource: Closeable { var closed=false; override fun close() { closed=true } }
