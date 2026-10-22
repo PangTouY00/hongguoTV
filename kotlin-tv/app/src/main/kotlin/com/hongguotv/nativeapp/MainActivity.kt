@@ -82,6 +82,7 @@ class MainActivity: Activity() {
     private data class DetailVisit(val detail: Detail,val episode: Int,val group: Int)
     private val detailTrail=java.util.ArrayDeque<DetailVisit>()
     private var relatedSection: RelatedWorksView?=null
+    private var accountFavoriteButton: TextView?=null
     private var reservationOnline=true
     private val reservationFilters=mutableListOf<View>()
     private var accountHistoryScope=0
@@ -211,6 +212,7 @@ class MainActivity: Activity() {
         }
         cloudAccount.onHistoryChanged={
             relatedSection?.refreshLabels()
+            detail?.series?.let { accountFavoriteButton?.text=cloudAccount.favoriteActionLabel(it.id) }
             if(screen=="detail" && relatedSection!=null && cloudAccount.signedIn && cloudAccount.reservationState(false).message=="尚未读取预约记录")
                 cloudAccount.refreshReservations()
             if(accountHistoryScope!=cloudAccount.historyScope) {
@@ -280,7 +282,7 @@ class MainActivity: Activity() {
         generation++; cancelWork(); artwork.cancelPage()
     }
     private fun releaseCatalogViews() {
-        relatedSection=null
+        relatedSection=null;accountFavoriteButton=null
         homeScreen?.let { homePosition=it.capturePosition() }
         catalogScroll?.let { scrollPositions[catalogPageKey]=it.scrollY }
         catalogBody=null
@@ -492,7 +494,7 @@ class MainActivity: Activity() {
                 favoriteCheck?.nextFocusDownId=sourceButtons[if(account) 1 else 0].id
                 historyManage?.nextFocusDownId=sourceButtons[if(account) 1 else 0].id
                 val note=when {
-                    isAccountFavorites() -> "${cloudAccount.accountLabel} · ${cloudAccount.favoriteState().message}\n同步手机红果收藏；增删请在手机操作后刷新"
+                    isAccountFavorites() -> "${cloudAccount.accountLabel} · ${cloudAccount.favoriteState().message}\n与手机红果同步；长按剧集可管理账户收藏"
                     isAccountHistory() -> "${cloudAccount.accountLabel} · ${cloudAccount.historyStatus}\n显示当前账号最近 50 部云端记录，续播使用账号进度"
                     isLocalHistory() -> "只保存在这台电视，管理和清空不影响账户历史"
                     else -> "只保存在这台电视，不自动上传或合并到账户收藏"
@@ -775,7 +777,10 @@ class MainActivity: Activity() {
             if(library.queued(series.id)) "移出稍后看" else "加入稍后看","查看剧集详情")
         if(tab==0) labels+="不在热门推荐中显示"
         if(isLocalHistory()) labels+="管理观看记录"
+        val accountChoice=labels.size
+        labels+=cloudAccount.favoriteActionLabel(series.id)
         tvTools.choose(series.title,labels,anchor,{ choice ->
+            if(choice==accountChoice) { accountFavoriteAction(series,anchor);return@choose }
             when(choice) {
                 0 -> openDetail(series,true,cloudProgress=if(isAccountHistory()) cloudAccount.progress(series.id) else null)
                 1 -> { val added=library.toggle(series); Toast.makeText(this,if(added) "已加入本机收藏" else "已取消本机收藏",Toast.LENGTH_SHORT).show(); refreshLibraryCards(series.id,!added && (isLocalFavorites() || collection=="updates")); if(added) favoriteMonitor.check() }
@@ -784,6 +789,18 @@ class MainActivity: Activity() {
                 4 -> if(isLocalHistory()) manageHistory(series,anchor) else { library.hide(series.id); Toast.makeText(this,"已隐藏热门推荐，可在设置中恢复",Toast.LENGTH_SHORT).show(); refreshLibraryCards(series.id,true) }
             }
         })
+    }
+    private fun accountFavoriteAction(series: Series,anchor: View?) {
+        if(!cloudAccount.signedIn) { cloudAccount.show();return }
+        if(cloudAccount.favoriteState().loading) { Toast.makeText(this,"账户收藏正在处理，请稍候",Toast.LENGTH_SHORT).show();return }
+        if(cloudAccount.favoriteNeedsRefresh(series.id)) { cloudAccount.refreshFavorites();return }
+        val add=!cloudAccount.accountFavorite(series.id)
+        val scope=cloudAccount.historyScope
+        tvTools.confirm(if(add) "加入账户收藏" else "取消账户收藏",
+            "${if(add) "将《${series.title}》加入" else "将《${series.title}》从"}${cloudAccount.accountLabel}的红果收藏${if(add) "，手机端也会同步显示" else "中移除"}。本机收藏保持独立。",anchor) {
+            if(scope!=cloudAccount.historyScope || !cloudAccount.signedIn) return@confirm
+            cloudAccount.changeFavorite(series,add) { message -> tvTools.info("账户收藏",message,anchor) }
+        }
     }
     private fun refreshFavoriteLabels() {
         if(screen!="catalog" || !library.isLoaded) return
@@ -936,6 +953,9 @@ class MainActivity: Activity() {
             if(saved) library.observeFavorite(data.series.id,data.episodes.size,System.currentTimeMillis(),acknowledge=true)
             favorite.text=if(saved) "已在本机收藏" else "加入本机收藏"
         }
+        accountFavoriteButton=addButton(actions,cloudAccount.favoriteActionLabel(data.series.id)) {
+            accountFavoriteAction(data.series,accountFavoriteButton)
+        }
         lateinit var synopsisButton: TextView
         synopsisButton=addButton(actions,if(synopsisExpanded) "收起简介" else "完整简介") {
             synopsisExpanded=!synopsisExpanded
@@ -984,6 +1004,7 @@ class MainActivity: Activity() {
         relatedSection=section; content.addView(section)
         if(cloudAccount.signedIn && cloudAccount.reservationState(false).message=="尚未读取预约记录") cloudAccount.refreshReservations()
         loadRelated()
+        if(cloudAccount.signedIn && !cloudAccount.favoriteState().loaded && !cloudAccount.favoriteState().loading) cloudAccount.refreshFavorites()
         if(focusEpisode) episodes.getOrNull((episodeIndex-group*20).coerceIn(0,episodes.lastIndex))?.requestFocus() else play.requestFocus()
     }
     private fun playEpisode(index: Int,position: Long=0,autoplay: Boolean=true,recovering: Boolean=false) {

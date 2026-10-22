@@ -59,7 +59,7 @@ class AccountLibraryTest {
             val dialog=ShadowAlertDialog.getLatestAlertDialog()
             val choices=(0 until dialog.listView.adapter.count).map { dialog.listView.adapter.getItem(it).toString() }
             assertTrue("加入本机收藏" in choices)
-            assertFalse("取消账户收藏" in choices)
+            assertTrue(choices.any { it.contains("账户收藏") })
             dialog.dismiss()
             method(activity,"switchTab",4);method(activity,"switchTab",3)
             assertTrue((get(activity,"librarySources") as LibrarySources).accountFavorites)
