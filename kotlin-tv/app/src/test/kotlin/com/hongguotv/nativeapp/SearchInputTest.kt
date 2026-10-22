@@ -25,13 +25,13 @@ class SearchInputTest {
         val values=listOf("127.0.0.1","192.168.1.20","10.0.0.2","192.168.1.20","8.8.8.8","169.254.1.1","::1","fd00::1")
         assertEquals(listOf("192.168.1.20","10.0.0.2"),LanInputAddresses.privateV4(values.map(InetAddress::getByName)))
     }
-    @Test fun missingRecognitionActivityGivesFallbackWithoutLaunching() {
+    @Test fun recognitionLaunchDoesNotDependOnPackageManagerQuery() {
         val activity=Robolectric.buildActivity(Activity::class.java).setup()
         try {
-            var message=""
-            VoiceInput(activity.get(),{ fail("unexpected result") },{ message=it }).start()
-            assertTrue(message.contains("没有可用的语音识别服务"))
-            assertNull(shadowOf(activity.get()).nextStartedActivityForResult)
+            assertNull(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).resolveActivity(activity.get().packageManager))
+            VoiceInput(activity.get(),{ fail("unexpected result") },{ fail(it) }).start()
+            assertEquals(RecognizerIntent.ACTION_RECOGNIZE_SPEECH,
+                shadowOf(activity.get()).nextStartedActivityForResult.intent.action)
         } finally { activity.pause().stop().destroy() }
     }
     @Test fun recognizedChineseReturnsTextAndCancellationPreservesExistingDraft() {

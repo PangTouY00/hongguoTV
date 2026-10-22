@@ -30,6 +30,21 @@ class PhoneSearchServerTest {
             assertTrue(runCatching { request(server) }.isFailure)
         }
     }
+    @Test fun `same origin browser form can submit while opaque and foreign origins stay blocked`() {
+        val received=CountDownLatch(1)
+        PhoneSearchServer("127.0.0.1",{ received.countDown() }).use { server ->
+            val uri=URI(server.url)
+            val page=request(server)
+            // no-referrer makes native form POST origins opaque (Origin: null).
+            assertTrue(page.contains("Referrer-Policy: same-origin\r\n"))
+            assertFalse(page.contains("Referrer-Policy: no-referrer"))
+            for(origin in listOf("null","http://evil.example")) {
+                assertTrue(request(server,"POST",uri.path+"/submit","query=test","Origin: $origin\r\n").startsWith("HTTP/1.1 403"))
+            }
+            assertTrue(request(server,"POST",uri.path+"/submit","query=test","Origin: http://${uri.authority}\r\n").startsWith("HTTP/1.1 200"))
+            assertTrue(received.await(2,TimeUnit.SECONDS))
+        }
+    }
     @Test fun `connection status only reports a valid phone page request`() {
         var connections=0
         PhoneSearchServer("127.0.0.1",{},onConnected={ connections++ }).use { server ->

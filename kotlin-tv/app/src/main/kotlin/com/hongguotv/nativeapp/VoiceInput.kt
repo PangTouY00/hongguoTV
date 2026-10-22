@@ -23,15 +23,13 @@ internal class VoiceInput(private val activity: Activity,private val text: (Stri
             .putExtra(RecognizerIntent.EXTRA_LANGUAGE,"zh-CN")
             .putExtra(RecognizerIntent.EXTRA_PROMPT,"请说出剧名或关键词")
             .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS,3)
-        if(intent.resolveActivity(activity.packageManager)==null) {
-            notice("设备没有可用的语音识别服务。仅有麦克风还不够，可使用手机输入或支持语音的系统键盘。")
-            return
-        }
+        // A package-manager query can miss an activity that Android can still launch.
+        // Attempt the action itself and use ActivityNotFoundException as the result.
         try {
             pending=true
             @Suppress("DEPRECATION")
             activity.startActivityForResult(intent,REQUEST)
-        } catch(_: ActivityNotFoundException) { pending=false; notice("语音识别服务无法启动，请使用手机输入或系统键盘。") }
+        } catch(_: ActivityNotFoundException) { pending=false; notice("系统没有可启动的语音识别页面。麦克风只能录音，还需要语音转文字服务；请使用手机输入，或支持语音的系统键盘。") }
         catch(_: SecurityException) { pending=false; notice("系统不允许启动语音识别，请检查系统语音服务及麦克风权限。") }
     }
     fun handle(request: Int,code: Int,data: Intent?): Boolean {
