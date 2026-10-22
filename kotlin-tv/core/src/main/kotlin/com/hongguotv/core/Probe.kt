@@ -2,6 +2,25 @@ package com.hongguotv.core
 
 fun main(args: Array<String>) {
     val repository=ContentRepository()
+    if(args.contains("--category-recommendations")) {
+        try {
+            for(category in listOf(DramaCategory.COMIC,DramaCategory.REAL)) {
+                val cursor=RecommendationCursor();val feed=RecommendationFeed(repository.http,cursor=cursor,category=category)
+                val first=feed.page(1);val second=feed.page(2)
+                val fresh=second.items.count { row->first.items.none { it.id==row.id } }
+                check(first.items.isNotEmpty() && fresh>0)
+                val detail=repository.detail(first.items.first().id)
+                check(detail.episodes.isNotEmpty())
+                if(args.contains("--prepare-video")) {
+                    val remote=RemoteVideo(repository.http,repository.stream(detail.episodes.first(),720))
+                    try { remote.prepare();check(remote.total>0);println("category=${category.name}; videoPrepared=true") }
+                    finally { remote.close() }
+                }
+                println("category=${category.name}; first=${first.items.size}; second=${second.items.size}; new=$fresh; detailEpisodes=${detail.episodes.size}")
+            }
+        } finally { repository.http.connectionPool.evictAll();repository.http.dispatcher.executorService.shutdown() }
+        return
+    }
     if(args.contains("--recommendations")) {
         try {
             val cursor=RecommendationCursor();val feed=RecommendationFeed(repository.http,cursor=cursor)

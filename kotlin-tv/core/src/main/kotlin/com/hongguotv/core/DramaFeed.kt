@@ -4,6 +4,8 @@ package com.hongguotv.core
 /** Trial navigation only. Deliberately has no library, account or progress-upload dependency. */
 class DramaFeedState {
     var recommendationCursor=RecommendationCursor();private set
+    private val sourceCursors=mutableMapOf("recommend" to recommendationCursor)
+    private fun sourceKey()=if(recommendation) "recommend" else category.route
     var recommendation=true;private set
     var category=DramaCategory.COMIC; private set
     var items: List<Series> = emptyList(); private set
@@ -18,10 +20,15 @@ class DramaFeedState {
     val next get()=items.getOrNull(index+1)
     fun select(category: DramaCategory) {
         require(category in listOf(DramaCategory.COMIC,DramaCategory.REAL))
+        sourceCursors[sourceKey()]=recommendationCursor
         this.category=category;recommendation=false;refresh()
     }
-    fun refresh(resetRecommendations: Boolean=false) { recommendationCursor=if(resetRecommendations) RecommendationCursor() else recommendationCursor.nextBatch();items=emptyList();index=0;page=0;hasMore=true;offset=0;resetPlayback() }
-    fun recommend() { recommendation=true;refresh() }
+    fun refresh(resetRecommendations: Boolean=false) {
+        if(resetRecommendations) sourceCursors.clear()
+        recommendationCursor=sourceCursors[sourceKey()]?.nextBatch() ?: RecommendationCursor()
+        sourceCursors[sourceKey()]=recommendationCursor
+        items=emptyList();index=0;page=0;hasMore=true;offset=0;resetPlayback() }
+    fun recommend() { sourceCursors[sourceKey()]=recommendationCursor;recommendation=true;refresh() }
     fun append(result: CatalogPage,requestedPage: Int) {
         require(requestedPage==page+1)
         val before=items.size

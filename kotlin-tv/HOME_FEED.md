@@ -1,20 +1,20 @@
 # 首页推荐与试播
 
-测试版 `0.1.0-home-recommendations` / versionCode 38，分支 `feature-home-recommendations`，Android 6+。
+测试版 `0.1.0-category-recommendations` / versionCode 39，分支 `feature-home-recommendations`，Android 6+。
 
 ## 内容来源
 
-默认「推荐」读取官方 App 域名下 `/reading/bookapi/bookmall/tab/v1/`，tab_type=16、bottom_tab_type=7；与官网固定分类列表分开。路径及卡片结构参考 [guoapp 公开实现](https://github.com/Xanerix/guoapp/blob/main/native/core/provider_hongguo_recommendations.go)，请求与解析在本项目独立实现。真人剧、漫剧按钮继续读取官网公开分类。
+默认「推荐」读取官方 App 域名下 `/reading/bookapi/bookmall/tab/v1/`，tab_type=16、bottom_tab_type=7；与官网固定分类列表分开。路径及卡片结构参考 [guoapp 公开实现](https://github.com/Xanerix/guoapp/blob/main/native/core/provider_hongguo_recommendations.go)，请求与解析在本项目独立实现。真人剧、漫剧按钮读取官方 App `/reading/distribution/category/landpage/v/` 分类推荐，分别使用 short_play/default 与 comic_series/comic_series，排序条件留空，支持服务器会话、offset、filter_ids。找剧页面继续使用官网分类筛选。
 
 2026-10-22 匿名只读探针已确认首批 3 部、下一批 6 部，其中 4 部新增；继续 offset=2 也有新增作品。推荐卡片可能包含全剧分集信息，试播仍明确播放该作品第一集，而非宣称官方预告。
 
-客户端采用服务端 session_id 和递增 offset。实测 has_more、bottom_unlimited 的假值/缺省不能作为结束标记，因此有有效卡片时继续请求，交由 DramaFeedState 去重、重复批停止和每轮最多 100 页保护。游标与最后一批只在内存保存；请求完成但页面丢弃结果时，同一页重试复用结果。「换一批」继续后续批次，进入详情再返回保留列表与试播位置；分类按钮不冒充个性化推荐。
+客户端采用服务端 session_id 和递增 offset。实测 has_more、bottom_unlimited 的假值/缺省不能作为结束标记，因此有有效卡片时继续请求，交由 DramaFeedState 去重、重复批停止和每轮最多 100 页保护。游标与最后一批只在内存保存；请求完成但页面丢弃结果时，同一页重试复用结果。「换一批」继续后续批次，进入详情再返回保留列表与试播位置；每个入口各自保存推荐游标和本轮已取作品；换一批过滤重复作品，连续三批重复时停止并提示，不无限请求。分类推荐不等于已验证的个人兴趣推荐。
 
 登录且账号验证通过时，仅在推荐请求中携带现有账号 Cookie 和设备标识；不发送给其他站点，不增加凭证文件。登录、退出、换账号时重建推荐客户端并清空原账号推荐及媒体缓存。已验证匿名读取和模拟账号请求隔离；尚未实机证明与手机兴趣一致。没有新增曝光、跳过、点赞或完播行为上报，不能宣称电视试播会训练官方推荐偏好。
 
 ## 遥控器与播放
 
-- 顶部有推荐、漫剧、真人剧、换一批，当前来源高亮；分类中的换一批相当于刷新公开分类。
+- 顶部有推荐、漫剧、真人剧、换一批，当前来源高亮；三类入口均续取后续推荐。
 - 视频区上下切换作品，确定打开暂停、观看全集、账户收藏操作栏。返回先关闭操作栏，再返回顶部导航。
 - 按比例显示画面，不裁切竖屏内容。准备好后收起底部状态提示，暂停、加载及错误时显示。
 - 当前视频准备好后，串行预缓冲后面 3 部作品开头（每部约 1 MiB），保留上一部供回滑；相邻作品不足时提前补下一批卡片。缓存约 90 秒过期。
@@ -29,3 +29,5 @@
 标准 core/app 单元测试、assembleDebug、lintDebug；页面测试覆盖 API 23、26。覆盖推荐卡片解析、分页重试与换批、账号请求隔离、来源切换、上下换剧复用队列、暂停/恢复和结束停留。接口替身不验证真实解码性能。
 
 用户实机验收：默认推荐内容、换一批、漫剧/真人剧切换，停留几秒后上下换剧是否更快，试播结束是否停留，观看全集后返回位置，退出登录再登录是否更新内容，原有正式播放和云端进度是否正常。
+
+版本码 39 修复共用 HTTP 客户端关闭跳转造成的内容请求 301：公开详情和视频允许跳转；推荐账号请求使用单独配置、禁止跳转的客户端，避免凭证转发。已实测两类推荐的后续批次、剧集详情、播放地址及 RemoteVideo.prepare，未操作模拟器或电视。

@@ -19,6 +19,7 @@ internal data class TrialClip(val detail: Detail,val video: RemoteVideo): Closea
 }
 internal interface FeedBackend: Closeable {
     fun catalog(category: DramaCategory,page: Int): CatalogPage
+    fun categoryRecommendations(category: DramaCategory,page: Int,cursor: RecommendationCursor): CatalogPage=catalog(category,page)
     fun recommendations(page: Int,cursor: RecommendationCursor): CatalogPage=catalog(DramaCategory.COMIC,page)
     fun detail(series: Series): Detail
     fun prepare(detail: Detail): TrialClip
@@ -26,13 +27,14 @@ internal interface FeedBackend: Closeable {
 }
 internal class PublicFeedBackend(
     private val quality: Int,
-    private val http: OkHttpClient=OkHttpClient.Builder().connectTimeout(12,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).callTimeout(35,TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build(),
+    private val http: OkHttpClient=OkHttpClient.Builder().connectTimeout(12,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).callTimeout(35,TimeUnit.SECONDS).build(),
     account: AccountCredentials?=null
 ): FeedBackend {
     private val closed=java.util.concurrent.atomic.AtomicBoolean(false)
     private val repository=ContentRepository(http)
     private val recommendationAccount=account
     override fun recommendations(page: Int,cursor: RecommendationCursor)=RecommendationFeed(http,recommendationAccount,cursor).page(page)
+    override fun categoryRecommendations(category: DramaCategory,page: Int,cursor: RecommendationCursor)=RecommendationFeed(http,recommendationAccount,cursor,category).page(page)
     override fun catalog(category: DramaCategory,page: Int)=repository.discover(category,page=page)
     override fun detail(series: Series)=repository.detail(series.id)
     override fun prepare(detail: Detail): TrialClip {

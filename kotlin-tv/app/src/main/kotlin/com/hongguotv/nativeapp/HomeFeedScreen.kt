@@ -185,7 +185,7 @@ internal class HomeFeedScreen(
         title.text=series?.title ?: "发现下一部好剧"
         meta.text=if(series==null) "第一集试播" else listOf("第一集试播",series.badge,series.tags).filter(String::isNotBlank).joinToString(" · ")
         intro.text=series?.description?.ifBlank { "先试试看，喜欢这部作品就选择观看全集。" } ?: "选择漫剧或真人剧，上下换一部，找到想追的故事。"
-        tag.text=if(state.recommendation) "推荐 · 第一集试播" else "热门发现 · ${state.category.label}"
+        tag.text=if(state.recommendation) "推荐 · 第一集试播" else "${state.category.label}推荐 · 第一集试播"
         paintActions()
     }
     private fun remember() { if(clip!=null) state.position=playback.position() }
@@ -231,7 +231,7 @@ internal class HomeFeedScreen(
         if(state.page>=100 || (!state.hasMore && state.current!=null)) { status.visibility=View.VISIBLE;status.text="本批作品已看完，可切换类型继续发现";return }
         status.visibility=View.VISIBLE;status.text="正在读取热门作品…"
         val page=state.page+1;val category=state.category;val recommendation=state.recommendation;val cursor=state.recommendationCursor
-        request({ if(recommendation) backend.recommendations(page,cursor) else backend.catalog(category,page) }) { result ->
+        request({ if(recommendation) backend.recommendations(page,cursor) else backend.categoryRecommendations(category,page,cursor) }) { result ->
             state.append(result,page)
             if(advance) state.move(1)
             if(state.current==null) { status.text="暂时没有可试播的作品，可切换类型或重试";failed=true;paintActions() }
@@ -296,7 +296,7 @@ internal class HomeFeedScreen(
         val category=state.category;val recommendation=state.recommendation;val cursor=state.recommendationCursor
         val token=prefetchGeneration;val requestScope=RequestScope();prefetchScope=requestScope
         prefetchJob=worker.submit {
-            val result=runCatching { requestScope.run { if(recommendation) backend.recommendations(page,cursor) else backend.catalog(category,page) } }.getOrNull()
+            val result=runCatching { requestScope.run { if(recommendation) backend.recommendations(page,cursor) else backend.categoryRecommendations(category,page,cursor) } }.getOrNull()
             main.post {
                 if(closed || !active || token!=prefetchGeneration) return@post
                 prefetchJob=null;prefetchScope=null

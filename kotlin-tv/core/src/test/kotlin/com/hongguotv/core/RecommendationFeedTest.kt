@@ -49,6 +49,20 @@ class RecommendationFeedTest {
         assertEquals("2",requests[2].url.queryParameter("client_req_type"))
         assertThrows(IOException::class.java) { feed.page(4) }
     }
+    @Test fun repeatedBatchesAreSkippedWithinBoundedRetry() {
+        var calls=0
+        val http=OkHttpClient.Builder().addInterceptor { chain ->
+            calls++
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                .body(response(if(calls<3) "101" else "102").toResponseBody()).build()
+        }.build()
+        val feed=RecommendationFeed(http)
+        assertEquals("101",feed.page(1).items.single().id)
+        assertEquals("102",feed.page(2).items.single().id)
+        assertEquals(3,calls)
+        assertThrows(IOException::class.java) { feed.page(3) }
+        assertEquals(6,calls)
+    }
     @Test fun accountIdentityIsSentOnlyToOfficialFeedAndGuestCursorIsSeparate() {
         var requested: Request?=null
         val http=OkHttpClient.Builder().followRedirects(false).addInterceptor { chain ->
@@ -62,6 +76,43 @@ class RecommendationFeedTest {
         assertEquals("test-device",requested!!.url.queryParameter("device_id"))
         RecommendationFeed(http).page(1)
         assertNull(requested!!.header("Cookie"));assertNull(requested!!.url.queryParameter("session_id"))
+    }
+    @Test fun categoryRecommendationsSendGenreWithoutFixedSortAndKeepCursor() {
+        for(category in listOf(DramaCategory.COMIC,DramaCategory.REAL)) {
+            val requests=mutableListOf<Request>();val payloads=mutableListOf<JSONObject>()
+            val http=OkHttpClient.Builder().addInterceptor { chain ->
+                val req=chain.request();requests+=req
+                val buffer=okio.Buffer();req.body!!.writeTo(buffer);val payload=JSONObject(buffer.readUtf8());payloads+=payload
+                val row=JSONObject().put("series_id",if(payload.optInt("offset")==0) "201" else "202")
+                    .put("series_title","分类推荐作品").put("episode_cnt",40)
+                val data=JSONObject().put("video_data",JSONArray().put(row)).put("has_more",true)
+                    .put("next_offset",payload.optInt("offset")+24).put("session_id","test-category-session")
+                Response.Builder().request(req).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                    .body(JSONObject().put("code",0).put("data",data).toString().toResponseBody()).build()
+            }.build()
+            val cursor=RecommendationCursor();val feed=RecommendationFeed(http,cursor=cursor,category=category)
+            assertEquals("201",feed.page(1).items.single().id)
+            assertEquals("202",feed.page(2).items.single().id)
+            val genre=if(category==DramaCategory.COMIC) "comic_series" else "short_play"
+            assertEquals(genre,payloads[0].getJSONObject("select_items").getJSONArray("genre").getString(0))
+            assertEquals(0,payloads[0].getJSONObject("select_items").getJSONArray("sort").length())
+            assertEquals(24,payloads[1].getInt("offset"));assertEquals("201",payloads[1].getString("filter_ids"))
+            assertEquals("test-category-session",payloads[1].getString("session_id"))
+            assertEquals("POST",requests[0].method)
+            assertEquals("/reading/distribution/category/landpage/v/",requests[0].url.encodedPath)
+            assertNotNull(requests[0].header("X-Argus"))
+        }
+    }
+    @Test fun eachHomepageSourceRetainsItsOwnRefreshCursor() {
+        val state=DramaFeedState();state.recommendationCursor.offset=2
+        state.select(DramaCategory.COMIC);assertEquals(0,state.recommendationCursor.offset)
+        state.recommendationCursor.offset=24
+        state.select(DramaCategory.REAL);assertEquals(0,state.recommendationCursor.offset)
+        state.recommendationCursor.offset=48
+        state.select(DramaCategory.COMIC);assertEquals(24,state.recommendationCursor.offset)
+        state.recommend();assertEquals(2,state.recommendationCursor.offset)
+        state.refresh(resetRecommendations=true);state.select(DramaCategory.REAL)
+        assertEquals(0,state.recommendationCursor.offset)
     }
     @Test fun rejectsInvalidResponsesInsteadOfSilentlyFallingBackToCategories() {
         assertThrows(IOException::class.java) { RecommendationFeed.parse(JSONObject(response(tab=8))) }

@@ -4,23 +4,29 @@ package com.hongguotv.core
 import okhttp3.OkHttpClient
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.MediaType.Companion.toMediaType
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 
 /** In-memory pagination only; never serialize the server session. */
 class RecommendationCursor internal constructor(@Volatile internal var session: String="",@Volatile internal var offset: Int=0) {
+    internal val seen=linkedSetOf<String>()
     internal var expectedPage=1
     internal var lastPage=0
     internal var lastResult: CatalogPage?=null
-    fun nextBatch()=RecommendationCursor(session,offset)
+    fun nextBatch()=RecommendationCursor(session,offset).also { it.seen.addAll(seen) }
 }
 
 /** Official App feed, not the public website's sorted category list. No behavior reporting. */
-class RecommendationFeed(private val http: OkHttpClient,private val account: AccountCredentials?=null,private val cursor: RecommendationCursor=RecommendationCursor()) {
+class RecommendationFeed(private val http: OkHttpClient,private val account: AccountCredentials?=null,private val cursor: RecommendationCursor=RecommendationCursor(),private val category: DramaCategory?=null) {
+    private val accountHttp=http.newBuilder().followRedirects(false).followSslRedirects(false).build()
     fun page(page: Int): CatalogPage = synchronized(cursor) {
         require(page in 1..100)
         if(page==cursor.lastPage) return@synchronized checkNotNull(cursor.lastResult)
         if(page!=cursor.expectedPage) throw IOException("推荐已刷新，请重新获取")
+        repeat(3) {
         val params=linkedMapOf("aid" to "8662","app_name" to "novelread","channel" to "update_64",
             "device_platform" to "android","os" to "android","ssmix" to "a","device_type" to "25053RT47C",
             "device_brand" to "Redmi","language" to "zh","os_api" to "36","os_version" to "16",
@@ -38,18 +44,54 @@ class RecommendationFeed(private val http: OkHttpClient,private val account: Acc
             put("_rticket",System.currentTimeMillis().toString())
             if(cursor.session.isNotEmpty()) put("session_id",cursor.session)
         }
-        val url="https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/bookmall/tab/v1/".toHttpUrl().newBuilder()
-        params.forEach { (key,value)->url.addQueryParameter(key,value) }
-        val request=Request.Builder().url(url.build()).header("User-Agent","com.dragon.read/73532 (Linux; U; Android 16; zh_CN; 25053RT47C)")
+        val host="https://api5-normal-sinfonlinea.fqnovel.com"
+        val request=if(category==null) {
+            val url="$host/reading/bookapi/bookmall/tab/v1/".toHttpUrl().newBuilder()
+            params.forEach { (key,value)->url.addQueryParameter(key,value) }
+            Request.Builder().url(url.build())
+        } else {
+            val genre=if(category==DramaCategory.COMIC) "comic_series" else "short_play"
+            val selector=JSONObject().put("genre",JSONArray().put(genre))
+            listOf("sort","gender","category_dim_theme","category_dim_role","category_dim_epoch","online_time","creation_status").forEach { selector.put(it,JSONArray()) }
+            val body=JSONObject().put("req_scene",if(category==DramaCategory.COMIC) "comic_series" else "default")
+                .put("offset",cursor.offset).put("limit",24).put("req_type","only_content").put("need_selector_panel",false)
+                .put("client_req_type",if(cursor.offset==0) 3 else 2).put("session_id",cursor.session)
+                .put("filter_ids",cursor.seen.joinToString(",")).put("select_items",selector).toString().toByteArray()
+            val device=VendorConstants.device+params
+            val query=params.filterKeys { it !in setOf("tab_type","bottom_tab_type","landing_bottom_tab_type","offset","client_req_type","session_id") }
+            val signed=Signer(device=device).sign("$host/reading/distribution/category/landpage/v/",query,body)
+            Request.Builder().url(signed.url).post(body.toRequestBody("application/json; charset=utf-8".toMediaType())).apply {
+                signed.headers.forEach { (key,value)->header(key,value) }
+            }
+        }
+        request.header("User-Agent","com.dragon.read/73532 (Linux; U; Android 16; zh_CN; 25053RT47C)")
             .header("Accept","application/json").header("X-XS-From-Web","0").header("Sdk-Version","2")
         account?.cookie?.takeIf { it.isNotBlank() }?.let { request.header("Cookie",it) }
-        val result=RequestScope.execute(http.newCall(request.build())) { response -> JSONObject(cloudResponse(response)) }
-        val parsed=parse(result)
-        cursor.session=parsed.second.ifBlank { cursor.session };cursor.offset++;cursor.expectedPage=page+1
-        cursor.lastPage=page;cursor.lastResult=parsed.first
-        parsed.first
+        val result=RequestScope.execute(accountHttp.newCall(request.build())) { response -> JSONObject(cloudResponse(response)) }
+        val parsed=if(category==null) parse(result) else parseCategory(result)
+        cursor.session=parsed.second.ifBlank { cursor.session }
+        cursor.offset=if(category==null) cursor.offset+1 else result.getJSONObject("data").optInt("next_offset",cursor.offset+parsed.first.items.size)
+        val fresh=parsed.first.copy(items=parsed.first.items.filter { it.id !in cursor.seen })
+        cursor.seen.addAll(parsed.first.items.map { it.id });while(cursor.seen.size>540) cursor.seen.remove(cursor.seen.first())
+        if(fresh.items.isEmpty()) return@repeat
+        cursor.expectedPage=page+1
+        cursor.lastPage=page;cursor.lastResult=fresh
+        return@synchronized fresh
+        }
+        throw IOException("暂时没有新的推荐，请稍后换一批")
     }
     companion object {
+        internal fun parseCategory(result: JSONObject): Pair<CatalogPage,String> {
+            if(result.optInt("code",-1)!=0) throw IOException("分类推荐暂不可用（错误码 ${result.optInt("code",-1)}）")
+            val data=result.optJSONObject("data") ?: throw IOException("分类推荐数据格式已变化")
+            val rows=data.optJSONArray("video_data")?.objects() ?: throw IOException("分类推荐列表缺失")
+            // Normalize the known video_data card shapes through the same parser.
+            val tab=JSONObject().put("tab_type",16).put("session_id",data.str("session_id"))
+                .put("cell_data",JSONArray().put(JSONObject().put("cell_data",JSONArray().put(JSONObject().put("video_data",JSONArray(rows))))))
+            val normalized=JSONObject().put("code",0).put("data",JSONObject().put("tab_item",JSONArray().put(tab)))
+            val parsed=parse(normalized)
+            return parsed.first.copy(hasMore=data.optBoolean("has_more",true)) to parsed.second
+        }
         internal fun parse(result: JSONObject): Pair<CatalogPage,String> {
             if(result.optInt("code",-1)!=0) throw IOException("推荐暂不可用（错误码 ${result.optInt("code",-1)}），请稍后刷新")
             val tab=result.optJSONObject("data")?.optJSONArray("tab_item")?.objects()?.firstOrNull { it.str("tab_type")=="16" }
@@ -62,7 +104,7 @@ class RecommendationFeed(private val http: OkHttpClient,private val account: Acc
                 }
             }
             val items=rows.mapNotNull { row ->
-                val id=row.str("series_id");val title=row.str("series_title").ifBlank { row.str("title") }
+                val id=row.str("series_id").ifBlank { row.str("book_id") };val title=row.str("series_title").ifBlank { row.str("book_name") }.ifBlank { row.str("title") }
                 if(!id.matches(Regex("[0-9]{1,24}")) || title.isBlank()) null else Series(id,title,
                     cleanUrl(row.str("series_cover").ifBlank { row.str("cover") }),
                     row.str("series_intro").ifBlank { row.str("video_desc") },
