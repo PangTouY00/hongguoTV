@@ -70,6 +70,13 @@ class FasterBrowsingTest {
             assertArrayEquals(data.copyOfRange(11,700011),remote.read(11,700000)); assertEquals(2,ranges.size)
             assertArrayEquals(data.copyOfRange(1000000,1200000),remote.read(1000000,200000))
             assertEquals("bytes=1048576-1199999",ranges.last())
+            remote.warm(PrefetchPolicy.WARM_BYTES)
+            assertEquals("bytes=1048576-2097151",ranges.last())
+            val warmedRequests=ranges.size
+            assertArrayEquals(data.copyOfRange(1500000,1700000),remote.read(1500000,200000))
+            remote.warm(PrefetchPolicy.WARM_BYTES)
+            assertEquals(warmedRequests,ranges.size)
+            assertThrows(IllegalArgumentException::class.java) { remote.warm(5*1024*1024) }
             remote.close(); assertThrows(java.io.IOException::class.java) { remote.read(0,1) }
         } finally { server.stop(0); client.connectionPool.evictAll(); client.dispatcher.executorService.shutdownNow() }
     }

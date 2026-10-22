@@ -1121,6 +1121,7 @@ class MainActivity: Activity() {
         val selectedIndex=index.coerceIn(0,data.episodes.lastIndex)
         val prefetched=if(position==0L && !recovering) preparedNext.take("${data.episodes[selectedIndex]}:${library.maxQuality}") else null
         val claimedHttp=if(prefetched!=null) prefetchHttp.also { prefetchHttp=null } else null
+        android.util.Log.i("HongguoTV","Episode transition target=${selectedIndex+1} cached=${prefetched!=null} warmupAttempts=$prefetchAttempts warmupRunning=${prefetchJob?.isDone==false}")
         saveProgress(); library.flush(); invalidatePage(); favoriteMonitor.stop(); releaseCatalogViews()
         if(reuse) {
             cancelRecovery(); cancelPrefetch(); tvTools.close()
@@ -1223,11 +1224,11 @@ class MainActivity: Activity() {
     private fun maybePrefetch() {
         val p=player ?: return; val data=detail ?: return
         if(!foreground || !p.isPlaying || !library.autoNext || playError || sleepStopped || episodeIndex>=data.episodes.lastIndex) return
-        if(!PrefetchPolicy.nearEnd(p.currentPosition,p.duration,p.playbackParameters.speed)) return
         val id=data.episodes[episodeIndex+1]; val quality=library.maxQuality; val key="$id:$quality"
         if(preparedNext.isFresh(key) || prefetchJob?.isDone==false) return
         val now=android.os.SystemClock.elapsedRealtime()
-        if(readySince==0L || now-readySince<3000 || p.bufferedPosition-p.currentPosition<5000) return
+        if(readySince==0L || !PrefetchPolicy.canStart(p.currentPosition,p.duration,p.playbackParameters.speed,
+                now-readySince,p.bufferedPosition-p.currentPosition)) return
         if(prefetchAttempts>=3 || (prefetchAttempts>0 && now-prefetchAttemptAt<15_000) || connectivity.isActiveNetworkMetered || !networkAvailable()) return
         cancelPrefetch(); prefetchedFor=key; prefetchAttemptAt=now; prefetchAttempts++
         val ticket=preparedNext.begin(key)
@@ -1238,10 +1239,13 @@ class MainActivity: Activity() {
             var remote: RemoteVideo?=null
             try {
                 val prepared=scope.run {
-                    RemoteVideo(http,source.stream(id,quality)).also { remote=it; it.warm() }
+                    RemoteVideo(http,source.stream(id,quality)).also { remote=it; it.warm(PrefetchPolicy.WARM_BYTES) }
                 }
-                if(preparedNext.complete(ticket,key,prepared)) android.util.Log.i("HongguoTV","Next episode prepared near end")
-            } catch(_: Exception) { remote?.close() }
+                if(preparedNext.complete(ticket,key,prepared)) android.util.Log.i("HongguoTV","Next episode opening buffered bytes=${PrefetchPolicy.WARM_BYTES}")
+            } catch(_: Exception) {
+                remote?.close()
+                android.util.Log.i("HongguoTV","Next episode warmup cancelled or unavailable")
+            }
         }
     }
     private fun networkAvailable(): Boolean = connectivity.getNetworkCapabilities(connectivity.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)==true
