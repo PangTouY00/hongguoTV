@@ -39,6 +39,10 @@ class MainActivity: Activity() {
     private val preparedNext=PreparedSlot<RemoteVideo>({ android.os.SystemClock.elapsedRealtime() })
     private var prefetchJob: java.util.concurrent.Future<*>?=null
     private var prefetchScope: RequestScope?=null
+    private var queuedNext: RemoteVideo?=null
+    private var queuedHttp: okhttp3.OkHttpClient?=null
+    private var queuedEpisode=-1
+    private var episodeDuration=0L
     private var prefetchedFor=""
     private var readySince=0L
     private lateinit var artwork: ArtworkLoader
@@ -1115,10 +1119,15 @@ class MainActivity: Activity() {
     private fun playEpisode(index: Int,position: Long=0,autoplay: Boolean=true,recovering: Boolean=false) {
         updater.interrupt()
         val data=detail ?: return
-        val playbackStarted=android.os.SystemClock.elapsedRealtime()
+        var playbackStarted=android.os.SystemClock.elapsedRealtime()
         val reuse=screen=="player" && player!=null && playerView!=null && !recovering && !playError
         library.setWatched(data.series.id,false)
         val selectedIndex=index.coerceIn(0,data.episodes.lastIndex)
+        if(position==0L && autoplay && !recovering && !playError && queuedEpisode==selectedIndex &&
+            queuedNext!=null && player?.hasNextMediaItem()==true) {
+            requestedAutoplay=true;pausedForLifecycle=false
+            player?.seekToNextMediaItem();player?.play();return
+        }
         val prefetched=if(position==0L && !recovering) preparedNext.take("${data.episodes[selectedIndex]}:${library.maxQuality}") else null
         val claimedHttp=if(prefetched!=null) prefetchHttp.also { prefetchHttp=null } else null
         android.util.Log.i("HongguoTV","Episode transition target=${selectedIndex+1} cached=${prefetched!=null} warmupAttempts=$prefetchAttempts warmupRunning=${prefetchJob?.isDone==false}")
@@ -1138,7 +1147,7 @@ class MainActivity: Activity() {
         autoRecovery=false; readySince=0; startPosition=position.coerceAtLeast(0); requestedAutoplay=autoplay
         if(autoplay) sleepStopped=false
         screen="player"; episodeIndex=selectedIndex; group=episodeIndex/20
-        panel=false; playError=false; playbackReady=false; quality=""; pausedForLifecycle=!autoplay
+        panel=false; playError=false; playbackReady=false; episodeDuration=0; quality=""; pausedForLifecycle=!autoplay
         player?.playWhenReady=requestedAutoplay
         prefetchAttempts=0; prefetchAttemptAt=0
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1175,7 +1184,7 @@ class MainActivity: Activity() {
             }
             p.setPlaybackSpeed(library.playbackSpeed)
             val listener=object: Player.Listener {
-                private fun active()=player===p && generation==ticket && p.currentMediaItem?.mediaId==requestedId
+                private fun active()=player===p && generation==ticket && p.currentMediaItem?.mediaId==data.episodes.getOrNull(episodeIndex)
                 override fun onPlaybackStateChanged(state: Int) {
                     if(!active()) return
                     if(state==Player.STATE_READY) {
@@ -1183,7 +1192,7 @@ class MainActivity: Activity() {
                             playerFailure(PlaybackException("资源没有可解码的视频轨道",null,PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED))
                             return
                         }
-                        playbackReady=true
+                        playbackReady=true;episodeDuration=p.duration.coerceAtLeast(0)
                         if(firstReady) { firstReady=false; readySince=android.os.SystemClock.elapsedRealtime(); android.util.Log.i("HongguoTV","Playback ready episode=${episodeIndex+1} preloaded=${prefetched!=null} reused=$reuse elapsedMs=${readySince-playbackStarted}") }
                         if(hud.visibility==View.VISIBLE) updatePlaybackText()
                     }
@@ -1203,11 +1212,20 @@ class MainActivity: Activity() {
                 }
                 override fun onIsPlayingChanged(playing: Boolean) { if(active()) { if(hud.visibility==View.VISIBLE) showHud(); syncMediaSession() } }
                 override fun onPlaybackParametersChanged(parameters: PlaybackParameters) { if(active()) syncMediaSession() }
-                override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo,newPosition: Player.PositionInfo,reason: Int) { if(active()) syncMediaSession() }
+                override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo,newPosition: Player.PositionInfo,reason: Int) {
+                    if(player===p && generation==ticket &&
+                        newPosition.mediaItem?.mediaId==queuedNext?.let { data.episodes.getOrNull(queuedEpisode) } &&
+                        reason in listOf(Player.DISCONTINUITY_REASON_AUTO_TRANSITION,Player.DISCONTINUITY_REASON_SEEK)) {
+                        if(advanceQueuedEpisode(oldPosition.positionMs,reason==Player.DISCONTINUITY_REASON_AUTO_TRANSITION)) {
+                            playbackStarted=android.os.SystemClock.elapsedRealtime();firstReady=true;firstFrame=true
+                        }
+                    }
+                    if(active()) syncMediaSession()
+                }
                 override fun onPlayerError(error: PlaybackException) { if(active()) playerFailure(error) }
             }
             playerListener=listener; p.addListener(listener)
-            val source=ProgressiveMediaSource.Factory { VideoDataSource(remote) }.createMediaSource(MediaItem.Builder().setMediaId(requestedId).setUri("hongguotv://episode/$requestedId").setMimeType(MimeTypes.VIDEO_MP4).build())
+            val source=episodeSource(remote,requestedId)
             p.setMediaSource(source); p.seekTo(position.coerceAtLeast(0)); p.prepare(); p.playWhenReady=foreground && requestedAutoplay && !pausedForLifecycle && episodePanel==null
         }, { problem -> playerFailure(problem) })
     }
@@ -1217,13 +1235,15 @@ class MainActivity: Activity() {
         networkCleanup.execute { http.dispatcher.cancelAll(); http.connectionPool.evictAll(); http.dispatcher.executorService.shutdown() }
     }
     private fun cancelPrefetch() {
+        clearQueuedEpisode()
         prefetchScope?.cancel(); prefetchScope=null
         preparedNext.clear(); prefetchJob?.cancel(true); prefetchJob=null
         closeTransport(prefetchHttp); prefetchHttp=null; prefetchedFor=""
     }
     private fun maybePrefetch() {
         val p=player ?: return; val data=detail ?: return
-        if(!foreground || !p.isPlaying || !library.autoNext || playError || sleepStopped || episodeIndex>=data.episodes.lastIndex) return
+        if(!foreground || !p.isPlaying || !library.autoNext || playError || sleepStopped ||
+            sleepTimer.episodesLeft==1 || queuedNext!=null || episodeIndex>=data.episodes.lastIndex) return
         val id=data.episodes[episodeIndex+1]; val quality=library.maxQuality; val key="$id:$quality"
         if(preparedNext.isFresh(key) || prefetchJob?.isDone==false) return
         val now=android.os.SystemClock.elapsedRealtime()
@@ -1241,12 +1261,60 @@ class MainActivity: Activity() {
                 val prepared=scope.run {
                     RemoteVideo(http,source.stream(id,quality)).also { remote=it; it.warm(PrefetchPolicy.WARM_BYTES) }
                 }
-                if(preparedNext.complete(ticket,key,prepared)) android.util.Log.i("HongguoTV","Next episode opening buffered bytes=${PrefetchPolicy.WARM_BYTES}")
+                if(preparedNext.complete(ticket,key,prepared)) {
+                    android.util.Log.i("HongguoTV","Next episode opening buffered bytes=${PrefetchPolicy.WARM_BYTES}")
+                    main.post { queuePreparedEpisode(key) }
+                }
             } catch(_: Exception) {
                 remote?.close()
                 android.util.Log.i("HongguoTV","Next episode warmup cancelled or unavailable")
             }
         }
+    }
+    private fun episodeSource(remote: RemoteVideo,id: String)=ProgressiveMediaSource.Factory { VideoDataSource(remote) }
+        .createMediaSource(MediaItem.Builder().setMediaId(id).setUri("hongguotv://episode/$id").setMimeType(MimeTypes.VIDEO_MP4).build())
+    private fun queuePreparedEpisode(key: String) {
+        val p=player ?: return;val data=detail ?: return
+        val next=episodeIndex+1
+        if(!foreground || screen!="player" || playError || !library.autoNext || sleepStopped ||
+            sleepTimer.episodesLeft==1 || queuedNext!=null || next !in data.episodes.indices ||
+            key!="${data.episodes[next]}:${library.maxQuality}" || p.mediaItemCount!=1 ||
+            p.currentMediaItem?.mediaId!=data.episodes[episodeIndex]) return
+        val remote=preparedNext.take(key) ?: return
+        queuedNext=remote;queuedHttp=prefetchHttp;prefetchHttp=null;queuedEpisode=next
+        p.addMediaSource(episodeSource(remote,data.episodes[next]))
+        android.util.Log.i("HongguoTV","Next episode added to playback queue target=${next+1}")
+    }
+    private fun clearQueuedEpisode() {
+        val p=player
+        if(queuedNext!=null && p!=null && p.currentMediaItemIndex+1<p.mediaItemCount)
+            p.removeMediaItems(p.currentMediaItemIndex+1,p.mediaItemCount)
+        queuedNext?.close();queuedNext=null;queuedEpisode=-1
+        closeTransport(queuedHttp);queuedHttp=null
+    }
+    /** Queue transition only: no stop, clearMediaItems, setMediaSource or prepare. */
+    private fun advanceQueuedEpisode(oldPosition: Long,completed: Boolean): Boolean {
+        val p=player ?: return false;val data=detail ?: return false;val next=queuedNext ?: return false
+        if(queuedEpisode!=episodeIndex+1 || p.currentMediaItem?.mediaId!=data.episodes.getOrNull(queuedEpisode)) return false
+        val old=WatchProgress(data.series,data.episodes[episodeIndex],episodeIndex,oldPosition.coerceAtLeast(0),
+            maxOf(episodeDuration,oldPosition),completed,System.currentTimeMillis())
+        library.save(old)
+        cloudAccount.upload(CloudProgress(old.series,old.episodeId,old.episodeIndex,old.position,old.duration,old.updatedAt),data.episodes.size,true)
+        val previous=video;val previousHttp=playbackHttp
+        video=next;playbackHttp=queuedHttp;episodeIndex=queuedEpisode;group=episodeIndex/20
+        queuedNext=null;queuedHttp=null;queuedEpisode=-1
+        if(p.currentMediaItemIndex>0) p.removeMediaItems(0,p.currentMediaItemIndex)
+        previous?.close();closeTransport(previousHttp)
+        quality=next.info.quality;pendingSeek=null;startPosition=0
+        playbackReady=p.playbackState==Player.STATE_READY;episodeDuration=p.duration.coerceAtLeast(0)
+        readySince=android.os.SystemClock.elapsedRealtime();prefetchAttempts=0;prefetchAttemptAt=0
+        cancelRecovery();recovery.reset()
+        playbackTitle.text="${data.series.title}  ·  第 ${episodeIndex+1} 集"
+        controls.removeAllViews();controls.visibility=View.GONE;panel=false;transportPlay=null
+        saveProgress();syncMediaSession()
+        android.util.Log.i("HongguoTV","Playback queue transition episode=${episodeIndex+1}")
+        if(completed && sleepTimer.episodeEnded()) stopForSleep()
+        return true
     }
     private fun networkAvailable(): Boolean = connectivity.getNetworkCapabilities(connectivity.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)==true
     private fun currentPosition(): Long = pendingSeek ?: player?.currentPosition?.takeIf { playbackReady } ?: startPosition
@@ -1334,7 +1402,7 @@ class MainActivity: Activity() {
     }
     private fun stopForSleep() {
         sleepStopped=true; requestedAutoplay=false; retryAutoplay=false; pausedForLifecycle=true
-        cancelRecovery(); player?.pause(); saveProgress()
+        cancelRecovery();cancelPrefetch(); player?.pause(); saveProgress()
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         playbackText.text="定时停止已生效 · 观看位置已保存 · 按播放可继续"
         showHud(); if(!playError && episodePanel==null) showPanel(); syncMediaSession()
@@ -1344,6 +1412,7 @@ class MainActivity: Activity() {
         val labels=listOf("关闭定时停止","15 分钟后","30 分钟后","60 分钟后","90 分钟后","本集播完","再播完 3 集","再播完 5 集")
         tvTools.choose("定时停止 · ${sleepTimer.label()}",labels,anchor,{ choice ->
             when(choice) { 0 -> sleepTimer.cancel(); in 1..4 -> sleepTimer.afterMinutes(listOf(15,30,60,90)[choice-1]); else -> sleepTimer.afterEpisodes(listOf(1,3,5)[choice-5]) }
+            if(sleepTimer.episodesLeft==1) cancelPrefetch()
             if(anchor.tag!="playback-settings") anchor.text="定时 ${sleepTimer.label()}"; updatePlaybackText(); showHud()
         })
     }
