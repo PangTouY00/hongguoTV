@@ -1,0 +1,300 @@
+// SPDX-License-Identifier: GPL-3.0-only
+package com.hongguotv.nativeapp
+
+import android.app.Activity
+import android.graphics.Color
+import android.graphics.Typeface
+import android.os.Handler
+import android.os.Looper
+import android.text.TextUtils
+import android.view.Gravity
+import android.view.KeyEvent
+import android.view.View
+import android.widget.*
+import com.hongguotv.core.*
+import java.io.Closeable
+import java.util.concurrent.Executors
+
+/** A separate trial player. Never calls Library.save or AccountController.upload. */
+internal class HomeFeedScreen(
+    private val activity: Activity,private val state: DramaFeedState,private val nav: List<View>,
+    private val watch: (Series)->Unit,private val favorite: (Series,View)->Unit,
+    private val favoriteLabel: (String)->String,
+    private val backend: FeedBackend,private val playback: TrialPlayback
+): LinearLayout(activity),Closeable {
+    private val main=Handler(Looper.getMainLooper())
+    private val worker=Executors.newFixedThreadPool(2)
+    private var generation=0
+    private var scope: RequestScope?=null
+    private var job: java.util.concurrent.Future<*>?=null
+    private var prefetchScope: RequestScope?=null
+    private var prefetchJob: java.util.concurrent.Future<*>?=null
+    private data class CachedTrial(val clip: TrialClip,val savedAt: Long=android.os.SystemClock.elapsedRealtime())
+    private val cachedTrials=linkedMapOf<String,CachedTrial>()
+    private val attemptedPrefetch=mutableSetOf<String>()
+    private var prefetchGeneration=0
+    private var clip: TrialClip?=null
+    private var closed=false
+    private var active=false
+    private var loading=false
+    private var failed=false
+    private val stage=FrameLayout(activity)
+    private val title=label("发现下一部好剧",25f)
+    private val meta=label("第一集试播",13f,TvStyle.accent)
+    private val intro=label("喜欢这部作品，就选择观看全集。",15f,TvStyle.muted)
+    private val status=label("正在准备热门作品…",15f)
+    private val tag=label("热门发现",12f,TvStyle.accent)
+    private val actions=LinearLayout(activity).apply { gravity=Gravity.CENTER_VERTICAL }
+    private val buttons=mutableListOf<TextView>()
+    private val pauseButton: TextView
+    private val watchButton: TextView
+    private lateinit var favoriteButton: TextView
+    private val comicButton: TextView
+    private val realButton: TextView
+    private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
+    private fun label(value: String,size: Float,color: Int=TvStyle.text)=TextView(activity).apply {
+        text=value;textSize=size;setTextColor(color);includeFontPadding=false
+    }
+    private fun lp(w: Int=-1,h: Int=-2)=LayoutParams(w,h)
+    private fun button(value: String,action: ()->Unit)=label(value,14f).apply {
+        id=View.generateViewId();isFocusable=true;isFocusableInTouchMode=true;isClickable=true
+        gravity=Gravity.CENTER;minHeight=dp(44);setPadding(dp(10),dp(10),dp(10),dp(10))
+        background=TvStyle.card(activity,false)
+        setOnFocusChangeListener { _,_ -> paintButton(this) }
+        setOnClickListener { action() }
+    }
+    private fun paintButton(button: TextView) {
+        button.background=TvStyle.card(activity,button.hasFocus())
+        button.setTextColor(if(button.isSelected) TvStyle.accent else TvStyle.text)
+        button.setTypeface(null,if(button.isSelected) Typeface.BOLD else Typeface.NORMAL)
+    }
+    init {
+        orientation=VERTICAL
+        val content=LinearLayout(activity)
+        stage.id=View.generateViewId();stage.isFocusable=true;stage.isFocusableInTouchMode=true;stage.isClickable=true
+        stage.setPadding(dp(3),dp(3),dp(3),dp(3));stage.background=TvStyle.card(activity,false)
+        stage.addView(playback.view,FrameLayout.LayoutParams(-1,-1))
+        tag.setPadding(dp(12),dp(8),dp(12),dp(8));tag.background=TvStyle.shape(activity,Color.argb(210,11,15,21))
+        stage.addView(tag,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START).apply { setMargins(dp(10),dp(10),dp(10),0) })
+        status.gravity=Gravity.CENTER;status.setPadding(dp(14),dp(12),dp(14),dp(12));status.background=TvStyle.shape(activity,Color.argb(215,11,15,21))
+        stage.addView(status,FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM).apply { setMargins(dp(10),0,dp(10),dp(10)) })
+        content.addView(stage,lp(0,-1).apply { weight=2.2f;rightMargin=dp(22) })
+        val info=LinearLayout(activity).apply { orientation=VERTICAL;setPadding(0,dp(14),0,dp(10)) }
+        title.typeface=Typeface.DEFAULT_BOLD;title.maxLines=3;title.ellipsize=TextUtils.TruncateAt.END
+        info.addView(title)
+        meta.maxLines=2;meta.setPadding(0,dp(12),0,dp(12));info.addView(meta)
+        intro.maxLines=6;intro.ellipsize=TextUtils.TruncateAt.END
+        info.addView(intro)
+        info.addView(Space(activity),lp(1,0).apply { weight=1f })
+        info.addView(label("↑ ↓  换一部\n确定  打开操作\n返回  顶部导航",13f,TvStyle.muted).apply { setLineSpacing(dp(6).toFloat(),1f) })
+        content.addView(info,lp(0,-1).apply { weight=1f })
+        addView(content,lp(-1,0).apply { weight=1f })
+        pauseButton=button("暂停试播") { toggle() }
+        watchButton=button("观看全集") { state.current?.let { remember();pause();watch(it) } }
+        favoriteButton=button("账户收藏") {
+            state.current?.let { state.userPaused=true;playback.pause();remember();paintActions();favorite(it,favoriteButton) }
+        }
+        comicButton=button("漫剧") { changeType(DramaCategory.COMIC) }
+        realButton=button("真人剧") { changeType(DramaCategory.REAL) }
+        buttons+=listOf(pauseButton,watchButton,favoriteButton,comicButton,realButton)
+        buttons.forEachIndexed { index,b ->
+            actions.addView(b,lp(0,dp(44)).apply { weight=1f;if(index<buttons.lastIndex) rightMargin=dp(10) })
+            b.nextFocusLeftId=buttons.getOrNull(index-1)?.id ?: b.id
+            b.nextFocusRightId=buttons.getOrNull(index+1)?.id ?: b.id
+            b.nextFocusUpId=stage.id;b.nextFocusDownId=b.id
+        }
+        actions.setPadding(0,dp(10),0,0);actions.visibility=View.GONE;addView(actions)
+        stage.nextFocusLeftId=stage.id;stage.nextFocusRightId=stage.id
+        stage.nextFocusUpId=stage.id;stage.nextFocusDownId=stage.id
+        nav.forEach { it.nextFocusDownId=stage.id }
+        stage.setOnFocusChangeListener { _,focused -> stage.background=TvStyle.card(activity,focused) }
+        stage.setOnClickListener { showActions() }
+        stage.setOnKeyListener { _,key,event ->
+            when(key) {
+                KeyEvent.KEYCODE_DPAD_UP,KeyEvent.KEYCODE_DPAD_DOWN -> {
+                    if(event.action==KeyEvent.ACTION_DOWN && event.repeatCount==0) move(if(key==KeyEvent.KEYCODE_DPAD_UP) -1 else 1)
+                    true
+                }
+                KeyEvent.KEYCODE_DPAD_CENTER,KeyEvent.KEYCODE_ENTER -> { if(event.action==KeyEvent.ACTION_UP) showActions();true }
+                else -> false
+            }
+        }
+        playback.status={ value ->
+            if(!closed && clip!=null) when(value) {
+                TrialStatus.BUFFERING -> { status.visibility=View.VISIBLE;status.text="正在加载第一集…" }
+                TrialStatus.READY -> { status.visibility=if(state.userPaused) View.VISIBLE else View.GONE;failed=false;status.text=if(state.userPaused) "试播已暂停" else "第一集试播 · 喜欢就看全集";paintActions();prefetchUpcoming() }
+                TrialStatus.ENDED -> {
+                    status.visibility=View.VISIBLE;remember();state.ended=true;state.userPaused=true
+                    status.text="本集试播结束 · 看全集或按 ↓ 换一部";paintActions()
+                    if(active && stage.hasFocus()) showActions()
+                }
+                TrialStatus.ERROR -> { status.visibility=View.VISIBLE;playback.pause();failed=true;status.text="试播暂不可用 · 可重试、换剧或查看全集";paintActions() }
+            }
+        }
+        describe();paintActions()
+    }
+    fun start(foreground: Boolean,focusNav: Boolean) {
+        if(focusNav) nav[0].requestFocus() else stage.requestFocus()
+        if(foreground) resume()
+    }
+    fun resume() {
+        if(closed || active) return
+        active=true
+        if(clip!=null) { if(!state.userPaused && !state.ended) playback.resume();paintActions();prefetchUpcoming() }
+        else if(state.current!=null) loadCurrent() else loadPage(false)
+    }
+    fun pause() {
+        if(closed) return
+        remember();active=false;playback.pause();cancelRequest();cancelPrefetch();paintActions()
+    }
+    fun back(): Boolean {
+        if(actions.visibility!=View.VISIBLE) return false
+        actions.visibility=View.GONE;stage.requestFocus();return true
+    }
+    fun refreshAccountLabel() { if(!closed) paintActions() }
+    private fun showActions() {
+        actions.visibility=View.VISIBLE;paintActions()
+        (if(watchButton.isEnabled) watchButton else pauseButton).requestFocus()
+    }
+    private fun paintActions() {
+        pauseButton.text=when { failed || state.current==null -> "重试试播";state.ended -> "重新试播";state.userPaused -> "继续试播";else -> "暂停试播" }
+        watchButton.isEnabled=state.current!=null;favoriteButton.isEnabled=state.current!=null
+        favoriteButton.text=state.current?.let { favoriteLabel(it.id) } ?: "账户收藏"
+        comicButton.isSelected=state.category==DramaCategory.COMIC
+        realButton.isSelected=state.category==DramaCategory.REAL
+        paintButton(comicButton);paintButton(realButton)
+        stage.keepScreenOn=active && clip!=null && !state.userPaused && !state.ended && !failed
+    }
+    private fun describe() {
+        val series=state.current
+        title.text=series?.title ?: "发现下一部好剧"
+        meta.text=if(series==null) "第一集试播" else listOf("第一集试播",series.badge,series.tags).filter(String::isNotBlank).joinToString(" · ")
+        intro.text=series?.description?.ifBlank { "先试试看，喜欢这部作品就选择观看全集。" } ?: "选择漫剧或真人剧，上下换一部，找到想追的故事。"
+        tag.text="热门发现 · ${state.category.label}"
+        paintActions()
+    }
+    private fun remember() { if(clip!=null) state.position=playback.position() }
+    private fun cancelRequest() { generation++;scope?.cancel();scope=null;job?.cancel(true);job=null;loading=false }
+    private fun cancelPrefetch() {
+        prefetchGeneration++;prefetchScope?.cancel();prefetchScope=null
+        prefetchJob?.cancel(true);prefetchJob=null;attemptedPrefetch.clear()
+    }
+    private fun clearCache() { cachedTrials.values.forEach { it.clip.close() };cachedTrials.clear() }
+    private fun clearCurrent(retain: Boolean=false) {
+        remember();cancelRequest();cancelPrefetch();playback.clear()
+        clip?.let {
+            if(retain && !failed) {
+                cachedTrials.put(it.detail.series.id,CachedTrial(it))?.clip?.close()
+            } else it.close()
+        }
+        clip=null
+    }
+    private fun takeCached(id: String): TrialClip? {
+        val cached=cachedTrials.remove(id) ?: return null
+        if(android.os.SystemClock.elapsedRealtime()-cached.savedAt>90_000) { cached.clip.close();return null }
+        return cached.clip
+    }
+    private fun <T> request(action: ()->T,discard: (T)->Unit={},done: (T)->Unit) {
+        cancelRequest();loading=true;val token=generation;val requestScope=RequestScope();scope=requestScope
+        job=worker.submit {
+            try {
+                val result=requestScope.run(action)
+                main.post { if(closed || token!=generation || !active) discard(result) else { loading=false;done(result) } }
+            } catch(error: Exception) {
+                main.post {
+                    if(closed || token!=generation || !active) return@post
+                    loading=false;failed=true;status.visibility=View.VISIBLE
+                    val message=error.message.orEmpty().replace(Regex("https?://\\S+"),"[地址]").take(90)
+                    status.text="暂时无法试播 · ${message.ifBlank { "请重试或换一部" }}";paintActions()
+                }
+            }
+        }
+    }
+    private fun loadPage(advance: Boolean) {
+        if(!active || closed || loading) return
+        if(state.page>=100 || (!state.hasMore && state.current!=null)) { status.visibility=View.VISIBLE;status.text="本批作品已看完，可切换类型继续发现";return }
+        status.visibility=View.VISIBLE;status.text="正在读取热门作品…"
+        val page=state.page+1;val category=state.category
+        request({ backend.catalog(category,page) }) { result ->
+            state.append(result,page)
+            if(advance) state.move(1)
+            if(state.current==null) { status.text="暂时没有可试播的作品，可切换类型或重试";failed=true;paintActions() }
+            else loadCurrent()
+        }
+    }
+    private fun loadCurrent() {
+        val series=state.current ?: return
+        if(!active || closed) return
+        clearCurrent();failed=false;describe();status.visibility=View.VISIBLE;status.text="正在准备第一集试播…"
+        trimCache()
+        val cached=takeCached(series.id)
+        if(cached!=null) attach(cached) else request({ backend.prepare(backend.detail(series)) },{ it.close() },::attach)
+    }
+    private fun attach(next: TrialClip) {
+        clip=next
+        val series=next.detail.series
+        meta.text="第一集试播 · 共 ${next.detail.episodes.size} 集"+(series.tags.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
+        if(series.description.isNotBlank()) intro.text=series.description
+        playback.load(next,state.position,active && !state.userPaused && !state.ended)
+        paintActions()
+    }
+    private fun trimCache() {
+        val allowed=state.items.subList((state.index-1).coerceAtLeast(0),minOf(state.index+4,state.items.size)).map { it.id }.toSet()
+        val now=android.os.SystemClock.elapsedRealtime()
+        val stale=cachedTrials.filter { it.key !in allowed || now-it.value.savedAt>90_000 }.keys.toList()
+        stale.forEach { cachedTrials.remove(it)?.clip?.close() }
+    }
+    /** One speculative download at a time, after the current player is ready. */
+    private fun prefetchUpcoming() {
+        if(closed || !active || clip==null || failed || loading || prefetchJob!=null) return
+        trimCache()
+        val upcoming=state.items.drop(state.index+1).take(3)
+        val next=upcoming.firstOrNull { it.id !in cachedTrials && it.id !in attemptedPrefetch } ?: return
+        attemptedPrefetch+=next.id
+        val token=prefetchGeneration;val requestScope=RequestScope();prefetchScope=requestScope
+        prefetchJob=worker.submit {
+            val prepared=runCatching { requestScope.run { backend.prefetch(backend.detail(next)) } }.getOrNull()
+            main.post {
+                if(closed || !active || token!=prefetchGeneration) prepared?.close()
+                else {
+                    prefetchJob=null;prefetchScope=null
+                    if(prepared!=null) cachedTrials.put(next.id,CachedTrial(prepared))?.clip?.close()
+                    prefetchUpcoming()
+                }
+            }
+        }
+    }
+    private fun move(delta: Int) {
+        if(closed || !active) return
+        if(delta<0 && state.index==0) { status.visibility=View.VISIBLE;status.text="已到本次浏览的最早作品";return }
+        if(delta>0 && state.next==null) {
+            if(loading) return
+            if(!state.hasMore) { status.visibility=View.VISIBLE;status.text="本批作品已看完，可切换类型继续发现";return }
+            clearCurrent();loadPage(true);return
+        }
+        clearCurrent(retain=true)
+        if(state.move(delta)) loadCurrent()
+    }
+    private fun toggle() {
+        if(loading) return
+        if(failed || state.current==null || clip==null) {
+            if(state.current==null) state.select(state.category)
+            state.userPaused=false;state.ended=false
+            if(state.current==null) loadPage(false) else loadCurrent()
+            return
+        } else if(state.ended) { state.position=0;state.ended=false;state.userPaused=false;playback.restart() }
+        else { state.userPaused=!state.userPaused;if(state.userPaused) { remember();playback.pause() } else if(active) playback.resume() }
+        status.visibility=if(state.userPaused) View.VISIBLE else View.GONE
+        status.text=if(state.userPaused) "试播已暂停" else "第一集试播 · 喜欢就看全集";paintActions()
+    }
+    private fun changeType(category: DramaCategory) {
+        if(state.category==category) return
+        clearCurrent();state.select(category)
+        clearCache();actions.visibility=View.GONE;stage.requestFocus();describe();loadPage(false)
+    }
+    override fun close() {
+        if(closed) return
+        clearCurrent();clearCache();closed=true;active=false;stage.keepScreenOn=false
+        playback.release();backend.close();worker.shutdownNow()
+    }
+}

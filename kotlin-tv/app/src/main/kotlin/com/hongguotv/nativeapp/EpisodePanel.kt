@@ -14,7 +14,8 @@ import android.widget.*
 class EpisodePanel(
     private val activity: Activity,private val count: Int,private val current: Int,
     private val locate: (Int,View,(Int)->Unit)->Unit,
-    private val select: (Int)->Unit,private val closed: ()->Unit
+    private val select: (Int)->Unit,private val closed: ()->Unit,
+    private val lastWatched: Int?=null,private val lastCompleted: Boolean=false
 ) {
     private val dialog=Dialog(activity)
     private var group=current/20
@@ -59,7 +60,7 @@ class EpisodePanel(
         (group*20 until minOf((group+1)*20,count)).toList().chunked(5).forEach { indexes ->
             val row=LinearLayout(activity)
             indexes.forEach { index ->
-                val cell=button("${index+1}",index==current) { select(index) }
+                val cell=button("${index+1}"+when { index==current -> " · 当前";index==lastWatched -> if(lastCompleted) " · 已看" else " · 上次";else -> "" },index==current) { select(index) }
                 cell.contentDescription="第 ${index+1} 集"+(if(index==current) "，当前播放" else "")
                 row.addView(cell,LinearLayout.LayoutParams(0,-2,1f).apply { setMargins(dp(3),dp(3),dp(3),dp(3)) }); cells+=cell
             }
