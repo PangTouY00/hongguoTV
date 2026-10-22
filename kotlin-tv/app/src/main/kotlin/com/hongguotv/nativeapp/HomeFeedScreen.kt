@@ -49,7 +49,8 @@ internal class HomeFeedScreen(
     private val pauseButton: TextView
     private val watchButton: TextView
     private lateinit var favoriteButton: TextView
-    private val kindButton: TextView
+    private val comicButton: TextView
+    private val realButton: TextView
     private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
     private fun label(value: String,size: Float,color: Int=TvStyle.text)=TextView(activity).apply {
         text=value;textSize=size;setTextColor(color);includeFontPadding=false
@@ -59,8 +60,13 @@ internal class HomeFeedScreen(
         id=View.generateViewId();isFocusable=true;isFocusableInTouchMode=true;isClickable=true
         gravity=Gravity.CENTER;minHeight=dp(44);setPadding(dp(10),dp(10),dp(10),dp(10))
         background=TvStyle.card(activity,false)
-        setOnFocusChangeListener { _,focused -> background=TvStyle.card(activity,focused) }
+        setOnFocusChangeListener { _,_ -> paintButton(this) }
         setOnClickListener { action() }
+    }
+    private fun paintButton(button: TextView) {
+        button.background=TvStyle.card(activity,button.hasFocus())
+        button.setTextColor(if(button.isSelected) TvStyle.accent else TvStyle.text)
+        button.setTypeface(null,if(button.isSelected) Typeface.BOLD else Typeface.NORMAL)
     }
     init {
         orientation=VERTICAL
@@ -88,8 +94,9 @@ internal class HomeFeedScreen(
         favoriteButton=button("账户收藏") {
             state.current?.let { state.userPaused=true;playback.pause();remember();paintActions();favorite(it,favoriteButton) }
         }
-        kindButton=button("类型：漫剧") { changeType() }
-        buttons+=listOf(pauseButton,watchButton,favoriteButton,kindButton)
+        comicButton=button("漫剧") { changeType(DramaCategory.COMIC) }
+        realButton=button("真人剧") { changeType(DramaCategory.REAL) }
+        buttons+=listOf(pauseButton,watchButton,favoriteButton,comicButton,realButton)
         buttons.forEachIndexed { index,b ->
             actions.addView(b,lp(0,dp(44)).apply { weight=1f;if(index<buttons.lastIndex) rightMargin=dp(10) })
             b.nextFocusLeftId=buttons.getOrNull(index-1)?.id ?: b.id
@@ -153,7 +160,9 @@ internal class HomeFeedScreen(
         pauseButton.text=when { failed || state.current==null -> "重试试播";state.ended -> "重新试播";state.userPaused -> "继续试播";else -> "暂停试播" }
         watchButton.isEnabled=state.current!=null;favoriteButton.isEnabled=state.current!=null
         favoriteButton.text=state.current?.let { favoriteLabel(it.id) } ?: "账户收藏"
-        kindButton.text="类型：${state.category.label}"
+        comicButton.isSelected=state.category==DramaCategory.COMIC
+        realButton.isSelected=state.category==DramaCategory.REAL
+        paintButton(comicButton);paintButton(realButton)
         stage.keepScreenOn=active && clip!=null && !state.userPaused && !state.ended && !failed
     }
     private fun describe() {
@@ -277,8 +286,9 @@ internal class HomeFeedScreen(
         else { state.userPaused=!state.userPaused;if(state.userPaused) { remember();playback.pause() } else if(active) playback.resume() }
         status.text=if(state.userPaused) "试播已暂停" else "第一集试播 · 喜欢就看全集";paintActions()
     }
-    private fun changeType() {
-        clearCurrent();state.select(if(state.category==DramaCategory.COMIC) DramaCategory.REAL else DramaCategory.COMIC)
+    private fun changeType(category: DramaCategory) {
+        if(state.category==category) return
+        clearCurrent();state.select(category)
         clearCache();actions.visibility=View.GONE;stage.requestFocus();describe();loadPage(false)
     }
     override fun close() {

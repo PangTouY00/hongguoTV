@@ -122,8 +122,19 @@ class HomeFeedScreenTest {
             activity.setContentView(screen);screen.start(true,false);pump(screen)
             player.saved=456;screen.pause();assertFalse(player.playing);assertEquals(456L,state.position)
             screen.resume();assertTrue(player.playing)
-            texts(screen).first { it.text.toString().startsWith("类型：") }.performClick();pump(screen)
+            val comic=texts(screen).first { it.text=="漫剧" }
+            val real=texts(screen).first { it.text=="真人剧" }
+            assertTrue(comic.isSelected);assertFalse(real.isSelected)
+            val preparesBefore=(get(screen,"backend") as Backend).prepares
+            comic.performClick();pump(screen)
+            assertEquals(preparesBefore,(get(screen,"backend") as Backend).prepares)
+            assertEquals(456L,player.saved)
+            real.performClick();pump(screen)
+            assertTrue(real.isSelected);assertFalse(comic.isSelected)
             assertEquals(DramaCategory.REAL,state.category);assertEquals(0L,player.saved)
+            comic.performClick();pump(screen)
+            assertEquals(DramaCategory.COMIC,state.category)
+            assertTrue(comic.isSelected);assertFalse(real.isSelected)
         } finally { screen.close();controller.pause().stop().destroy() }
     }
 }

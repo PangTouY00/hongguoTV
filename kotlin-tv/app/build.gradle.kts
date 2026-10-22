@@ -11,8 +11,8 @@ android {
         applicationId = "com.hongguotv.nativeapp"
         minSdk = 23
         targetSdk = 36
-        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 33
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.0.13-home-feed-cache"
+        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 34
+        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.0.13-home-feed-types"
     }
     buildFeatures { buildConfig = true }
     testOptions {
