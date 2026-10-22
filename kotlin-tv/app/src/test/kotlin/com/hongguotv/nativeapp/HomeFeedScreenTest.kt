@@ -23,17 +23,19 @@ import java.util.concurrent.TimeUnit
 @LooperMode(LooperMode.Mode.PAUSED)
 class HomeFeedScreenTest {
     private class Backend(private val count: Int=2): FeedBackend {
-        var prepares=0;var closed=false
+        private val prepareCount=java.util.concurrent.atomic.AtomicInteger()
+        val prepares get()=prepareCount.get()
+        var closed=false
         override fun catalog(category: DramaCategory,page: Int)=CatalogPage((1..count).map { Series("$it","作品$it") },false)
         override fun detail(series: Series)=Detail(series,listOf("${series.id}01","${series.id}02"))
-        override fun prepare(detail: Detail): TrialClip { prepares++;return TrialClip(detail,RemoteVideo(OkHttpClient(),StreamInfo("https://example.com/video",null,"test"))) }
+        override fun prepare(detail: Detail): TrialClip { prepareCount.incrementAndGet();return TrialClip(detail,RemoteVideo(OkHttpClient(),StreamInfo("https://example.com/video",null,"test"))) }
         override fun close() { closed=true }
     }
     private class Playback(activity: Activity): TrialPlayback {
         override val view=View(activity)
         override var status: ((TrialStatus)->Unit)?=null
-        var loaded="";var saved=0L;var playing=false;var released=false
-        override fun load(clip: TrialClip,position: Long,autoplay: Boolean) { loaded=clip.detail.series.id;saved=position;playing=autoplay }
+        var loads=0;var loaded="";var saved=0L;var playing=false;var released=false
+        override fun load(clip: TrialClip,position: Long,autoplay: Boolean) { loads++;loaded=clip.detail.series.id;saved=position;playing=autoplay }
         override fun position()=saved
         override fun pause() { playing=false }
         override fun resume() { playing=true }
@@ -43,6 +45,13 @@ class HomeFeedScreenTest {
     }
     private fun get(target: Any,name: String)=target.javaClass.getDeclaredField(name).apply { isAccessible=true }.get(target)
     private fun pump(screen: HomeFeedScreen) { repeat(4) { (get(screen,"job") as? Future<*>)?.get(5,TimeUnit.SECONDS);ShadowLooper.idleMainLooper() } }
+    private fun finishPrefetch(screen: HomeFeedScreen) {
+        repeat(8) {
+            val pending=get(screen,"prefetchJob") as? Future<*> ?: return
+            pending.get(5,TimeUnit.SECONDS);ShadowLooper.idleMainLooper()
+        }
+        fail("首页预缓存任务未完成")
+    }
     private fun texts(view: View): List<TextView> = if(view is ViewGroup) (0 until view.childCount).flatMap { texts(view.getChildAt(it)) } else if(view is TextView) listOf(view) else emptyList()
     @Test fun transportCleanupRunsOffUiThreadAndOnlyOnce() {
         val finished=java.util.concurrent.CountDownLatch(1)
@@ -87,7 +96,7 @@ class HomeFeedScreenTest {
             activity.setContentView(screen);screen.start(true,false);pump(screen)
             assertEquals(1,backend.prepares)
             player.status?.invoke(TrialStatus.READY)
-            repeat(5) { (get(screen,"prefetchJob") as? Future<*>)?.get(5,TimeUnit.SECONDS);ShadowLooper.idleMainLooper() }
+            finishPrefetch(screen)
             assertEquals(4,backend.prepares)
             assertEquals(setOf("2","3","4"),(get(screen,"cachedTrials") as Map<*,*>).keys)
             val stage=get(screen,"stage") as View
@@ -125,9 +134,13 @@ class HomeFeedScreenTest {
             val comic=texts(screen).first { it.text=="漫剧" }
             val real=texts(screen).first { it.text=="真人剧" }
             assertTrue(comic.isSelected);assertFalse(real.isSelected)
-            val preparesBefore=(get(screen,"backend") as Backend).prepares
+            // resume() starts background work for other series. Only current-player reloads
+            // indicate an incorrect repeated category selection, regardless of worker timing.
+            val loadsBefore=player.loads
             comic.performClick();pump(screen)
-            assertEquals(preparesBefore,(get(screen,"backend") as Backend).prepares)
+            assertEquals(loadsBefore,player.loads)
+            finishPrefetch(screen)
+            assertEquals("1",player.loaded)
             assertEquals(456L,player.saved)
             real.performClick();pump(screen)
             assertTrue(real.isSelected);assertFalse(comic.isSelected)
