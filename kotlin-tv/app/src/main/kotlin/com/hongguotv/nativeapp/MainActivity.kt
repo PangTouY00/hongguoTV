@@ -68,6 +68,8 @@ class MainActivity: Activity() {
     private val cardImages=linkedMapOf<String,Pair<ImageView,String>>()
     private var prefetchAttemptAt=0L
     private var prefetchAttempts=0
+    private val homeFeedState=DramaFeedState()
+    private var homeFeed: HomeFeedScreen?=null
     private var homeScreen: HomeScreen?=null
     private var selectionPreview: SeriesPreview?=null
     private var homeFromCache=false
@@ -215,6 +217,7 @@ class MainActivity: Activity() {
             openDetail(remote.series,true,cloudProgress=remote)
         }
         cloudAccount.onHistoryChanged={
+            homeFeed?.refreshAccountLabel()
             relatedSection?.refreshLabels()
             detail?.series?.let { accountFavoriteButton?.text=cloudAccount.favoriteActionLabel(it.id) }
             if(screen=="detail" && relatedSection!=null && cloudAccount.signedIn && cloudAccount.reservationState(false).message=="尚未读取预约记录")
@@ -237,7 +240,7 @@ class MainActivity: Activity() {
                 }
             }
         }
-        updater=AppUpdater(this) { foreground && library.isLoaded && screen=="catalog" && !tvTools.showing && !cloudAccount.showing }
+        updater=AppUpdater(this) { foreground && library.isLoaded && screen=="catalog" && homeFeed==null && !tvTools.showing && !cloudAccount.showing }
         connectivity=getSystemService(ConnectivityManager::class.java)
         runCatching {
             if(android.os.Build.VERSION.SDK_INT>=24) connectivity.registerDefaultNetworkCallback(networkCallback)
@@ -286,6 +289,7 @@ class MainActivity: Activity() {
         generation++; cancelWork(); artwork.cancelPage()
     }
     private fun releaseCatalogViews() {
+        homeFeed?.close();homeFeed=null
         relatedSection=null;accountFavoriteButton=null
         homeScreen?.let { homePosition=it.capturePosition() }
         catalogScroll?.let { scrollPositions[catalogPageKey]=it.scrollY }
@@ -403,7 +407,7 @@ class MainActivity: Activity() {
             catalog=cached?.items ?: emptyList(); hasMore=cached?.hasMore ?: false; ranking=null; homeFromCache=cached!=null
         }
         invalidatePage(); screen="catalog"; releaseCatalogViews(); val container=base()
-        if(foreground && library.isLoaded && !favoriteMonitor.running) main.post { if(foreground && screen=="catalog") favoriteMonitor.check() }
+        if(tab!=0 && foreground && library.isLoaded && !favoriteMonitor.running) main.post { if(foreground && screen=="catalog") favoriteMonitor.check() }
         val top=row().apply { setPadding(0,0,0,dp(8)) }
         val brand=row()
         brand.addView(ImageView(this).apply { setImageResource(com.hongguotv.nativeapp.R.drawable.app_icon) },lp(dp(28),dp(28)).apply { rightMargin=dp(9) })
@@ -425,6 +429,16 @@ class MainActivity: Activity() {
         if(tab==6) {
             val scroll=ScrollView(this); val body=column(); scroll.addView(body); container.addView(scroll,lp(-1,0).apply { weight=1f })
             settings(body); if(focusNav) nav[tab].requestFocus(); return
+        }
+        if(tab==0) {
+            favoriteMonitor.stop()
+            val feed=HomeFeedScreen(this,homeFeedState,nav.toList(),
+                { openDetail(it,false) },::accountFavoriteAction,cloudAccount::favoriteActionLabel,
+                PublicFeedBackend(library.maxQuality),Media3TrialPlayback(this))
+            homeFeed=feed
+            container.addView(feed,lp(-1,0).apply { weight=1f })
+            feed.start(foreground,focusNav)
+            return
         }
         if(tab==2) {
             val ranks=RankingScreen(this,rankBrowser,nav,tvTools,::loadCover,
@@ -1428,6 +1442,7 @@ class MainActivity: Activity() {
     }
     private fun goBack() {
         if(!library.isLoaded) { finish(); return }
+        if(screen=="catalog" && tab==0 && homeFeed?.back()==true) return
         when(screen) {
             "player" -> if(hud.visibility==View.VISIBLE && !playError) hidePlaybackOverlay() else returnToDetail()
             "detail" -> {
@@ -1498,17 +1513,19 @@ class MainActivity: Activity() {
             } else {
                 val waiting=deferredWork; deferredWork=null; waiting?.apply?.invoke()
             }
-            if(screen=="catalog") favoriteMonitor.check()
+            homeFeed?.resume()
+            if(screen=="catalog" && tab!=0) favoriteMonitor.check()
             if(screen=="player") syncMediaSession()
         } else libraryLoadError?.let(::showLibraryError)
     }
     override fun onPause() {
-        updater.pause()
+        updater.pause();homeFeed?.pause()
         foreground=false; main.removeCallbacks(tick); cancelRecovery(); cancelPrefetch(); mediaSession.deactivate()
         sleepTimer.cancel(); favoriteMonitor.stop(); detailAutoplay=false; requestedAutoplay=false; pausedForLifecycle=true
         player?.pause(); saveProgress(); library.flush(); super.onPause()
     }
     override fun onStop() {
+        homeFeed?.close();homeFeed=null
         restoreStoppedPage=true; generation++; cancelWork(); tvTools.close()
         if(screen=="player") { startPosition=currentPosition(); saveProgress(); releasePlayer() }
         artwork.cancelPage(clearMemory=true); library.flush(); super.onStop()
