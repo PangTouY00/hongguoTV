@@ -2,6 +2,24 @@ package com.hongguotv.core
 
 fun main(args: Array<String>) {
     val repository=ContentRepository()
+    if(args.contains("--discovery")) {
+        try {
+            for(category in DramaCategory.entries) {
+                val first=repository.discover(category)
+                val info=checkNotNull(first.discovery)
+                check(first.items.isNotEmpty() && info.topics.isNotEmpty())
+                val topic=info.topics.first()
+                val filtered=repository.discover(category,topic.id)
+                val second=repository.discover(category,topic.id,2)
+                check(filtered.items.isNotEmpty() && second.items.isNotEmpty())
+                check(filtered.items.map { it.id }!=second.items.map { it.id })
+                println("category=${category.route}; topics=${info.topics.joinToString { it.label }}; first=${first.items.size}; filtered=${filtered.items.size}; secondPage=${second.items.size}; totalPages=${info.totalPages}")
+            }
+        } finally {
+            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        }
+        return
+    }
     if(args.contains("--tv-rankings")) {
         try {
             for(board in RankBoard.entries) {
