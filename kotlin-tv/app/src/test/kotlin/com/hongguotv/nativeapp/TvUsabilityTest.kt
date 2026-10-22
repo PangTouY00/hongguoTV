@@ -59,7 +59,7 @@ class TvUsabilityTest {
         try {
             val library=get(activity,"library") as Library
             (get(library,"loader") as ExecutorService).submit {}.get(5,TimeUnit.SECONDS)
-            (get(get(activity,"cloudAccount"),"worker") as ExecutorService).submit {}.get(5,TimeUnit.SECONDS)
+            (get(get(activity,"cloudAccount")!!,"worker") as ExecutorService).submit {}.get(5,TimeUnit.SECONDS)
             ShadowLooper.idleMainLooper()
             MainActivity::class.java.getDeclaredMethod("switchTab",Int::class.javaPrimitiveType).apply { isAccessible=true }.invoke(activity,6)
             val root=activity.findViewById<View>(android.R.id.content);val rows=texts(root)
