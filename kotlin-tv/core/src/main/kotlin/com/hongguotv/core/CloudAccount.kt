@@ -70,7 +70,8 @@ class CloudAccountClient(private val http: OkHttpClient) {
         signed.headers.forEach { (k,v)->request.header(k,v) }
         if(wireBody!=null) request.post(wireBody.toRequestBody("application/json; charset=utf-8".toMediaType()))
         if(gzip) request.header("Content-Encoding","gzip")
-        return http.newCall(request.build()).execute().use { response ->
+        val transport=if(path=="/reading/bookapi/bookshelf/video/update/v1/") http.newBuilder().retryOnConnectionFailure(false).build() else http
+        return transport.newCall(request.build()).execute().use { response ->
             val json=JSONObject(cloudResponse(response))
             val code=json.optInt("code",-1)
             if(code!=0) throw IOException("账号接口不可用（错误码 $code），请重新登录或稍后重试")
@@ -99,6 +100,20 @@ class CloudAccountClient(private val http: OkHttpClient) {
     /** Read-only video shelf. Protocol reference: charlie901208/HGTV AccountParser.favorites. */
     fun favorites(credentials: AccountCredentials): List<CloudFavorite> =
         parseFavorites(json(credentials,"/reading/bookapi/bookshelf/video/info/v1/"))
+    /** Video shelf only (novel bookshelf/add can acknowledge without changing video favorites).
+     * Protocol reference: HGTV videoShelf public request model.
+     * No automatic retry: callers must read the shelf back before reporting success.
+     */
+    fun setFavorite(credentials: AccountCredentials,seriesId: String,add: Boolean) {
+        require(seriesId.matches(Regex("[0-9]{1,30}"))) { "剧集编号无效" }
+        val entry=JSONObject().put("book_id",seriesId).put("book_type",2)
+            .put("modify_time",System.currentTimeMillis()).put("video_shelf_operate_type",if(add) 0 else 1)
+        if(!add) entry.put("group_name","")
+        val body=JSONObject().put("is_cancelled",false).put("update_bookshelf_video_list",JSONArray().put(entry))
+        if(add) body.put("shark_extra",JSONObject().put("enter_from","MainFragmentActivity")
+            .put("previous_page","").put("page_list","MainFragmentActivity").put("is_active_behavior","true").put("inactive_type","0"))
+        json(credentials,"/reading/bookapi/bookshelf/video/update/v1/",body=body.toString().toByteArray())
+    }
     /** Protocol reference: charlie901208/HGTV feat/phone-login, accountReserves.
      * Keep the two upstream categories separate; an unpublished series is never playable.
      * The upstream pagination contract is unverified, so expose only this requested batch.

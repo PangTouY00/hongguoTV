@@ -69,6 +69,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
     private var historyLoaded=false
     private val acceptedReservations=mutableSetOf<String>()
     private var favorites=FavoriteState()
+    private val unconfirmedFavorites=mutableSetOf<String>()
     private var reservations=emptyMap<Boolean,ReservationState>()
     private var status="未登录"
     private var busy=false
@@ -105,6 +106,53 @@ class AccountController(private val activity: Activity,private val play: (CloudP
         },{ done("预约未完成：${safeError(it)}") })
     }
     internal fun favoriteState(): FavoriteState = if(signedIn) favorites else FavoriteState(message="未登录")
+    fun accountFavorite(id: String)=signedIn && favorites.rows.any { it.series.id==id }
+    fun favoriteNeedsRefresh(id: String)=id in unconfirmedFavorites
+    fun favoriteActionLabel(id: String): String = when {
+        !signedIn -> "登录后加入账户收藏"
+        favorites.loading -> "账户收藏处理中…"
+        favoriteNeedsRefresh(id) -> "刷新账户收藏状态"
+        accountFavorite(id) -> "取消账户收藏"
+        else -> "加入账户收藏"
+    }
+    fun changeFavorite(series: Series,add: Boolean,done: (String)->Unit) {
+        val account=credentials ?: run { show();return }
+        if(closed || favorites.loading) { done("账户收藏正在处理，请稍候");return }
+        if(favoriteNeedsRefresh(series.id)) { refreshFavorites();done("上次操作尚未确认，已刷新账户收藏，请核对后再操作。");return }
+        val token=generation
+        favorites=favorites.copy(loading=true,message="正在核对并更新账户收藏…");changed()
+        worker.execute {
+            var attempted=false
+            val result=runCatching {
+                check(!closed && token==generation)
+                val before=client.favorites(account)
+                if(before.any { it.series.id==series.id }==add) before to false
+                else {
+                    check(!closed && token==generation)
+                    attempted=true
+                    client.setFavorite(account,series.id,add)
+                    check(!closed && token==generation)
+                    client.favorites(account) to true
+                }
+            }
+            main.post {
+                if(closed || token!=generation) return@post
+                val message=result.fold({ (rows,wrote) ->
+                    val confirmed=rows.any { it.series.id==series.id }==add
+                    if(confirmed) unconfirmedFavorites.remove(series.id) else unconfirmedFavorites.add(series.id)
+                    favorites=FavoriteState(rows,loaded=true,message=if(confirmed) "已核对账户收藏，共读取 ${rows.size} 部" else "请求已提交，列表尚未确认，请刷新或在手机核对")
+                    if(!confirmed) "请求已提交，但账户列表尚未确认生效。请刷新或在手机红果核对，不要连续重复提交。"
+                    else if(wrote) if(add) "已加入账户收藏，并已在账户列表确认" else "已取消账户收藏，并已从本次读取的列表移除"
+                    else if(add) "这部剧已在账户收藏中，无需重复添加" else "本次读取的账户列表中已没有这部剧，无需重复取消"
+                },{ error ->
+                    if(attempted) unconfirmedFavorites.add(series.id)
+                    favorites=favorites.copy(loading=false,message=if(attempted) "收藏操作未确认，请刷新或在手机核对" else "读取失败：${safeError(error)}")
+                    if(attempted) "收藏操作未确认：${safeError(error)}。请先刷新或在手机核对。" else "未修改账户收藏：${safeError(error)}"
+                })
+                changed();done(message)
+            }
+        }
+    }
     fun refreshFavorites() {
         val account=credentials ?: return
         if(closed || favorites.loading) return
@@ -115,7 +163,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
             val result=runCatching { client.favorites(account) }
             main.post {
                 if(closed || token!=generation) return@post
-                favorites=result.fold({ FavoriteState(it,loaded=true,message="已读取 ${it.size} 部账户收藏") },
+                favorites=result.fold({ unconfirmedFavorites.clear();FavoriteState(it,loaded=true,message="已读取 ${it.size} 部账户收藏") },
                     { favorites.copy(loading=false,message="读取失败：${safeError(it)}") })
                 changed()
             }
@@ -223,7 +271,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
         return next to account
     }
     private fun acceptAccount(next: AccountCredentials,account: CloudProfile) {
-        credentials=next; profile=account; history=emptyList(); historyLoaded=false; favorites=FavoriteState(); reservations=emptyMap(); acceptedReservations.clear(); generation++
+        credentials=next; profile=account; history=emptyList(); historyLoaded=false; favorites=FavoriteState(); unconfirmedFavorites.clear(); reservations=emptyMap(); acceptedReservations.clear(); generation++
         status="已登录，正在读取云端记录"; lastUpload=0; lastEpisode=""; lastProgress=null; pending=null; draining=false
         changed(); toast("已登录 ${account.nickname}"); refresh(true)
     }
@@ -332,7 +380,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
             .setNegativeButton("关闭",null))
     }
     private fun logout() {
-        generation++; busy=false; credentials=null; profile=null; history=emptyList(); historyLoaded=false; favorites=FavoriteState(); reservations=emptyMap(); acceptedReservations.clear(); pending=null; lastProgress=null; draining=false
+        generation++; busy=false; credentials=null; profile=null; history=emptyList(); historyLoaded=false; favorites=FavoriteState(); unconfirmedFavorites.clear(); reservations=emptyMap(); acceptedReservations.clear(); pending=null; lastProgress=null; draining=false
         http.dispatcher.cancelAll(); status="已退出账号，自动同步已停止"; changed()
         worker.execute { val result=runCatching { store.clear() }; main.post { toast(if(result.isSuccess) status else "清除登录态失败，请重试退出") } }
     }
