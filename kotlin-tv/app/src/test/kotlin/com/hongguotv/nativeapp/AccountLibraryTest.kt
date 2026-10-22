@@ -69,6 +69,33 @@ class AccountLibraryTest {
             assertEquals(7,nav.size)
         } finally { controller.destroy() }
     }
+    @Test fun favoriteAndReservationBadgesUseTheirOwnProgressSources() {
+        val controller=Robolectric.buildActivity(MainActivity::class.java).create()
+        val activity=controller.get()
+        try {
+            val series=Series("111","同一部剧",badge="全 80 集")
+            val local=BackupProgress(series,"112",3,1000,90000,false,1000)
+            val library=get(activity,"library") as Library
+            Library::class.java.getDeclaredField("index").apply { isAccessible=true }.set(library,LibraryIndex(BackupData(listOf(series),listOf(local),emptySet(),emptyList(),BackupSettings())))
+            val account=get(activity,"cloudAccount") as AccountController
+            account.onHistoryChanged=null
+            set(account,"credentials",AccountCredentials("test-only"));set(account,"busy",true)
+            set(account,"favorites",FavoriteState(listOf(CloudFavorite(series,1000)),loaded=true,loading=true))
+            set(account,"history",listOf(CloudProgress(series,"222",11,45000,90000,2000,80)))
+            set(account,"reservations",mapOf(true to ReservationState(listOf(CloudReservation(series,true,0)),loaded=true,loading=true),
+                false to ReservationState(listOf(CloudReservation(Series("reservation:333","待上线作品"),false,0)),loaded=true,loading=true)))
+            val root=activity.findViewById<View>(android.R.id.content)
+            method(activity,"switchTab",3)
+            assertTrue(texts(root).any { it.text.toString()=="共 80 集\n看到第 4 集" })
+            texts(root).single { it.text.toString()=="账户收藏" }.performClick()
+            assertTrue(texts(root).any { it.text.toString()=="共 80 集\n看到第 12 集" })
+            assertFalse(texts(root).any { it.text.toString()=="共 80 集\n看到第 4 集" })
+            method(activity,"switchTab",5)
+            assertTrue(texts(root).any { it.text.toString()=="共 80 集\n看到第 12 集" })
+            texts(root).single { it.text.toString()=="待上线 · 1" }.performClick()
+            assertTrue(texts(root).any { it.text.toString()=="待上线\n暂不可观看" })
+        } finally { controller.destroy() }
+    }
     @Test fun unsignedSourceShowsLoginAndKeepsLocalRecordsAvailable() {
         val controller=Robolectric.buildActivity(MainActivity::class.java).create()
         val activity=controller.get()

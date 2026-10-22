@@ -26,7 +26,7 @@ internal object AccountCredentialsParser {
     fun parseHeader(value: String) = AccountCredentials(value)
 }
 data class CloudProfile(val id: String,val nickname: String)
-data class CloudProgress(val series: Series,val episodeId: String,val episodeIndex: Int,val position: Long,val duration: Long,val updatedAt: Long)
+data class CloudProgress(val series: Series,val episodeId: String,val episodeIndex: Int,val position: Long,val duration: Long,val updatedAt: Long,val episodeCount: Int=0)
 
 internal fun cloudResponse(response: okhttp3.Response): String {
     if(!response.isSuccessful) throw IOException("账号请求失败（HTTP ${response.code}）")
@@ -92,7 +92,7 @@ class CloudAccountClient(private val http: OkHttpClient) {
         val details=json(credentials,"/reading/bookapi/multi-detail/v1/",mapOf("book_id" to progress.map { it.series.id }.joinToString(","),"book_type" to "2"))
             .optJSONArray("data") ?: throw IOException("云端剧集资料格式已变化")
         val series=details.objects().associate { row ->
-            row.str("book_id") to Series(row.str("book_id"),row.str("book_name"),cleanUrl(row.str("thumb_url")),row.str("abstract"))
+            row.str("book_id") to Series(row.str("book_id"),row.str("book_name"),cleanUrl(row.str("thumb_url")),row.str("abstract"),episodeBadge(row))
         }
         return progress.map { it.copy(series=series[it.series.id] ?: it.series.copy(title="剧集 ${it.series.id}")) }
     }
@@ -107,7 +107,16 @@ class CloudAccountClient(private val http: OkHttpClient) {
         val raw=json(credentials,"/reading/user/subscribe/list/v0/",mapOf(
             "offset" to "0","limit" to "20","is_online" to online.toString(),"tab_type" to "13",
             "subscribe_order_type" to "0","swipe_type" to "0","need_calendar_schema" to "false","subscribe_offset" to "0"))
-        return parseReservations(raw,online)
+        val rows=parseReservations(raw,online)
+        if(!online) return rows
+        val missing=rows.filter { EpisodeSummary.total(it.series.badge)==0 }.map { it.series.id }
+        if(missing.isEmpty()) return rows
+        // Optional batch metadata: its failure must not hide a valid reservation list.
+        val totals=runCatching {
+            json(credentials,"/reading/bookapi/multi-detail/v1/",mapOf("book_id" to missing.joinToString(","),"book_type" to "2"))
+                .optJSONArray("data")?.objects().orEmpty().associate { it.str("book_id") to episodeBadge(it) }
+        }.getOrDefault(emptyMap())
+        return rows.map { row -> totals[row.series.id]?.takeIf { it.isNotBlank() }?.let { row.copy(series=row.series.copy(badge=it)) } ?: row }
     }
     /** SearchUncoverSubscribeRequest fields come from the official RPC model.
      * code=0 only acknowledges the write; account-list confirmation is a separate operation.
@@ -131,6 +140,10 @@ class CloudAccountClient(private val http: OkHttpClient) {
         json(credentials,"/reading/bookapi/read_progress/upload/v1/",body=body)
     }
     companion object {
+        private fun episodeBadge(row: JSONObject): String {
+            val count=listOf("episode_cnt","episode_count","drama_chapter_number").map { row.optInt(it) }.firstOrNull { it>0 } ?: 0
+            return if(count>0) "全 $count 集" else ""
+        }
         fun parseFavorites(raw: JSONObject): List<CloudFavorite> {
             val data=raw.optJSONObject("data") ?: throw IOException("账户收藏数据格式已变化")
             if(!data.has("video_shelf_info")) throw IOException("账户收藏列表格式已变化")
@@ -169,7 +182,7 @@ class CloudAccountClient(private val http: OkHttpClient) {
                 if(row.has("is_online") && row.optBoolean("is_online")!=online) return@mapNotNull null
                 val cover=row.str("series_cover_url").ifBlank { video.str("cover") }.ifBlank { video.str("cover_url") }.ifBlank { video.str("thumb_url") }
                 val stamp=row.optLong("schedule_publish_time").coerceAtLeast(0).let { if(it in 1..9999999999L) it*1000 else it }
-                val series=Series(id,title,cleanUrl(cover),video.str("video_desc").ifBlank { row.str("abstract") }.ifBlank { row.str("item_desc") },if(online) "已上线" else "待上线",video.str("category"))
+                val series=Series(id,title,cleanUrl(cover),video.str("video_desc").ifBlank { row.str("abstract") }.ifBlank { row.str("item_desc") },if(online) episodeBadge(video).ifBlank { episodeBadge(row) }.ifBlank { "已上线" } else "待上线",video.str("category"))
                 CloudReservation(series,online,stamp,row.str("expected_rec_text"))
             }.distinctBy { it.series.id }
             if(rows.length()>0 && result.isEmpty()) throw IOException("预约条目格式已变化，请稍后重试")
@@ -180,7 +193,7 @@ class CloudAccountClient(private val http: OkHttpClient) {
             if(!id.matches(Regex("[0-9]{1,30}")) || !episode.matches(Regex("[0-9]{1,30}"))) return@mapNotNull null
             val stamp=row.optLong("last_watch_time").let { if(it in 1..9999999999L) it*1000 else it }
             CloudProgress(Series(id,""),episode,(row.optInt("vid_index",1)-1).coerceAtLeast(0),
-                row.optLong("current_play_time").coerceAtLeast(0),row.optLong("current_total_time").coerceAtLeast(0),stamp)
+                row.optLong("current_play_time").coerceAtLeast(0),row.optLong("current_total_time").coerceAtLeast(0),stamp,row.optInt("episode_count").coerceAtLeast(0))
         }.distinctBy { it.series.id }.sortedByDescending { it.updatedAt }
     }
 }

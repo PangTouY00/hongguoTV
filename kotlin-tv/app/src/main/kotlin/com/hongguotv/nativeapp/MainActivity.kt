@@ -352,8 +352,18 @@ class MainActivity: Activity() {
     private fun accountCatalog()=isAccountHistory() || isAccountFavorites() || tab==5
     private fun refreshAccountSection() {
         if(isAccountHistory()) cloudAccount.refreshHistory()
-        if(isAccountFavorites()) cloudAccount.refreshFavorites()
-        if(tab==5) cloudAccount.refreshReservations()
+        if(isAccountFavorites()) { cloudAccount.refreshFavorites();cloudAccount.refreshHistory() }
+        if(tab==5) { cloudAccount.refreshReservations();cloudAccount.refreshHistory() }
+    }
+    private fun collectionEpisodeLabel(series: Series): String {
+        val remote=isAccountFavorites() || tab==5
+        val cloud=if(remote) cloudAccount.progress(series.id) else null
+        val local=if(!remote) library.progress(series.id) else null
+        val update=if(!remote) library.favoriteUpdate(series.id) else null
+        val total=maxOf(EpisodeSummary.total(series.badge),EpisodeSummary.total(cloud?.series?.badge.orEmpty()),EpisodeSummary.total(local?.series?.badge.orEmpty()),cloud?.episodeCount ?: 0,update?.total ?: 0)
+        return EpisodeSummary.label(total,cloud?.episodeIndex ?: local?.episodeIndex,account=remote,
+            ready=cloudAccount.historyReady,loading=cloudAccount.historyLoading,
+            markedWatched=!remote && library.watched(series.id),pending=tab==5 && !reservationOnline,added=update?.added ?: 0)
     }
     private fun switchLibrarySource(account: Boolean) {
         if(tab==3) librarySources.accountFavorites=account else librarySources.accountHistory=account
@@ -604,7 +614,7 @@ class MainActivity: Activity() {
                 card.addView(text(item.title,14f).apply { maxLines=2; minLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(7),dp(3),0) },lp(-1,-2).apply { weight=1f })
                 val cloud=if(isAccountHistory()) cloudAccount.progress(item.id) else null
                 val progress=cloud?.let { WatchProgress(it.series,it.episodeId,it.episodeIndex,it.position,it.duration,false,it.updatedAt) } ?: if(isLocalHistory() || collection=="resume") library.progress(item.id) else null
-                val badge=text(if(isLocalFavorites()) library.favoriteLabel(item.id) else if(tab==2) position?.heat?.ifBlank { "热度暂无" } ?: "热度暂无" else if(progress!=null) if(!isAccountHistory() && library.watched(item.id)) "整剧已看完" else "第 ${progress.episodeIndex+1} 集 · ${formatTime(progress.position)}" else item.badge,12f,if(tab==2 || isLocalFavorites()) accent else muted).apply { maxLines=1; minLines=1; minHeight=dp(19); ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),0,0,0) }
+                val badge=text(if(tab==3 || tab==5) collectionEpisodeLabel(item) else if(tab==2) position?.heat?.ifBlank { "热度暂无" } ?: "热度暂无" else if(progress!=null) if(!isAccountHistory() && library.watched(item.id)) "整剧已看完" else "第 ${progress.episodeIndex+1} 集 · ${formatTime(progress.position)}" else item.badge,12f,if(tab==2 || isLocalFavorites()) accent else muted).apply { maxLines=if(tab==3 || tab==5) 2 else 1; minLines=maxLines; minHeight=dp(if(tab==3 || tab==5) 34 else 19); ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),0,0,0) }
                 card.addView(badge,lp(-1,-2)); if(isLocalFavorites()) favoriteBadges[item.id]=badge
                 card.setOnClickListener { if(reservationNotice(item,card)) return@setOnClickListener; catalogFocus=item.id; openDetail(item,isLocalHistory() || isAccountHistory() || collection=="resume" || collection=="updates",cloudProgress=if(isAccountHistory()) cloudAccount.progress(item.id) else null) }
                 card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
@@ -755,7 +765,7 @@ class MainActivity: Activity() {
             catalogBody?.let { body -> body.removeAllViews(); catalogGrid(body,false) }
         } else {
             catalog.firstOrNull { it.id==changedId }?.let { selectionPreview?.show(it,selectionStatus(it)) }
-            favoriteBadges[changedId]?.text=library.favoriteLabel(changedId)
+            library.favorites().firstOrNull { it.id==changedId }?.let { favoriteBadges[changedId]?.text=collectionEpisodeLabel(it) }
         }
     }
     private fun quickActions(series: Series,anchor: View) {
@@ -777,7 +787,7 @@ class MainActivity: Activity() {
     }
     private fun refreshFavoriteLabels() {
         if(screen!="catalog" || !library.isLoaded) return
-        favoriteBadges.forEach { (id,label) -> val value=library.favoriteLabel(id); if(label.text.toString()!=value) label.text=value }
+        favoriteBadges.forEach { (id,label) -> val value=library.favorites().firstOrNull { it.id==id }?.let(::collectionEpisodeLabel) ?: library.favoriteLabel(id); if(label.text.toString()!=value) label.text=value }
         favoriteStatus?.text=favoriteMonitor.status
         favoriteCheck?.text=if(favoriteMonitor.running) "正在检查…" else "检查更新"
         homeUpdates?.text="收藏更新 ${library.updatedFavorites()} 部"

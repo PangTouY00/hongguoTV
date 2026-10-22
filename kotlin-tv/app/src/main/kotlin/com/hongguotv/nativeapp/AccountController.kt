@@ -66,6 +66,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
     private var credentials: AccountCredentials?=null
     private var profile: CloudProfile?=null
     private var history=emptyList<CloudProgress>()
+    private var historyLoaded=false
     private val acceptedReservations=mutableSetOf<String>()
     private var favorites=FavoriteState()
     private var reservations=emptyMap<Boolean,ReservationState>()
@@ -82,6 +83,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
     val accountLabel get()=profile?.nickname ?: if(signedIn) "红果账号" else "未登录"
     val historyStatus get()=status
     val historyLoading get()=busy
+    val historyReady get()=signedIn && historyLoaded
     val historyScope get()=generation
     fun historyRows(): List<CloudProgress> = if(signedIn) history.toList() else emptyList()
     fun refreshHistory() { refresh(false) }
@@ -221,7 +223,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
         return next to account
     }
     private fun acceptAccount(next: AccountCredentials,account: CloudProfile) {
-        credentials=next; profile=account; history=emptyList(); favorites=FavoriteState(); reservations=emptyMap(); acceptedReservations.clear(); generation++
+        credentials=next; profile=account; history=emptyList(); historyLoaded=false; favorites=FavoriteState(); reservations=emptyMap(); acceptedReservations.clear(); generation++
         status="已登录，正在读取云端记录"; lastUpload=0; lastEpisode=""; lastProgress=null; pending=null; draining=false
         changed(); toast("已登录 ${account.nickname}"); refresh(true)
     }
@@ -314,6 +316,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
         status="正在读取账号观看历史…"
         task({ client.profile(account) to client.history(account) },{ (user,rows) ->
             profile=user
+            historyLoaded=true
             history=rows.distinctBy { it.series.id }.sortedByDescending { it.updatedAt }.take(50)
             status="已读取 ${rows.size} 部云端观看记录"
             changed()
@@ -329,7 +332,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
             .setNegativeButton("关闭",null))
     }
     private fun logout() {
-        generation++; busy=false; credentials=null; profile=null; history=emptyList(); favorites=FavoriteState(); reservations=emptyMap(); acceptedReservations.clear(); pending=null; lastProgress=null; draining=false
+        generation++; busy=false; credentials=null; profile=null; history=emptyList(); historyLoaded=false; favorites=FavoriteState(); reservations=emptyMap(); acceptedReservations.clear(); pending=null; lastProgress=null; draining=false
         http.dispatcher.cancelAll(); status="已退出账号，自动同步已停止"; changed()
         worker.execute { val result=runCatching { store.clear() }; main.post { toast(if(result.isSuccess) status else "清除登录态失败，请重试退出") } }
     }
@@ -338,7 +341,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
         val now=android.os.SystemClock.elapsedRealtime()
         if(!force && progress.episodeId==lastEpisode && now-lastUpload<30000) return
         lastUpload=now; lastEpisode=progress.episodeId
-        history=(listOf(progress)+history.filterNot { it.series.id==progress.series.id }).take(50)
+        history=(listOf(progress.copy(episodeCount=episodes))+history.filterNot { it.series.id==progress.series.id }).take(50)
         changed()
         pending=progress to episodes
         lastProgress=pending
