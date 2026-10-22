@@ -48,3 +48,7 @@
 - update.json 是本项目自定义更新协议，运行 scripts/build-kotlin.sh 会从实际 APK 自动生成配套清单；普通 Gradle 构建不生成。版本、附件名、大小、SHA256 必须与实际 APK 一致。
 - 旧更新源或旧最低系统更新逻辑的已安装 APK，可能需要手动覆盖一次才能切换本仓库更新源。推送或合并源码不会修改已安装 APK。
 - 当前构建步骤见 [构建说明](../kotlin-tv/README.md)，发布步骤见 [在线更新说明](../kotlin-tv/AUTO_UPDATES.md)。只有文档改动不需要重新构建 Android；检查相对链接和 Git diff 即可。
+
+## 电视排行榜
+
+排行榜使用 RankingScreen 独立页面，四类官网榜单各读取完整五页后替换内存缓存，榜内题材过滤保留原名次。数据来源、边界和遥控器验收见 [TV_RANKINGS.md](../kotlin-tv/TV_RANKINGS.md)。不将筛选后的作品重新排序或冒充官方题材榜；尚未接入手机推荐榜、预约榜等其他榜单。

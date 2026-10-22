@@ -134,6 +134,7 @@ class MainActivity: Activity() {
     private var hasMore=false
     private var catalogFocus=""
     private data class CatalogState(val page: Int,val items: List<Series>,val hasMore: Boolean,val ranking: ComicRanking?)
+    private val rankBrowser=RankBrowserState()
     private var ranking: ComicRanking?=null
     private var rankRefresh: View?=null
     private var rankSubtitle: TextView?=null
@@ -375,6 +376,14 @@ class MainActivity: Activity() {
             val scroll=ScrollView(this); val body=column(); scroll.addView(body); container.addView(scroll,lp(-1,0).apply { weight=1f })
             settings(body); if(focusNav) nav[tab].requestFocus(); return
         }
+        if(tab==2) {
+            val ranks=RankingScreen(this,rankBrowser,nav,tvTools,::loadCover,
+                { item -> openDetail(item,false) },{ item,anchor -> quickActions(item,anchor) },
+                { board,done -> work({ repository.rankSnapshot(board) },{ done(it,null) },{ done(null,it.message ?: "网络暂不可用") }) })
+            container.addView(ranks,lp(-1,0).apply { weight=1f })
+            ranks.start(load && rankBrowser.snapshots[rankBrowser.board]==null,focusNav)
+            return
+        }
         if(tab==0) {
             val types=row().apply { setPadding(0,dp(8),0,dp(6)) }
             if(!inlineHomeFilters()) types.addView(text("片库",12f,muted),lp(dp(42),-2))
@@ -405,15 +414,6 @@ class MainActivity: Activity() {
             searchActions.addAll(listOf(recent,phone))
             nav.forEach { it.nextFocusDownId=input.id }
             input.setOnEditorActionListener { _,_,_-> search(); true }; container.addView(searchRow)
-        } else if(tab==2) {
-            val heading=row().apply { setPadding(0,dp(8),0,dp(6)) }
-            heading.addView(text("漫剧热播榜",25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
-            rankRefresh=addButton(heading,"刷新榜单") { page=1; catalogFocus=""; showCatalog(true) }.apply { nextFocusUpId=nav[tab].id }
-            container.addView(heading)
-            rankSubtitle=text(if(load) "正在读取最新榜单…" else ranking?.updatedText?.ifBlank { "来源：红果漫剧热播榜" } ?: "来源：红果漫剧热播榜",13f,muted)
-                .apply { setPadding(0,0,0,dp(8)) }
-            container.addView(rankSubtitle)
-            nav.forEach { it.nextFocusDownId=rankRefresh!!.id }
         } else if(tab>2) {
             val heading=row().apply { setPadding(0,dp(14),0,dp(6)) }
             heading.addView(text(when(tab) { 3 -> "我的收藏"; 5 -> "账户观看历史"; 6 -> "账户预约"; else -> "接着上次看" },25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
