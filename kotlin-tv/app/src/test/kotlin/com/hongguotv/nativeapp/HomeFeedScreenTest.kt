@@ -22,9 +22,9 @@ import java.util.concurrent.TimeUnit
 @Config(sdk=[23,26],qualifiers="w960dp-h540dp-land-mdpi")
 @LooperMode(LooperMode.Mode.PAUSED)
 class HomeFeedScreenTest {
-    private class Backend: FeedBackend {
+    private class Backend(private val count: Int=2): FeedBackend {
         var prepares=0;var closed=false
-        override fun catalog(category: DramaCategory,page: Int)=CatalogPage(listOf(Series("1","第一部"),Series("2","第二部")),false)
+        override fun catalog(category: DramaCategory,page: Int)=CatalogPage((1..count).map { Series("$it","作品$it") },false)
         override fun detail(series: Series)=Detail(series,listOf("${series.id}01","${series.id}02"))
         override fun prepare(detail: Detail): TrialClip { prepares++;return TrialClip(detail,RemoteVideo(OkHttpClient(),StreamInfo("https://example.com/video",null,"test"))) }
         override fun close() { closed=true }
@@ -78,6 +78,25 @@ class HomeFeedScreenTest {
             assertTrue(screen.back());assertFalse(screen.back())
         } finally { screen.close();controller.pause().stop().destroy() }
         assertTrue(player.released);assertTrue(backend.closed)
+    }
+    @Test fun prebuffersThreeWorksAndReusesCachedNextAndPrevious() {
+        val controller=Robolectric.buildActivity(Activity::class.java).setup();val activity=controller.get()
+        val state=DramaFeedState();val backend=Backend(6);val player=Playback(activity)
+        val screen=HomeFeedScreen(activity,state,listOf(TextView(activity)),{}, { _,_-> },{"账户收藏"},backend,player)
+        try {
+            activity.setContentView(screen);screen.start(true,false);pump(screen)
+            assertEquals(1,backend.prepares)
+            player.status?.invoke(TrialStatus.READY)
+            repeat(5) { (get(screen,"prefetchJob") as? Future<*>)?.get(5,TimeUnit.SECONDS);ShadowLooper.idleMainLooper() }
+            assertEquals(4,backend.prepares)
+            assertEquals(setOf("2","3","4"),(get(screen,"cachedTrials") as Map<*,*>).keys)
+            val stage=get(screen,"stage") as View
+            stage.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_DPAD_DOWN));pump(screen)
+            assertEquals("2",player.loaded);assertEquals(4,backend.prepares)
+            stage.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_DPAD_UP));pump(screen)
+            assertEquals("1",player.loaded);assertEquals(4,backend.prepares)
+            screen.close();assertTrue((get(screen,"cachedTrials") as Map<*,*>).isEmpty())
+        } finally { screen.close();controller.pause().stop().destroy() }
     }
     @Test fun openingFullSeriesAndReturningRestoresTrialPosition() {
         val controller=Robolectric.buildActivity(Activity::class.java).setup();val activity=controller.get()

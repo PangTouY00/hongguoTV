@@ -29,7 +29,10 @@ internal class HomeFeedScreen(
     private var job: java.util.concurrent.Future<*>?=null
     private var prefetchScope: RequestScope?=null
     private var prefetchJob: java.util.concurrent.Future<*>?=null
-    private var nextDetail: Detail?=null
+    private data class CachedTrial(val clip: TrialClip,val savedAt: Long=android.os.SystemClock.elapsedRealtime())
+    private val cachedTrials=linkedMapOf<String,CachedTrial>()
+    private val attemptedPrefetch=mutableSetOf<String>()
+    private var prefetchGeneration=0
     private var clip: TrialClip?=null
     private var closed=false
     private var active=false
@@ -112,7 +115,7 @@ internal class HomeFeedScreen(
         playback.status={ value ->
             if(!closed && clip!=null) when(value) {
                 TrialStatus.BUFFERING -> status.text="正在加载第一集…"
-                TrialStatus.READY -> { failed=false;status.text=if(state.userPaused) "试播已暂停" else "第一集试播 · 喜欢就看全集";paintActions() }
+                TrialStatus.READY -> { failed=false;status.text=if(state.userPaused) "试播已暂停" else "第一集试播 · 喜欢就看全集";paintActions();prefetchUpcoming() }
                 TrialStatus.ENDED -> {
                     remember();state.ended=true;state.userPaused=true
                     status.text="本集试播结束 · 看全集或按 ↓ 换一部";paintActions()
@@ -130,7 +133,7 @@ internal class HomeFeedScreen(
     fun resume() {
         if(closed || active) return
         active=true
-        if(clip!=null) { if(!state.userPaused && !state.ended) playback.resume();paintActions() }
+        if(clip!=null) { if(!state.userPaused && !state.ended) playback.resume();paintActions();prefetchUpcoming() }
         else if(state.current!=null) loadCurrent() else loadPage(false)
     }
     fun pause() {
@@ -163,8 +166,25 @@ internal class HomeFeedScreen(
     }
     private fun remember() { if(clip!=null) state.position=playback.position() }
     private fun cancelRequest() { generation++;scope?.cancel();scope=null;job?.cancel(true);job=null;loading=false }
-    private fun cancelPrefetch() { prefetchScope?.cancel();prefetchScope=null;prefetchJob?.cancel(true);prefetchJob=null }
-    private fun clearCurrent() { remember();cancelRequest();cancelPrefetch();playback.clear();clip?.close();clip=null }
+    private fun cancelPrefetch() {
+        prefetchGeneration++;prefetchScope?.cancel();prefetchScope=null
+        prefetchJob?.cancel(true);prefetchJob=null;attemptedPrefetch.clear()
+    }
+    private fun clearCache() { cachedTrials.values.forEach { it.clip.close() };cachedTrials.clear() }
+    private fun clearCurrent(retain: Boolean=false) {
+        remember();cancelRequest();cancelPrefetch();playback.clear()
+        clip?.let {
+            if(retain && !failed) {
+                cachedTrials.put(it.detail.series.id,CachedTrial(it))?.clip?.close()
+            } else it.close()
+        }
+        clip=null
+    }
+    private fun takeCached(id: String): TrialClip? {
+        val cached=cachedTrials.remove(id) ?: return null
+        if(android.os.SystemClock.elapsedRealtime()-cached.savedAt>90_000) { cached.clip.close();return null }
+        return cached.clip
+    }
     private fun <T> request(action: ()->T,discard: (T)->Unit={},done: (T)->Unit) {
         cancelRequest();loading=true;val token=generation;val requestScope=RequestScope();scope=requestScope
         job=worker.submit {
@@ -197,23 +217,42 @@ internal class HomeFeedScreen(
         val series=state.current ?: return
         if(!active || closed) return
         clearCurrent();failed=false;describe();status.text="正在准备第一集试播…"
-        val cached=nextDetail?.takeIf { it.series.id==series.id };nextDetail=null
-        request({ backend.prepare(cached ?: backend.detail(series)) },{ it.close() }) { next ->
-            clip=next
-            val count=next.detail.episodes.size
-            meta.text="第一集试播 · 共 $count 集"+(series.tags.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
-            if(next.detail.series.description.isNotBlank()) intro.text=next.detail.series.description
-            playback.load(next,state.position,active && !state.userPaused && !state.ended)
-            paintActions();prefetchMetadata()
-        }
+        trimCache()
+        val cached=takeCached(series.id)
+        if(cached!=null) attach(cached) else request({ backend.prepare(backend.detail(series)) },{ it.close() },::attach)
     }
-    private fun prefetchMetadata() {
-        cancelPrefetch()
-        val next=state.next ?: return
-        val token=generation;val requestScope=RequestScope();prefetchScope=requestScope
+    private fun attach(next: TrialClip) {
+        clip=next
+        val series=next.detail.series
+        meta.text="第一集试播 · 共 ${next.detail.episodes.size} 集"+(series.tags.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
+        if(series.description.isNotBlank()) intro.text=series.description
+        playback.load(next,state.position,active && !state.userPaused && !state.ended)
+        paintActions()
+    }
+    private fun trimCache() {
+        val allowed=state.items.subList((state.index-1).coerceAtLeast(0),minOf(state.index+4,state.items.size)).map { it.id }.toSet()
+        val now=android.os.SystemClock.elapsedRealtime()
+        val stale=cachedTrials.filter { it.key !in allowed || now-it.value.savedAt>90_000 }.keys.toList()
+        stale.forEach { cachedTrials.remove(it)?.clip?.close() }
+    }
+    /** One speculative download at a time, after the current player is ready. */
+    private fun prefetchUpcoming() {
+        if(closed || !active || clip==null || failed || loading || prefetchJob!=null) return
+        trimCache()
+        val upcoming=state.items.drop(state.index+1).take(3)
+        val next=upcoming.firstOrNull { it.id !in cachedTrials && it.id !in attemptedPrefetch } ?: return
+        attemptedPrefetch+=next.id
+        val token=prefetchGeneration;val requestScope=RequestScope();prefetchScope=requestScope
         prefetchJob=worker.submit {
-            val detail=runCatching { requestScope.run { backend.detail(next) } }.getOrNull() ?: return@submit
-            main.post { if(!closed && active && token==generation) nextDetail=detail }
+            val prepared=runCatching { requestScope.run { backend.prefetch(backend.detail(next)) } }.getOrNull()
+            main.post {
+                if(closed || !active || token!=prefetchGeneration) prepared?.close()
+                else {
+                    prefetchJob=null;prefetchScope=null
+                    if(prepared!=null) cachedTrials.put(next.id,CachedTrial(prepared))?.clip?.close()
+                    prefetchUpcoming()
+                }
+            }
         }
     }
     private fun move(delta: Int) {
@@ -224,7 +263,7 @@ internal class HomeFeedScreen(
             if(!state.hasMore) { status.text="本批作品已看完，可切换类型继续发现";return }
             clearCurrent();loadPage(true);return
         }
-        clearCurrent()
+        clearCurrent(retain=true)
         if(state.move(delta)) loadCurrent()
     }
     private fun toggle() {
@@ -240,11 +279,11 @@ internal class HomeFeedScreen(
     }
     private fun changeType() {
         clearCurrent();state.select(if(state.category==DramaCategory.COMIC) DramaCategory.REAL else DramaCategory.COMIC)
-        nextDetail=null;actions.visibility=View.GONE;stage.requestFocus();describe();loadPage(false)
+        clearCache();actions.visibility=View.GONE;stage.requestFocus();describe();loadPage(false)
     }
     override fun close() {
         if(closed) return
-        clearCurrent();closed=true;active=false;stage.keepScreenOn=false
+        clearCurrent();clearCache();closed=true;active=false;stage.keepScreenOn=false
         playback.release();backend.close();worker.shutdownNow()
     }
 }

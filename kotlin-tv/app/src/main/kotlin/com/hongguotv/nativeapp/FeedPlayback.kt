@@ -21,6 +21,7 @@ internal interface FeedBackend: Closeable {
     fun catalog(category: DramaCategory,page: Int): CatalogPage
     fun detail(series: Series): Detail
     fun prepare(detail: Detail): TrialClip
+    fun prefetch(detail: Detail): TrialClip=prepare(detail)
 }
 internal class PublicFeedBackend(
     private val quality: Int,
@@ -34,6 +35,10 @@ internal class PublicFeedBackend(
         val id=detail.episodes.firstOrNull() ?: throw java.io.IOException("该作品暂时没有可试播的剧集")
         val video=RemoteVideo(http,repository.stream(id,quality))
         try { return TrialClip(detail,video.prepare()) } catch(error: Exception) { video.close();throw error }
+    }
+    override fun prefetch(detail: Detail): TrialClip {
+        val clip=prepare(detail)
+        try { clip.video.warm();return clip } catch(error: Exception) { clip.close();throw error }
     }
     override fun close() {
         if(!closed.compareAndSet(false,true)) return
