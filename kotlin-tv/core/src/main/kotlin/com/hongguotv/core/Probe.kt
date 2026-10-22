@@ -2,6 +2,17 @@ package com.hongguotv.core
 
 fun main(args: Array<String>) {
     val repository=ContentRepository()
+    if(args.contains("--recommendations")) {
+        try {
+            val cursor=RecommendationCursor();val feed=RecommendationFeed(repository.http,cursor=cursor)
+            val first=feed.page(1);val second=feed.page(2)
+            val new=second.items.count { row -> first.items.none { it.id==row.id } }
+            check(first.items.isNotEmpty() && second.items.isNotEmpty() && new>0)
+            val refreshed=RecommendationFeed(repository.http,cursor=cursor.nextBatch()).page(1)
+            println("officialFeed=true; first=${first.items.size}; second=${second.items.size}; new=$new; firstMore=${first.hasMore}; secondMore=${second.hasMore}; refreshed=${refreshed.items.size}; authenticated=false")
+        } finally { repository.http.connectionPool.evictAll();repository.http.dispatcher.executorService.shutdown() }
+        return
+    }
     if(args.contains("--discovery")) {
         try {
             for(category in DramaCategory.entries) {

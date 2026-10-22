@@ -74,6 +74,7 @@ class MainActivity: Activity() {
     private var prefetchAttempts=0
     private val homeFeedState=DramaFeedState()
     private var homeFeed: HomeFeedScreen?=null
+    private var homeFeedIdentity=""
     private var homeScreen: HomeScreen?=null
     private var selectionPreview: SeriesPreview?=null
     private var homeFromCache=false
@@ -221,6 +222,9 @@ class MainActivity: Activity() {
             openDetail(remote.series,true,cloudProgress=remote)
         }
         cloudAccount.onHistoryChanged={
+            if(homeFeed!=null && homeFeedIdentity!=cloudAccount.recommendationIdentity) {
+                homeFeedState.refresh(resetRecommendations=true);showCatalog()
+            }
             homeFeed?.refreshAccountLabel()
             relatedSection?.refreshLabels()
             detail?.series?.let { accountFavoriteButton?.text=cloudAccount.favoriteActionLabel(it.id) }
@@ -436,9 +440,10 @@ class MainActivity: Activity() {
         }
         if(tab==0) {
             favoriteMonitor.stop()
+            homeFeedIdentity=cloudAccount.recommendationIdentity
             val feed=HomeFeedScreen(this,homeFeedState,nav.toList(),
                 { openDetail(it,false) },::accountFavoriteAction,cloudAccount::favoriteActionLabel,
-                PublicFeedBackend(library.maxQuality),Media3TrialPlayback(this))
+                PublicFeedBackend(library.maxQuality,account=cloudAccount.recommendationCredentials()),Media3TrialPlayback(this))
             homeFeed=feed
             container.addView(feed,lp(-1,0).apply { weight=1f })
             feed.start(foreground,focusNav)

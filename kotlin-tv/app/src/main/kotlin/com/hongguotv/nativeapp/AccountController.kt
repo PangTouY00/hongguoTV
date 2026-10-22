@@ -80,6 +80,8 @@ class AccountController(private val activity: Activity,private val play: (CloudP
     private var draining=false
     private var dialog: AlertDialog?=null
     var onHistoryChanged: (() -> Unit)?=null
+    internal fun recommendationCredentials()=credentials?.takeIf { profile!=null }
+    internal val recommendationIdentity get()="$generation:${profile?.id.orEmpty()}"
     val signedIn get()=credentials!=null
     val accountLabel get()=profile?.nickname ?: if(signedIn) "红果账号" else "未登录"
     val historyStatus get()=status

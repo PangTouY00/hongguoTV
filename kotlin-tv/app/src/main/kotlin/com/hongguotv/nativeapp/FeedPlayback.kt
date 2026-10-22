@@ -19,16 +19,20 @@ internal data class TrialClip(val detail: Detail,val video: RemoteVideo): Closea
 }
 internal interface FeedBackend: Closeable {
     fun catalog(category: DramaCategory,page: Int): CatalogPage
+    fun recommendations(page: Int,cursor: RecommendationCursor): CatalogPage=catalog(DramaCategory.COMIC,page)
     fun detail(series: Series): Detail
     fun prepare(detail: Detail): TrialClip
     fun prefetch(detail: Detail): TrialClip=prepare(detail)
 }
 internal class PublicFeedBackend(
     private val quality: Int,
-    private val http: OkHttpClient=OkHttpClient.Builder().connectTimeout(12,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).callTimeout(35,TimeUnit.SECONDS).build()
+    private val http: OkHttpClient=OkHttpClient.Builder().connectTimeout(12,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).callTimeout(35,TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build(),
+    account: AccountCredentials?=null
 ): FeedBackend {
     private val closed=java.util.concurrent.atomic.AtomicBoolean(false)
     private val repository=ContentRepository(http)
+    private val recommendationAccount=account
+    override fun recommendations(page: Int,cursor: RecommendationCursor)=RecommendationFeed(http,recommendationAccount,cursor).page(page)
     override fun catalog(category: DramaCategory,page: Int)=repository.discover(category,page=page)
     override fun detail(series: Series)=repository.detail(series.id)
     override fun prepare(detail: Detail): TrialClip {
@@ -55,6 +59,9 @@ internal interface TrialPlayback {
     val view: View
     var status: ((TrialStatus)->Unit)?
     fun load(clip: TrialClip,position: Long,autoplay: Boolean)
+    fun queue(clip: TrialClip) {}
+    fun remove(seriesId: String) {}
+    fun select(clip: TrialClip,position: Long,autoplay: Boolean): Boolean=false
     fun pause()
     fun resume()
     fun restart()
@@ -74,6 +81,7 @@ internal class Media3TrialPlayback(context: Context): TrialPlayback {
     override var status: ((TrialStatus)->Unit)?=null
     private var activeId: String?=null
     init {
+        player.pauseAtEndOfMediaItems=true
         player.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),true)
         player.setHandleAudioBecomingNoisy(true)
         player.addListener(object: Player.Listener {
@@ -86,14 +94,32 @@ internal class Media3TrialPlayback(context: Context): TrialPlayback {
                     Player.STATE_ENDED->status?.invoke(TrialStatus.ENDED)
                 }
             }
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean,reason: Int) {
+                if(active() && !playWhenReady && reason==Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM)
+                    status?.invoke(TrialStatus.ENDED)
+            }
             override fun onPlayerError(error: PlaybackException) { if(active()) status?.invoke(TrialStatus.ERROR) }
         })
     }
+    private fun key(clip: TrialClip)=clip.detail.series.id+":"+clip.episodeId
+    private fun source(clip: TrialClip)=ProgressiveMediaSource.Factory { VideoDataSource(clip.video) }.createMediaSource(
+        MediaItem.Builder().setMediaId(key(clip)).setUri("hongguotv://trial/${clip.episodeId}").setMimeType(MimeTypes.VIDEO_MP4).build())
     override fun load(clip: TrialClip,position: Long,autoplay: Boolean) {
-        activeId=clip.detail.series.id+":"+clip.episodeId
-        val source=ProgressiveMediaSource.Factory { VideoDataSource(clip.video) }.createMediaSource(
-            MediaItem.Builder().setMediaId(activeId!!).setUri("hongguotv://trial/${clip.episodeId}").setMimeType(MimeTypes.VIDEO_MP4).build())
-        player.setMediaSource(source);player.seekTo(position.coerceAtLeast(0));player.prepare();player.playWhenReady=autoplay
+        activeId=key(clip)
+        player.setMediaSource(source(clip));player.seekTo(position.coerceAtLeast(0));player.prepare();player.playWhenReady=autoplay
+    }
+    override fun queue(clip: TrialClip) {
+        if((0 until player.mediaItemCount).none { player.getMediaItemAt(it).mediaId==key(clip) }) player.addMediaSource(source(clip))
+    }
+    override fun remove(seriesId: String) {
+        val index=(0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).mediaId.startsWith("$seriesId:") } ?: return
+        if(player.getMediaItemAt(index).mediaId!=activeId) player.removeMediaItem(index)
+    }
+    override fun select(clip: TrialClip,position: Long,autoplay: Boolean): Boolean {
+        val index=(0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).mediaId==key(clip) } ?: return false
+        activeId=key(clip);player.seekTo(index,position.coerceAtLeast(0));player.playWhenReady=autoplay
+        if(player.playbackState==Player.STATE_READY) status?.invoke(TrialStatus.READY)
+        return true
     }
     override fun pause()=player.pause()
     override fun resume()=player.play()
