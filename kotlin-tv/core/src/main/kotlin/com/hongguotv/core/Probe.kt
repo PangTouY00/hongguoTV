@@ -11,6 +11,8 @@ fun main(args: Array<String>) {
                 check(first.items.isNotEmpty() && fresh>0)
                 val detail=repository.detail(first.items.first().id)
                 check(detail.episodes.isNotEmpty())
+                first.trialHints[first.items.first().id]?.let { check(it.episodeId==detail.episodes.first());check(it.episodeCount==detail.episodes.size) }
+                println("category=${category.name}; directTrialHints=${first.trialHints.size}")
                 if(args.contains("--prepare-video")) {
                     val remote=RemoteVideo(repository.http,repository.stream(detail.episodes.first(),720))
                     try { remote.prepare();check(remote.total>0);println("category=${category.name}; videoPrepared=true") }
@@ -28,6 +30,9 @@ fun main(args: Array<String>) {
             val new=second.items.count { row -> first.items.none { it.id==row.id } }
             check(first.items.isNotEmpty() && second.items.isNotEmpty() && new>0)
             val refreshed=RecommendationFeed(repository.http,cursor=cursor.nextBatch()).page(1)
+            val initial=first.items.first();val hint=first.trialHints[initial.id]
+            if(hint!=null) { val detail=repository.detail(initial.id);check(hint.episodeId==detail.episodes.first());check(hint.episodeCount==detail.episodes.size) }
+            println("recommendationDirectTrialHints=${first.trialHints.size}")
             println("officialFeed=true; first=${first.items.size}; second=${second.items.size}; new=$new; firstMore=${first.hasMore}; secondMore=${second.hasMore}; refreshed=${refreshed.items.size}; authenticated=false")
         } finally { repository.http.connectionPool.evictAll();repository.http.dispatcher.executorService.shutdown() }
         return

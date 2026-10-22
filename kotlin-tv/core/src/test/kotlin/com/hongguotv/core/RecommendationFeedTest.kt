@@ -30,6 +30,20 @@ class RecommendationFeedTest {
             assertEquals("共 80 集",page.items.single().badge)
         }
     }
+    @Test fun firstEpisodeHintRequiresExplicitFirstEpisodeMetadata() {
+        val data=JSONObject(response())
+        val row=data.getJSONObject("data").getJSONArray("tab_item").getJSONObject(0)
+            .getJSONArray("cell_data").getJSONObject(0).getJSONArray("cell_data").getJSONObject(0)
+            .getJSONArray("video_data").getJSONObject(0)
+        row.put("vid","999") // Recommended clip is not proof of episode one.
+        assertTrue(RecommendationFeed.parse(data).first.trialHints.isEmpty())
+        row.put("first_vid","10101")
+        val hint=RecommendationFeed.parse(data).first.trialHints.getValue("101")
+        assertEquals("10101",hint.episodeId);assertEquals(80,hint.episodeCount)
+        row.remove("first_vid");row.put("video_list",JSONArray().put(JSONObject().put("vid_index",2).put("vid","10102"))
+            .put(JSONObject().put("vid_index",1).put("vid","10101")))
+        assertEquals("10101",RecommendationFeed.parse(data).first.trialHints.getValue("101").episodeId)
+    }
     @Test fun paginationRefreshAndCancelledResultRetryKeepServerCursor() {
         val requests=mutableListOf<Request>()
         val http=OkHttpClient.Builder().addInterceptor { chain ->

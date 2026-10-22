@@ -13,7 +13,7 @@ import okhttp3.OkHttpClient
 import java.io.Closeable
 import java.util.concurrent.TimeUnit
 
-internal data class TrialClip(val detail: Detail,val video: RemoteVideo): Closeable {
+internal data class TrialClip(val detail: Detail,val video: RemoteVideo,val episodeCount: Int=detail.episodes.size): Closeable {
     val episodeId get()=detail.episodes.first()
     override fun close()=video.close()
 }
@@ -24,23 +24,48 @@ internal interface FeedBackend: Closeable {
     fun detail(series: Series): Detail
     fun prepare(detail: Detail): TrialClip
     fun prefetch(detail: Detail): TrialClip=prepare(detail)
+    fun trial(series: Series): TrialClip=prepare(detail(series))
+    fun preload(series: Series): TrialClip=prefetch(detail(series))
 }
 internal class PublicFeedBackend(
     private val quality: Int,
-    private val http: OkHttpClient=OkHttpClient.Builder().connectTimeout(12,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).callTimeout(35,TimeUnit.SECONDS).build(),
+    private val http: OkHttpClient=OkHttpClient.Builder().connectionPool(feedPool).connectTimeout(12,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).callTimeout(35,TimeUnit.SECONDS).build(),
     account: AccountCredentials?=null
 ): FeedBackend {
+    companion object {
+        // Reuse idle public TLS connections across homepage visits. Dispatchers remain per backend,
+        // so cancelling an old page cannot cancel its replacement page's requests.
+        private val feedPool=okhttp3.ConnectionPool(3,2,TimeUnit.MINUTES)
+    }
     private val closed=java.util.concurrent.atomic.AtomicBoolean(false)
     private val repository=ContentRepository(http)
     private val recommendationAccount=account
-    override fun recommendations(page: Int,cursor: RecommendationCursor)=RecommendationFeed(http,recommendationAccount,cursor).page(page)
-    override fun categoryRecommendations(category: DramaCategory,page: Int,cursor: RecommendationCursor)=RecommendationFeed(http,recommendationAccount,cursor,category).page(page)
+    private val trialHints=linkedMapOf<String,TrialHint>()
+    private fun rememberHints(page: CatalogPage): CatalogPage {
+        synchronized(trialHints) {
+            trialHints.putAll(page.trialHints)
+            while(trialHints.size>72) trialHints.remove(trialHints.keys.first())
+        }
+        return page
+    }
+    override fun recommendations(page: Int,cursor: RecommendationCursor)=rememberHints(RecommendationFeed(http,recommendationAccount,cursor).page(page))
+    override fun categoryRecommendations(category: DramaCategory,page: Int,cursor: RecommendationCursor)=rememberHints(RecommendationFeed(http,recommendationAccount,cursor,category).page(page))
     override fun catalog(category: DramaCategory,page: Int)=repository.discover(category,page=page)
     override fun detail(series: Series)=repository.detail(series.id)
     override fun prepare(detail: Detail): TrialClip {
         val id=detail.episodes.firstOrNull() ?: throw java.io.IOException("该作品暂时没有可试播的剧集")
         val video=RemoteVideo(http,repository.stream(id,quality))
         try { return TrialClip(detail,video.prepare()) } catch(error: Exception) { video.close();throw error }
+    }
+    override fun trial(series: Series): TrialClip {
+        val hint=synchronized(trialHints) { trialHints[series.id] } ?: return prepare(detail(series))
+        val video=RemoteVideo(http,repository.stream(hint.episodeId,quality))
+        try { return TrialClip(Detail(series,listOf(hint.episodeId)),video.prepare(),hint.episodeCount) }
+        catch(error: Exception) { video.close();throw error }
+    }
+    override fun preload(series: Series): TrialClip {
+        val clip=trial(series)
+        try { clip.video.warm();return clip } catch(error: Exception) { clip.close();throw error }
     }
     override fun prefetch(detail: Detail): TrialClip {
         val clip=prepare(detail)
@@ -51,7 +76,7 @@ internal class PublicFeedBackend(
         // Idle TLS socket closure may write close_notify. Never do it on Android's UI thread.
         Thread({
             http.dispatcher.cancelAll()
-            http.connectionPool.evictAll()
+            if(http.connectionPool!==feedPool) http.connectionPool.evictAll()
             http.dispatcher.executorService.shutdown()
         },"hongguotv-feed-cleanup").start()
     }

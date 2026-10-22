@@ -244,12 +244,12 @@ internal class HomeFeedScreen(
         clearCurrent();failed=false;describe();status.visibility=View.VISIBLE;status.text="正在准备第一集试播…"
         trimCache()
         val cached=takeCached(series.id)
-        if(cached!=null) attach(cached) else request({ backend.prepare(backend.detail(series)) },{ it.close() },::attach)
+        if(cached!=null) attach(cached) else request({ backend.trial(series) },{ it.close() },::attach)
     }
     private fun attach(next: TrialClip) {
         clip=next
         val series=next.detail.series
-        meta.text="第一集试播 · 共 ${next.detail.episodes.size} 集"+(series.tags.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
+        meta.text="第一集试播 · 共 ${next.episodeCount} 集"+(series.tags.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
         if(series.description.isNotBlank()) intro.text=series.description
         val autoplay=active && !state.userPaused && !state.ended
         if(!playback.select(next,state.position,autoplay)) {
@@ -277,7 +277,7 @@ internal class HomeFeedScreen(
         attemptedPrefetch+=next.id
         val token=prefetchGeneration;val requestScope=RequestScope();prefetchScope=requestScope
         prefetchJob=worker.submit {
-            val prepared=runCatching { requestScope.run { backend.prefetch(backend.detail(next)) } }.getOrNull()
+            val prepared=runCatching { requestScope.run { backend.preload(next) } }.getOrNull()
             main.post {
                 if(closed || !active || token!=prefetchGeneration) prepared?.close()
                 else {

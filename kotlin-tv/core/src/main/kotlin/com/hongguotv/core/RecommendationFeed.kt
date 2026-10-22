@@ -111,10 +111,19 @@ class RecommendationFeed(private val http: OkHttpClient,private val account: Acc
                     row.optInt("episode_cnt").takeIf { it>0 }?.let { "共 $it 集" }.orEmpty())
             }.distinctBy { it.id }.take(30)
             if(items.isEmpty()) throw IOException("推荐未返回可播放的剧集，请刷新重试")
+            val hints=rows.mapNotNull { row ->
+                val id=row.str("series_id").ifBlank { row.str("book_id") }
+                val first=row.str("first_vid").ifBlank {
+                    row.optJSONArray("video_list")?.objects()?.firstOrNull { it.optInt("vid_index")==1 }?.str("vid").orEmpty()
+                }
+                val count=row.optInt("episode_cnt")
+                if(id in items.map { it.id } && first.matches(Regex("[0-9]{1,30}")) && count>0)
+                    id to TrialHint(first,count) else null
+            }.toMap()
             // Live offsets 0,1,2 return new cards despite false/missing has_more and
             // bottom_unlimited. This feed is not a category paginator. The caller stops
             // on duplicate-only batches and bounds each browse session to 100 pages.
-            return CatalogPage(items,true) to session
+            return CatalogPage(items,true,trialHints=hints) to session
         }
     }
 }
