@@ -99,7 +99,7 @@ class AccountReservationsTest {
             set(account,"reservations",mapOf(
                 true to ReservationState(listOf(CloudReservation(Series("123","已上线测试剧",badge="已上线"),true,0)),loaded=true),
                 false to ReservationState(listOf(CloudReservation(Series("456","待上线测试剧",badge="待上线"),false,1792500000000)),loaded=true)))
-            MainActivity::class.java.getDeclaredField("tab").apply { isAccessible=true }.setInt(activity,6)
+            MainActivity::class.java.getDeclaredField("tab").apply { isAccessible=true }.setInt(activity,5)
             MainActivity::class.java.getDeclaredMethod("showCatalog",Boolean::class.javaPrimitiveType,Boolean::class.javaPrimitiveType,Boolean::class.javaPrimitiveType).apply { isAccessible=true }.invoke(activity,false,false,false)
             val root=activity.findViewById<View>(android.R.id.content)
             assertTrue(texts(root).any { it.text.toString()=="账户预约" })
@@ -119,7 +119,7 @@ class AccountReservationsTest {
             root.layout(0,0,960,540)
             val settings=texts(root).single { it.text.toString()=="设置" }
             val location=IntArray(2); settings.getLocationOnScreen(location)
-            assertTrue("All eight navigation tabs must fit on a 960dp TV",location[0]+settings.width<=960)
+            assertTrue("All seven navigation tabs must fit on a 960dp TV",location[0]+settings.width<=960)
         } finally { controller.destroy() }
     }
 }
