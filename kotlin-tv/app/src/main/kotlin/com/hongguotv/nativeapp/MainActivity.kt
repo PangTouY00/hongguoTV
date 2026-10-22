@@ -77,7 +77,6 @@ class MainActivity: Activity() {
     private var homeContentLogged=false
     private lateinit var library: Library
     private var searchDraft: String?=null
-    private lateinit var voiceInput: VoiceInput
     private lateinit var tvTools: TvTools
     private lateinit var updater: AppUpdater
     private data class DetailVisit(val detail: Detail,val episode: Int,val group: Int)
@@ -203,10 +202,6 @@ class MainActivity: Activity() {
         super.onCreate(state)
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         library=Library(this); artwork=ArtworkLoader(this); tvTools=TvTools(this); root=FrameLayout(this).apply { setBackgroundColor(bg) }; setContentView(root)
-        voiceInput=VoiceInput(this,{ value ->
-            searchDraft=value
-            if(screen=="catalog" && tab==1) (searchInput as? EditText)?.apply { setText(value); setSelection(text.length); requestFocus() }
-        },{ message -> tvTools.info("语音输入",message,searchInput) })
         cloudAccount=AccountController(this) { remote ->
             openDetail(remote.series,true,cloudProgress=remote)
         }
@@ -407,13 +402,7 @@ class MainActivity: Activity() {
             recent=addButton(searchRow,"历史") { showSearchHistory(recent) }; recent.nextFocusUpId=input.nextFocusUpId
             lateinit var phone: TextView
             phone=addButton(searchRow,"手机输入") { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(input.windowToken,0); tvTools.phoneInput(phone) { runSearch(it) } }; phone.nextFocusUpId=input.nextFocusUpId
-            lateinit var voice: TextView
-            voice=addButton(searchRow,"语音") {
-                searchDraft=input.text.toString()
-                (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(input.windowToken,0)
-                voiceInput.start()
-            }; voice.nextFocusUpId=input.nextFocusUpId
-            searchActions.addAll(listOf(recent,phone,voice))
+            searchActions.addAll(listOf(recent,phone))
             nav.forEach { it.nextFocusDownId=input.id }
             input.setOnEditorActionListener { _,_,_-> search(); true }; container.addView(searchRow)
         } else if(tab==2) {
@@ -1328,11 +1317,6 @@ class MainActivity: Activity() {
             "detail" -> if(detail!=null) showDetail(false)
             else -> showCatalog()
         }
-    }
-    @Deprecated("Legacy recognition activity result supports Android 6+")
-    override fun onActivityResult(requestCode: Int,resultCode: Int,data: android.content.Intent?) {
-        super.onActivityResult(requestCode,resultCode,data)
-        if(::voiceInput.isInitialized) voiceInput.handle(requestCode,resultCode,data)
     }
     override fun onResume() {
         super.onResume(); foreground=true; main.removeCallbacks(tick); main.post(tick)
