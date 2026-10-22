@@ -59,8 +59,17 @@ class AccountLibraryTest {
             val dialog=ShadowAlertDialog.getLatestAlertDialog()
             val choices=(0 until dialog.listView.adapter.count).map { dialog.listView.adapter.getItem(it).toString() }
             assertTrue("加入本机收藏" in choices)
-            assertTrue(choices.any { it.contains("账户收藏") })
-            dialog.dismiss()
+            assertTrue(choices[2].contains("账户收藏"))
+            assertEquals("加入本机收藏",choices[3])
+            assertEquals("查看剧集详情",choices[1])
+            assertFalse(choices.any { it.contains("稍后看") })
+            dialog.listView.performItemClick(dialog.listView.adapter.getView(3,null,dialog.listView),3,3L)
+            assertTrue(library.favorite("222"))
+            cards.getValue("222").performLongClick()
+            val again=ShadowAlertDialog.getLatestAlertDialog()
+            assertEquals("取消本机收藏",again.listView.adapter.getItem(3))
+            again.listView.performItemClick(again.listView.adapter.getView(3,null,again.listView),3,3L)
+            assertFalse(library.favorite("222"))
             method(activity,"switchTab",4);method(activity,"switchTab",3)
             assertTrue((get(activity,"librarySources") as LibrarySources).accountFavorites)
             assertTrue(LibrarySources(activity).accountFavorites)
@@ -91,9 +100,9 @@ class AccountLibraryTest {
             assertTrue(texts(root).any { it.text.toString()=="共 80 集\n看到第 12 集" })
             assertFalse(texts(root).any { it.text.toString()=="共 80 集\n看到第 4 集" })
             method(activity,"switchTab",5)
-            assertTrue(texts(root).any { it.text.toString()=="共 80 集\n看到第 12 集" })
+            assertTrue(texts(root).any { it.text.toString().startsWith("共 80 集\n看到第 12 集\n已上线") })
             texts(root).single { it.text.toString()=="待上线 · 1" }.performClick()
-            assertTrue(texts(root).any { it.text.toString()=="待上线\n暂不可观看" })
+            assertTrue(texts(root).any { it.text.toString().startsWith("待上线\n暂不可观看\n待上线") })
         } finally { controller.destroy() }
     }
     @Test fun unsignedSourceShowsLoginAndKeepsLocalRecordsAvailable() {

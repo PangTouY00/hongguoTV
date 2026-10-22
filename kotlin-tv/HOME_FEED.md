@@ -1,6 +1,6 @@
 # 首页热门发现
 
-测试版 `0.0.13-home-feed-types` / versionCode 34，分支 `feature-home-drama-feed`，Android 6+。
+测试版 `0.0.13-tv-usability` / versionCode 35，分支 `feature-home-drama-feed`，Android 6+。
 
 首页以单部作品试播替换最近播放和热门海报列表。默认漫剧，可切换真人剧。作品来自现有官网公开分类接口，播放现有详情接口中的第一集；明确标注「第一集试播」，并非官方预告或账户个性化推荐。
 

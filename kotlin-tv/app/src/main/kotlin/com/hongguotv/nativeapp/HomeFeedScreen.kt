@@ -121,14 +121,14 @@ internal class HomeFeedScreen(
         }
         playback.status={ value ->
             if(!closed && clip!=null) when(value) {
-                TrialStatus.BUFFERING -> status.text="正在加载第一集…"
-                TrialStatus.READY -> { failed=false;status.text=if(state.userPaused) "试播已暂停" else "第一集试播 · 喜欢就看全集";paintActions();prefetchUpcoming() }
+                TrialStatus.BUFFERING -> { status.visibility=View.VISIBLE;status.text="正在加载第一集…" }
+                TrialStatus.READY -> { status.visibility=if(state.userPaused) View.VISIBLE else View.GONE;failed=false;status.text=if(state.userPaused) "试播已暂停" else "第一集试播 · 喜欢就看全集";paintActions();prefetchUpcoming() }
                 TrialStatus.ENDED -> {
-                    remember();state.ended=true;state.userPaused=true
+                    status.visibility=View.VISIBLE;remember();state.ended=true;state.userPaused=true
                     status.text="本集试播结束 · 看全集或按 ↓ 换一部";paintActions()
                     if(active && stage.hasFocus()) showActions()
                 }
-                TrialStatus.ERROR -> { playback.pause();failed=true;status.text="试播暂不可用 · 可重试、换剧或查看全集";paintActions() }
+                TrialStatus.ERROR -> { status.visibility=View.VISIBLE;playback.pause();failed=true;status.text="试播暂不可用 · 可重试、换剧或查看全集";paintActions() }
             }
         }
         describe();paintActions()
@@ -203,7 +203,7 @@ internal class HomeFeedScreen(
             } catch(error: Exception) {
                 main.post {
                     if(closed || token!=generation || !active) return@post
-                    loading=false;failed=true
+                    loading=false;failed=true;status.visibility=View.VISIBLE
                     val message=error.message.orEmpty().replace(Regex("https?://\\S+"),"[地址]").take(90)
                     status.text="暂时无法试播 · ${message.ifBlank { "请重试或换一部" }}";paintActions()
                 }
@@ -212,8 +212,8 @@ internal class HomeFeedScreen(
     }
     private fun loadPage(advance: Boolean) {
         if(!active || closed || loading) return
-        if(state.page>=100 || (!state.hasMore && state.current!=null)) { status.text="本批作品已看完，可切换类型继续发现";return }
-        status.text="正在读取热门作品…"
+        if(state.page>=100 || (!state.hasMore && state.current!=null)) { status.visibility=View.VISIBLE;status.text="本批作品已看完，可切换类型继续发现";return }
+        status.visibility=View.VISIBLE;status.text="正在读取热门作品…"
         val page=state.page+1;val category=state.category
         request({ backend.catalog(category,page) }) { result ->
             state.append(result,page)
@@ -225,7 +225,7 @@ internal class HomeFeedScreen(
     private fun loadCurrent() {
         val series=state.current ?: return
         if(!active || closed) return
-        clearCurrent();failed=false;describe();status.text="正在准备第一集试播…"
+        clearCurrent();failed=false;describe();status.visibility=View.VISIBLE;status.text="正在准备第一集试播…"
         trimCache()
         val cached=takeCached(series.id)
         if(cached!=null) attach(cached) else request({ backend.prepare(backend.detail(series)) },{ it.close() },::attach)
@@ -266,10 +266,10 @@ internal class HomeFeedScreen(
     }
     private fun move(delta: Int) {
         if(closed || !active) return
-        if(delta<0 && state.index==0) { status.text="已到本次浏览的最早作品";return }
+        if(delta<0 && state.index==0) { status.visibility=View.VISIBLE;status.text="已到本次浏览的最早作品";return }
         if(delta>0 && state.next==null) {
             if(loading) return
-            if(!state.hasMore) { status.text="本批作品已看完，可切换类型继续发现";return }
+            if(!state.hasMore) { status.visibility=View.VISIBLE;status.text="本批作品已看完，可切换类型继续发现";return }
             clearCurrent();loadPage(true);return
         }
         clearCurrent(retain=true)
@@ -284,6 +284,7 @@ internal class HomeFeedScreen(
             return
         } else if(state.ended) { state.position=0;state.ended=false;state.userPaused=false;playback.restart() }
         else { state.userPaused=!state.userPaused;if(state.userPaused) { remember();playback.pause() } else if(active) playback.resume() }
+        status.visibility=if(state.userPaused) View.VISIBLE else View.GONE
         status.text=if(state.userPaused) "试播已暂停" else "第一集试播 · 喜欢就看全集";paintActions()
     }
     private fun changeType(category: DramaCategory) {
