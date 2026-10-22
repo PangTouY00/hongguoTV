@@ -11,8 +11,8 @@ android {
         applicationId = "com.hongguotv.nativeapp"
         minSdk = 23
         targetSdk = 36
-        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 40
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.1.0-fast-start"
+        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 41
+        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.1.1-gitcode-update"
     }
     buildFeatures { buildConfig = true }
     testOptions {

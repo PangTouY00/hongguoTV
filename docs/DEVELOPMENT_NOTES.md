@@ -90,3 +90,5 @@ API 23/26 的播放器接口替身测试检查追加/领取资源、无需重启
 版本码 39：修复首页 PublicFeedBackend 公共内容客户端关闭跳转导致 HTTP 301；只对带账号的推荐请求关闭跳转。首页漫剧/真人剧改走 App 分类推荐 landpage/v，sort 为空，按类型隔离 session、offset 和最近 540 个去重 ID；找剧分类保持不变。原生内容跳转通过本地 HTTP 301→200 回归验证；两类推荐及视频头准备通过匿名只读探针验证。
 
 版本码40：首页试播复用明确首集元数据，跳过一次详情请求；分类数据缺首集标识时保持详情回退，不能把推荐片段 vid 当首集。公开连接池跨首页访问保留2分钟、最多3连接，每个页面独立取消请求。边界与验证见 HOME_FEED.md。
+
+- GitCode 更新：先匿名请求 releases/latest?type=latest，再按 tag 读取 update.json；清单标签须与 Latest 一致。附件使用 gitcode.com 稳定地址，跟随 file-cdn.gitcode.com 的临时签名跳转，不能持久化 CDN 地址。源码同步不等于发布，需单独上传配套附件并设为 Latest。GitHub 旧版需一次覆盖升级。

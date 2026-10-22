@@ -4,7 +4,7 @@
 
 当前使用 `kotlin-tv/` 中的 Kotlin 原生客户端，支持 **Android 6.0 及以上**。安装一个 APK 即可使用，无需部署 Node 或 Docker。稳定代码在 `main`；实际版本以构建配置和发布附件为准。
 
-[下载与发布记录](https://github.com/tsukiyo-zero/hongguoTV/releases) · [构建说明](kotlin-tv/README.md) · [在线更新与发布](kotlin-tv/AUTO_UPDATES.md) · [开发流程](CONTRIBUTING.md)
+[下载与发布记录](https://gitcode.com/tsukiyo-zero/hongguoTV/releases) · [构建说明](kotlin-tv/README.md) · [在线更新与发布](kotlin-tv/AUTO_UPDATES.md) · [开发流程](CONTRIBUTING.md)
 
 ## 功能
 

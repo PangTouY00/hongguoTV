@@ -17,7 +17,17 @@ data class AppUpdate(val versionCode: Long, val versionName: String, val minSdk:
     val downloadUrl get() = "$RELEASES/download/$tag/$fileName"
     companion object {
         const val REPOSITORY = "tsukiyo-zero/hongguoTV"
-        const val RELEASES = "https://github.com/$REPOSITORY/releases"
+        const val RELEASES = "https://gitcode.com/$REPOSITORY/releases"
+        const val LATEST_API = "https://api.gitcode.com/api/v5/repos/$REPOSITORY/releases/latest?type=latest"
+        fun latestTag(json: String): String {
+            val release = JSONObject(json)
+            require(!release.optBoolean("prerelease", false)) { "不能使用预发布版本" }
+            val tag = release.getString("tag_name")
+            require(tag.matches(Regex("kotlin-v[0-9][0-9A-Za-z.+-]{0,80}")))
+            val assets = release.getJSONArray("assets")
+            require((0 until assets.length()).any { assets.getJSONObject(it).optString("name") == "update.json" }) { "发行版缺少更新清单" }
+            return tag
+        }
         const val MAX_APK_BYTES = 80L * 1024 * 1024
         fun parse(json: String): AppUpdate {
             val o = JSONObject(json)
@@ -70,25 +80,32 @@ class AppUpdateRepository : java.io.Closeable {
     private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS)
         .callTimeout(5, TimeUnit.MINUTES).addNetworkInterceptor { chain ->
             val url = chain.request().url
-            // Follow GitHub's CDN redirects, never cleartext or arbitrary manifest-provided hosts.
-            if (url.scheme != "https" || url.host !in setOf("github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"))
+            // Follow GitCode's CDN redirects, never cleartext or arbitrary manifest-provided hosts.
+            if (url.scheme != "https" || url.host !in setOf("api.gitcode.com", "gitcode.com", "file-cdn.gitcode.com"))
                 throw IOException("更新下载地址不受支持")
             chain.proceed(chain.request())
         }.build()
     private fun request(url: String) = Request.Builder().url(url).header("User-Agent", "HongguoTV-Updater")
         .header("Cache-Control", "no-cache").build()
-    fun latest(): AppUpdate {
-        val call = http.newCall(request("${AppUpdate.RELEASES}/latest/download/update.json"))
+    private fun readMetadata(url: String): String {
+        val call = http.newCall(request(url))
         call.timeout().timeout(25, TimeUnit.SECONDS)
         return call.execute().use { response ->
             if (!response.isSuccessful) throw IOException(if (response.code == 404) "尚无可用的自动更新版本" else "无法检查更新，请稍后重试")
-            val bytes = response.body?.byteStream()?.use { input ->
+            response.body?.byteStream()?.use { input ->
                 val out = ByteArrayOutputStream(); val buffer = ByteArray(4096)
                 while (true) { val n = input.read(buffer); if (n < 0) break; if (out.size() + n > 65536) throw IOException("更新信息过大"); out.write(buffer, 0, n) }
-                out.toByteArray()
+                out.toString("UTF-8")
             } ?: throw IOException("更新信息为空")
-            try { AppUpdate.parse(bytes.toString(Charsets.UTF_8)) } catch (_: Exception) { throw IOException("更新信息格式不正确") }
         }
+    }
+    fun latest(): AppUpdate {
+        val release = readMetadata(AppUpdate.LATEST_API)
+        val tag = try { AppUpdate.latestTag(release) } catch (_: Exception) { throw IOException("最新发行版信息格式不正确") }
+        val metadata = readMetadata("${AppUpdate.RELEASES}/download/$tag/update.json")
+        return try {
+            AppUpdate.parse(metadata).also { require(it.tag == tag) { "清单标签不匹配" } }
+        } catch (_: Exception) { throw IOException("更新信息格式不正确") }
     }
     fun download(update: AppUpdate, file: File, progress: (Int) -> Unit) {
         if (UpdateFiles.verify(file, update)) return

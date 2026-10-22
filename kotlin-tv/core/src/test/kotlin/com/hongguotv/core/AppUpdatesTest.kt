@@ -20,6 +20,16 @@ class AppUpdatesTest {
         val dir = Files.createTempDirectory("update-test").toFile()
         try { block(File(dir, "update.apk")) } finally { dir.deleteRecursively() }
     }
+    @Test fun latestReleaseRequiresStableTagAndManifest() {
+        val release = JSONObject().put("tag_name", "kotlin-v0.1.1").put("prerelease", false)
+            .put("assets", org.json.JSONArray().put(JSONObject().put("name", "update.json")))
+        assertEquals("kotlin-v0.1.1", AppUpdate.latestTag(release.toString()))
+        assertThrows(IllegalArgumentException::class.java) { AppUpdate.latestTag(release.put("prerelease", true).toString()) }
+        release.put("prerelease", false).put("tag_name", "../bad")
+        assertThrows(IllegalArgumentException::class.java) { AppUpdate.latestTag(release.toString()) }
+        release.put("tag_name", "kotlin-v0.1.1").put("assets", org.json.JSONArray())
+        assertThrows(IllegalArgumentException::class.java) { AppUpdate.latestTag(release.toString()) }
+    }
     @Test fun android6AndLegacyAndroid8UpdatesRespectTheirMinimumSdk() {
         val metadata=json().put("versionCode",17).put("versionName","0.0.2-android6").put("minSdk",23).put("tag","kotlin-v0.0.2-android6")
         metadata.getJSONObject("apk").put("name","hongguotv-kotlin-0.0.2-android6.apk")
@@ -33,7 +43,7 @@ class AppUpdatesTest {
         assertTrue(update.newerThan(9, 26)); assertFalse(update.newerThan(10001, 36)); assertFalse(update.newerThan(10002, 36)); assertFalse(update.newerThan(9, 25))
     }
     @Test fun downloadUrlUsesOnlyFixedRepositoryAndValidatedNames() {
-        assertEquals("https://github.com/tsukiyo-zero/hongguoTV/releases/download/kotlin-v0.9.0-build.1/hongguotv-kotlin-0.9.0-build.1-android8.apk", update().downloadUrl)
+        assertEquals("https://gitcode.com/tsukiyo-zero/hongguoTV/releases/download/kotlin-v0.9.0-build.1/hongguotv-kotlin-0.9.0-build.1-android8.apk", update().downloadUrl)
         for (value in listOf("../../bad.apk", "evil.apk", "https://example.com/evil.apk", "hongguotv-kotlin-1/2-android8.apk")) {
             val o = json(); o.getJSONObject("apk").put("name", value)
             assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(o.toString()) }
