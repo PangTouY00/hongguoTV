@@ -42,6 +42,8 @@ internal fun cloudResponse(response: okhttp3.Response): String {
     return text
 }
 
+data class CloudFavorite(val series: Series,val collectedAt: Long)
+
 data class CloudReservation(val series: Series,val online: Boolean,val publishAt: Long,val publishText: String="")
 
 class CloudAccountClient(private val http: OkHttpClient) {
@@ -94,6 +96,9 @@ class CloudAccountClient(private val http: OkHttpClient) {
         }
         return progress.map { it.copy(series=series[it.series.id] ?: it.series.copy(title="剧集 ${it.series.id}")) }
     }
+    /** Read-only video shelf. Protocol reference: charlie901208/HGTV AccountParser.favorites. */
+    fun favorites(credentials: AccountCredentials): List<CloudFavorite> =
+        parseFavorites(json(credentials,"/reading/bookapi/bookshelf/video/info/v1/"))
     /** Protocol reference: charlie901208/HGTV feat/phone-login, accountReserves.
      * Keep the two upstream categories separate; an unpublished series is never playable.
      * The upstream pagination contract is unverified, so expose only this requested batch.
@@ -126,6 +131,25 @@ class CloudAccountClient(private val http: OkHttpClient) {
         json(credentials,"/reading/bookapi/read_progress/upload/v1/",body=body)
     }
     companion object {
+        fun parseFavorites(raw: JSONObject): List<CloudFavorite> {
+            val data=raw.optJSONObject("data") ?: throw IOException("账户收藏数据格式已变化")
+            if(!data.has("video_shelf_info")) throw IOException("账户收藏列表格式已变化")
+            val rows=if(data.isNull("video_shelf_info")) JSONArray() else data.optJSONArray("video_shelf_info")
+                ?: throw IOException("账户收藏列表格式已变化")
+            val result=rows.objects().mapNotNull { row ->
+                val video=row.optJSONObject("video_data") ?: row
+                val id=video.str("series_id").ifBlank { row.str("series_id") }.ifBlank { row.str("book_id") }
+                val title=row.str("series_title").ifBlank { video.str("title") }.ifBlank { row.str("book_name") }
+                if(!id.matches(Regex("[0-9]{1,30}")) || title.isBlank()) return@mapNotNull null
+                val cover=row.str("series_cover_url").ifBlank { video.str("cover") }.ifBlank { video.str("cover_url") }.ifBlank { video.str("thumb_url") }.ifBlank { row.str("thumb_url") }
+                val count=video.optInt("episode_cnt",video.optInt("episode_count",row.optInt("episode_cnt")))
+                val tags=runCatching { JSONArray(row.str("category_schema")).objects().map { it.str("name") }.filter(String::isNotBlank).take(5).joinToString(" · ") }.getOrDefault("").ifBlank { video.str("category") }
+                val stamp=row.optLong("collect_time").coerceAtLeast(0).let { if(it in 1..9999999999L) it*1000 else it }
+                CloudFavorite(Series(id,title,cleanUrl(cover),row.str("series_intro").ifBlank { video.str("video_desc") }.ifBlank { row.str("abstract") },if(count>0) "全 $count 集" else "",tags),stamp)
+            }
+            if(rows.length()>0 && result.isEmpty()) throw IOException("账户收藏条目格式已变化")
+            return result.sortedByDescending { it.collectedAt }.distinctBy { it.series.id }
+        }
         fun parseReservations(raw: JSONObject,online: Boolean): List<CloudReservation> {
             val data=raw.optJSONObject("data") ?: throw IOException("预约数据格式已变化，请稍后重试")
             // A null list is the upstream's empty category; missing/non-array data is an error.

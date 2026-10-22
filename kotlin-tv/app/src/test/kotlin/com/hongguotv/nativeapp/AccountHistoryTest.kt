@@ -35,18 +35,19 @@ class AccountHistoryTest {
             Library::class.java.getDeclaredField("index").apply { isAccessible=true }.set(library,LibraryIndex(data))
             val account=get("cloudAccount") as AccountController
             val switch=MainActivity::class.java.getDeclaredMethod("switchTab",Int::class.javaPrimitiveType).apply { isAccessible=true }
-            switch.invoke(activity,5)
+            (get("librarySources") as LibrarySources).accountHistory=true
+            switch.invoke(activity,4)
             val root=activity.findViewById<android.view.View>(android.R.id.content)
-            assertTrue(texts(root).any { it.contains("登录红果账号后") })
+            assertTrue(texts(root).any { it.contains("登录红果后") })
             field(account,"credentials",AccountCredentials("test-only"))
             field(account,"profile",CloudProfile("a","账号 A"))
             field(account,"history",listOf(CloudProgress(Series("221","云端独有记录"),"222",3,45000,90000,2000)))
             field(account,"busy",true)
-            switch.invoke(activity,5)
+            switch.invoke(activity,4)
             assertTrue(texts(root).contains("云端独有记录"))
             assertFalse(texts(root).contains("本机独有记录"))
             assertTrue(texts(root).any { it.contains("第 4 集") })
-            switch.invoke(activity,4)
+            MainActivity::class.java.getDeclaredMethod("switchLibrarySource",Boolean::class.javaPrimitiveType).apply { isAccessible=true }.invoke(activity,false)
             assertTrue(texts(root).contains("本机独有记录"))
             assertFalse(texts(root).contains("云端独有记录"))
         } finally { controller.destroy() }
@@ -60,6 +61,8 @@ class AccountHistoryTest {
             field(account,"profile",CloudProfile("a","账号 A"))
             field(account,"history",listOf(row))
             field(account,"reservations",mapOf(true to ReservationState(listOf(CloudReservation(row.series,true,0)),loaded=true)))
+            field(account,"favorites",FavoriteState(listOf(CloudFavorite(row.series,1000)),loaded=true))
+            assertEquals(1,account.favoriteState().rows.size)
             assertEquals(1,account.reservationState(true).rows.size)
             assertEquals(row,account.progress("123"))
             var notifications=0
@@ -72,6 +75,7 @@ class AccountHistoryTest {
             assertEquals("账号 B",account.accountLabel)
             assertTrue(account.reservationState(true).rows.isEmpty())
             assertTrue(account.historyRows().isEmpty())
+            assertTrue(account.favoriteState().rows.isEmpty())
             assertNull(account.progress("123"))
             assertEquals(1,notifications)
             field(account,"history",listOf(row))
@@ -82,6 +86,7 @@ class AccountHistoryTest {
             assertTrue(account.reservationState(false).rows.isEmpty())
             assertTrue(account.historyScope>scope)
             assertTrue(account.historyRows().isEmpty())
+            assertTrue(account.favoriteState().rows.isEmpty())
             assertNull(account.progress("123"))
             assertEquals(2,notifications)
         } finally { account.destroy(); activity.pause().stop().destroy() }

@@ -49,6 +49,8 @@ private class AccountStore(context: Context) {
     fun clear() { check(prefs.edit().clear().commit()) { "清除登录态失败" } }
 }
 
+internal data class FavoriteState(val rows: List<CloudFavorite> = emptyList(),val loading: Boolean=false,val loaded: Boolean=false,val message: String="尚未读取账户收藏")
+
 internal data class ReservationState(val rows: List<CloudReservation> = emptyList(),val loading: Boolean=false,val loaded: Boolean=false,val message: String="尚未读取预约记录")
 
 /** Cloud history is kept separate from guest records; only explicit playback creates local history. */
@@ -65,6 +67,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
     private var profile: CloudProfile?=null
     private var history=emptyList<CloudProgress>()
     private val acceptedReservations=mutableSetOf<String>()
+    private var favorites=FavoriteState()
     private var reservations=emptyMap<Boolean,ReservationState>()
     private var status="未登录"
     private var busy=false
@@ -99,6 +102,23 @@ class AccountController(private val activity: Activity,private val play: (CloudP
             done("红果已接受预约请求，尚未在账号列表确认。请刷新预约状态，或在手机红果核对是否新增。")
         },{ done("预约未完成：${safeError(it)}") })
     }
+    internal fun favoriteState(): FavoriteState = if(signedIn) favorites else FavoriteState(message="未登录")
+    fun refreshFavorites() {
+        val account=credentials ?: return
+        if(closed || favorites.loading) return
+        val token=generation
+        favorites=favorites.copy(loading=true,message="正在读取账户收藏…");changed()
+        worker.execute {
+            if(closed || token!=generation) return@execute
+            val result=runCatching { client.favorites(account) }
+            main.post {
+                if(closed || token!=generation) return@post
+                favorites=result.fold({ FavoriteState(it,loaded=true,message="已读取 ${it.size} 部账户收藏") },
+                    { favorites.copy(loading=false,message="读取失败：${safeError(it)}") })
+                changed()
+            }
+        }
+    }
     fun refreshReservations() {
         val account=credentials ?: return
         if(closed || reservations.values.any { it.loading }) return
@@ -124,10 +144,11 @@ class AccountController(private val activity: Activity,private val play: (CloudP
     private fun changed() { onHistoryChanged?.invoke() }
     val showing get() = dialog?.isShowing==true
     init {
+        val token=generation
         worker.execute {
             val saved=runCatching { store.read() }
             main.post {
-                if(closed) return@post
+                if(closed || token!=generation) return@post
                 credentials=saved.getOrNull()
                 status=if(credentials!=null) "登录态已恢复，打开账号页面刷新云端记录" else if(saved.isFailure) "登录态无法读取，请重新登录" else "未登录"
                 changed()
@@ -200,7 +221,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
         return next to account
     }
     private fun acceptAccount(next: AccountCredentials,account: CloudProfile) {
-        credentials=next; profile=account; history=emptyList(); reservations=emptyMap(); acceptedReservations.clear(); generation++
+        credentials=next; profile=account; history=emptyList(); favorites=FavoriteState(); reservations=emptyMap(); acceptedReservations.clear(); generation++
         status="已登录，正在读取云端记录"; lastUpload=0; lastEpisode=""; lastProgress=null; pending=null; draining=false
         changed(); toast("已登录 ${account.nickname}"); refresh(true)
     }
@@ -308,7 +329,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
             .setNegativeButton("关闭",null))
     }
     private fun logout() {
-        generation++; busy=false; credentials=null; profile=null; history=emptyList(); reservations=emptyMap(); acceptedReservations.clear(); pending=null; lastProgress=null; draining=false
+        generation++; busy=false; credentials=null; profile=null; history=emptyList(); favorites=FavoriteState(); reservations=emptyMap(); acceptedReservations.clear(); pending=null; lastProgress=null; draining=false
         http.dispatcher.cancelAll(); status="已退出账号，自动同步已停止"; changed()
         worker.execute { val result=runCatching { store.clear() }; main.post { toast(if(result.isSuccess) status else "清除登录态失败，请重试退出") } }
     }
