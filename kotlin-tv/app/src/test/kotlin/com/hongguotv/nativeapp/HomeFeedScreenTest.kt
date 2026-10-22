@@ -44,6 +44,23 @@ class HomeFeedScreenTest {
     private fun get(target: Any,name: String)=target.javaClass.getDeclaredField(name).apply { isAccessible=true }.get(target)
     private fun pump(screen: HomeFeedScreen) { repeat(4) { (get(screen,"job") as? Future<*>)?.get(5,TimeUnit.SECONDS);ShadowLooper.idleMainLooper() } }
     private fun texts(view: View): List<TextView> = if(view is ViewGroup) (0 until view.childCount).flatMap { texts(view.getChildAt(it)) } else if(view is TextView) listOf(view) else emptyList()
+    @Test fun transportCleanupRunsOffUiThreadAndOnlyOnce() {
+        val finished=java.util.concurrent.CountDownLatch(1)
+        val shutdowns=java.util.concurrent.atomic.AtomicInteger()
+        var cleanupThread: Thread?=null
+        val executor=object: java.util.concurrent.ThreadPoolExecutor(0,1,1,TimeUnit.SECONDS,java.util.concurrent.LinkedBlockingQueue<Runnable>()) {
+            override fun shutdown() {
+                cleanupThread=Thread.currentThread();shutdowns.incrementAndGet()
+                super.shutdown();finished.countDown()
+            }
+        }
+        val http=OkHttpClient.Builder().dispatcher(okhttp3.Dispatcher(executor)).build()
+        val backend=PublicFeedBackend(720,http)
+        val ui=Thread.currentThread()
+        backend.close();backend.close()
+        assertTrue(finished.await(5,TimeUnit.SECONDS))
+        assertNotSame(ui,cleanupThread);assertEquals(1,shutdowns.get())
+    }
     @Test fun remoteSwitchesWorksAndCompletionDoesNotAdvance() {
         val controller=Robolectric.buildActivity(Activity::class.java).setup();val activity=controller.get()
         val state=DramaFeedState();val backend=Backend();val player=Playback(activity)

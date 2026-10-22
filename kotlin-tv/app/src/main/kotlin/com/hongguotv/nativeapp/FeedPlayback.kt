@@ -22,8 +22,11 @@ internal interface FeedBackend: Closeable {
     fun detail(series: Series): Detail
     fun prepare(detail: Detail): TrialClip
 }
-internal class PublicFeedBackend(private val quality: Int): FeedBackend {
-    private val http=OkHttpClient.Builder().connectTimeout(12,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).callTimeout(35,TimeUnit.SECONDS).build()
+internal class PublicFeedBackend(
+    private val quality: Int,
+    private val http: OkHttpClient=OkHttpClient.Builder().connectTimeout(12,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).callTimeout(35,TimeUnit.SECONDS).build()
+): FeedBackend {
+    private val closed=java.util.concurrent.atomic.AtomicBoolean(false)
     private val repository=ContentRepository(http)
     override fun catalog(category: DramaCategory,page: Int)=repository.discover(category,page=page)
     override fun detail(series: Series)=repository.detail(series.id)
@@ -32,7 +35,15 @@ internal class PublicFeedBackend(private val quality: Int): FeedBackend {
         val video=RemoteVideo(http,repository.stream(id,quality))
         try { return TrialClip(detail,video.prepare()) } catch(error: Exception) { video.close();throw error }
     }
-    override fun close() { http.dispatcher.cancelAll();http.connectionPool.evictAll();http.dispatcher.executorService.shutdown() }
+    override fun close() {
+        if(!closed.compareAndSet(false,true)) return
+        // Idle TLS socket closure may write close_notify. Never do it on Android's UI thread.
+        Thread({
+            http.dispatcher.cancelAll()
+            http.connectionPool.evictAll()
+            http.dispatcher.executorService.shutdown()
+        },"hongguotv-feed-cleanup").start()
+    }
 }
 internal enum class TrialStatus { BUFFERING, READY, ENDED, ERROR }
 internal interface TrialPlayback {
