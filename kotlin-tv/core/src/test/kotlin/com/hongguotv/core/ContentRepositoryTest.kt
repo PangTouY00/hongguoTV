@@ -12,21 +12,31 @@ import org.junit.Test
 import java.io.IOException
 
 class ContentRepositoryTest {
-    @Test fun allSearchUsesWebsiteDirectlyAndKeepsBothContentTypes() {
+    @Test fun allSearchUsesPublicJsonEndpointAndKeepsBothContentTypes() {
         var calls=0
         val repo=repository { request ->
             calls++
             assertEquals("hongguoduanju.com",request.url.host)
-            assertEquals("/search/大佬",request.url.encodedPath.let { java.net.URLDecoder.decode(it,"UTF-8") })
+            assertEquals("/api/search/result",request.url.encodedPath)
+            assertEquals("大佬",request.url.queryParameter("query"))
             assertEquals("2",request.url.queryParameter("page"))
             assertNull(request.url.queryParameter("tab_type"))
             assertNull(request.header("x-gorgon"))
-            """<script>_ROUTER_DATA={"loaderData":{"search_page":{"searchList":[{"series_id":"123","series_name":"真人短剧"},{"series_id":"456","series_name":"动画漫剧"}]}}}};</script>"""
+            """{"pageNum":2,"hasMore":true,"searchList":[{"video_data":{"series_id":"123","series_title":"真人短剧","episode_cnt":80}},{"video_data":{"series_id":"456","series_title":"动画漫剧","episode_cnt":100}}]}"""
         }
         val page=repo.searchAll("大佬",2)
         assertEquals(listOf("123","456"),page.items.map { it.id })
         assertEquals(1,calls)
         assertTrue(page.hasMore)
+    }
+
+    @Test fun jsonSearchHandlesLastPageEmptyResultsAndChangedResponses() {
+        assertFalse(repository { """{"pageNum":2,"totalPages":2,"searchList":[{"video_data":{"series_id":"1","series_title":"最后一页"}}]}""" }.searchAll("测试",2).hasMore)
+        val empty=repository { """{"pageNum":1,"totalPages":0,"hasMore":false,"searchList":[]}""" }.searchAll("无结果")
+        assertTrue(empty.items.isEmpty());assertFalse(empty.hasMore)
+        assertThrows(IOException::class.java) { repository { "<html>client rendered page</html>" }.searchAll("测试") }
+        assertThrows(IOException::class.java) { repository { """{"pageNum":1,"searchList":[]}""" }.searchAll("测试",2) }
+        assertThrows(IOException::class.java) { repository { """{"code":"search_verification_required"}""" }.searchAll("测试") }
     }
 
     @Test fun allSearchDoesNotTurnNetworkFailureIntoEmptyResults() {
@@ -296,7 +306,7 @@ class ContentRepositoryTest {
         val repo=repository { request ->
             paths+=request.url.encodedPath
             if(paths.size==1) throw IOException("offline")
-            """<script>_ROUTER_DATA={"loaderData":{"search_page":{"searchList":[{"series_id":"456","series_name":"测试短剧"}]}}}};</script>"""
+            """{"searchList":[{"series_id":"456","series_name":"测试短剧"}]}"""
         }
         assertEquals("456",repo.search("短剧",1,ContentType.SHORT).items.single().id)
         assertEquals(2,paths.size)

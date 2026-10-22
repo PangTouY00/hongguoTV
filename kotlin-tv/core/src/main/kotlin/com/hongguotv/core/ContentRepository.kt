@@ -114,11 +114,12 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         try { val result=appSearch(keyword,page,type); if(result.items.isNotEmpty() || !result.hasMore) return result } catch (e: Exception) { if(e is SearchSessionExpiredException) throw e; /* Website fallback for short dramas only. */ }
         return searchAll(keyword,page)
     }
-    /** Website search includes both short dramas and comics without a category-specific API. */
+    /** The public website now loads cross-category results through its JSON endpoint. */
     fun searchAll(keyword: String, page: Int = 1): CatalogPage {
         require(keyword.isNotBlank() && keyword.length<=80 && page in 1..100)
-        val data=router("$site/search/${Signer.encode(keyword)}?page=$page")
-        val section=data.optJSONObject("search_(keyword)/page") ?: data.optJSONObject("search_page") ?: throw IOException("搜索数据暂不可用")
+        val raw=text("$site/api/search/result?query=${Signer.encode(keyword)}&page=$page")
+        val section=try { JSONObject(raw) } catch (_: Exception) { throw IOException("搜索响应格式已变化，请稍后重试") }
+        if(section.has("pageNum") && section.optInt("pageNum")!=page) throw IOException("搜索页码不匹配，请重新搜索")
         val rows=section.optJSONArray("searchList") ?: throw IOException("搜索数据结构已变化")
         val items=valid(rows.objects().map(::card))
         val more=when {

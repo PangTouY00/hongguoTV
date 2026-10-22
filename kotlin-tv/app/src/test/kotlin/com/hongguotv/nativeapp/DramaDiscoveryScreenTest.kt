@@ -33,7 +33,7 @@ class DramaDiscoveryScreenTest {
     private fun texts(view: View): List<TextView> = if(view is ViewGroup) (0 until view.childCount).flatMap { texts(view.getChildAt(it)) } else if(view is TextView) listOf(view) else emptyList()
     private fun pump(activity: MainActivity) { (get(activity,"workJob") as? Future<*>)?.get(5,TimeUnit.SECONDS);ShadowLooper.idleMainLooper() }
     private fun response(request: Request): String {
-        val searching=request.url.encodedPath.startsWith("/search/")
+        val searching=request.url.encodedPath=="/api/search/result"
         val page=request.url.queryParameter("page")?.toInt() ?: 1
         val pieces=request.url.pathSegments
         val type=pieces.getOrNull(1) ?: "comic-drama"
@@ -45,6 +45,7 @@ class DramaDiscoveryScreenTest {
             .put("categoryRoute",JSONObject().put("contentType",type).put("enabled",true).put("canonicalPath",request.url.encodedPath))
             .put("selectorList",JSONArray().put(JSONObject().put("items",JSONArray().put(JSONObject().put("selector_item_id",if(type=="real-drama") "romance" else "fantasy").put("show_name",if(type=="real-drama") "爱情" else "玄幻")))))
             .put("pagination",JSONObject().put("pageNum",page).put("totalPages",2).put("pageSize",24).put("total",48))
+        if(searching) return section.toString()
         return "<script>_ROUTER_DATA="+JSONObject().put("loaderData",JSONObject().put(if(searching) "search_page" else "category_$",section))+";</script>"
     }
     @Test fun browseSearchAndReturnPreserveServerCategoryPageAndFocus() {

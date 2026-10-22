@@ -92,3 +92,5 @@ API 23/26 的播放器接口替身测试检查追加/领取资源、无需重启
 版本码40：首页试播复用明确首集元数据，跳过一次详情请求；分类数据缺首集标识时保持详情回退，不能把推荐片段 vid 当首集。公开连接池跨首页访问保留2分钟、最多3连接，每个页面独立取消请求。边界与验证见 HOME_FEED.md。
 
 - GitCode 更新：先匿名请求 releases/latest?type=latest，再按 tag 读取 update.json；清单标签须与 Latest 一致。附件使用 gitcode.com 稳定地址，跟随 file-cdn.gitcode.com 的临时签名跳转，不能持久化 CDN 地址。源码同步不等于发布，需单独上传配套附件并设为 Latest。GitHub 旧版需一次覆盖升级。
+
+- 搜索网页现改为客户端加载，/search/<keyword> 不再包含 _ROUTER_DATA。全部剧集搜索应读取官方 GET /api/search/result?query=<encoded>&page=N，响应直接包含 searchList、pageNum、totalPages、hasMore；video_data 为对象。不要把 HTML 页面或缺少 searchList 的响应当作空结果。已用“大佬”验证前两页各 10 条。

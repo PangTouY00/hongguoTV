@@ -48,8 +48,7 @@ class DramaDiscoveryTest {
     @Test fun searchUsesSourceHasMoreWithoutLocallyFilteringResults() {
         val http=OkHttpClient.Builder().addInterceptor { chain ->
             val section=JSONObject().put("hasMore",false).put("searchList",JSONArray().put(JSONObject().put("series_id","1").put("series_name","跨类型剧")))
-            val html="<script>_ROUTER_DATA="+JSONObject().put("loaderData",JSONObject().put("search_page",section))+";</script>"
-            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK").body(html.toResponseBody()).build()
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK").body(section.toString().toResponseBody()).build()
         }.build()
         val result=ContentRepository(http).searchAll("测试")
         assertEquals(1,result.items.size);assertFalse(result.hasMore)
