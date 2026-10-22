@@ -49,6 +49,44 @@ class TvTools(private val activity: Activity) {
         if(extra!=null) builder.setNeutralButton(extra) { _,_-> onExtra() }
         val next=builder.create(); open(next,anchor); next.listView.requestFocus()
     }
+    fun chooseGrid(title: String,labels: List<String>,selected: Int,anchor: View?,onChoice: (Int)->Unit) {
+        val content=column()
+        val scroll=android.widget.ScrollView(activity)
+        val list=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL }
+        scroll.addView(list);content.addView(scroll)
+        val choices=mutableListOf<android.widget.TextView>()
+        lateinit var next: AlertDialog
+        labels.chunked(4).forEachIndexed { rowIndex,values ->
+            val row=LinearLayout(activity)
+            values.forEachIndexed { col,value ->
+                val index=rowIndex*4+col
+                val choice=android.widget.TextView(activity).apply {
+                    id=View.generateViewId();text=value;textSize=15f;gravity=android.view.Gravity.CENTER
+                    isFocusable=true;isClickable=true;maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END
+                    setPadding(dp(10),dp(10),dp(10),dp(10));contentDescription=value
+                    fun paint(focused: Boolean) {
+                        setTextColor(if(index==selected) TvStyle.accent else TvStyle.text)
+                        background=TvStyle.shape(activity,if(index==selected) TvStyle.raised else TvStyle.surface,if(focused) TvStyle.accent else android.graphics.Color.TRANSPARENT)
+                    }
+                    paint(false);setOnFocusChangeListener { _,focused->paint(focused) }
+                    setOnClickListener { next.dismiss();onChoice(index) }
+                }
+                row.addView(choice,LinearLayout.LayoutParams(0,dp(46),1f).apply { setMargins(dp(4),dp(4),dp(4),dp(4)) });choices+=choice
+            }
+            repeat(4-values.size) { row.addView(View(activity),LinearLayout.LayoutParams(0,dp(46),1f)) }
+            list.addView(row)
+        }
+        choices.forEachIndexed { i,v ->
+            v.nextFocusLeftId=if(i%4==0) v.id else choices[i-1].id
+            v.nextFocusRightId=if(i%4==3 || i==choices.lastIndex) v.id else choices[i+1].id
+            v.nextFocusUpId=choices.getOrNull(i-4)?.id ?: v.id
+            v.nextFocusDownId=choices.getOrNull(i+4)?.id ?: if(i/4<choices.lastIndex/4) choices.last().id else v.id
+        }
+        next=AlertDialog.Builder(activity).setTitle(title).setView(content).setNegativeButton("返回",null).create()
+        open(next,anchor)
+        next.window?.setLayout((activity.resources.displayMetrics.widthPixels*.85f).toInt(),android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
+        choices.getOrNull(selected.coerceAtLeast(0))?.requestFocus()
+    }
     fun episodePicker(count: Int,current: Int,anchor: View?,select: (Int)->Unit) {
         val content=column(); var digits=(current+1).toString(); var replace=true
         val value=label(digits,28f).apply { gravity=Gravity.CENTER }; content.addView(value)

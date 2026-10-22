@@ -19,7 +19,7 @@ data class Series(val id: String, val title: String, val cover: String = "", val
     companion object { fun fromJson(o: JSONObject) = Series(o.str("id"),o.str("title"),o.str("cover"),o.str("description"),o.str("badge"),o.str("tags")) }
 }
 data class Detail(val series: Series, val episodes: List<String>)
-data class RankPosition(val rank: Int?, val heat: String)
+data class RankPosition(val rank: Int?, val heat: String, val metrics: String = "")
 data class ComicRanking(val positions: Map<String,RankPosition>, val totalPages: Int, val updatedText: String)
 data class CatalogPage(val items: List<Series>, val hasMore: Boolean, val ranking: ComicRanking? = null)
 data class StreamInfo(val url: String, val key: ByteArray?, val quality: String)
@@ -65,6 +65,25 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     fun comicRanking(page: Int = 1): CatalogPage {
         require(page in 1..100)
         return ComicRank.parse(text("$site/rank/hot-comic-drama?page=$page"),page)
+    }
+    fun rankPage(board: RankBoard,page: Int=1): CatalogPage {
+        require(page in 1..100)
+        return ComicRank.parse(text("$site/rank/${board.route}?page=$page"),page,board)
+    }
+    fun rankSnapshot(board: RankBoard): RankSnapshot {
+        val first=rankPage(board)
+        val meta=first.ranking ?: throw IOException("榜单信息缺失")
+        // Public boards currently expose 100 entries across five pages. Never claim
+        // a complete board if the upstream size changes beyond this bounded request.
+        if(meta.totalPages>5) throw IOException("榜单页数已变化，请稍后重试")
+        val rows=first.items.toMutableList()
+        val positions=meta.positions.toMutableMap()
+        for(page in 2..meta.totalPages) {
+            val next=rankPage(board,page)
+            if(next.ranking?.totalPages!=meta.totalPages) throw IOException("榜单正在更新，请刷新重试")
+            rows+=next.items; positions.putAll(next.ranking.positions)
+        }
+        return RankSnapshot(board,rows.distinctBy { it.id },meta.copy(positions=positions))
     }
     fun home(page: Int = 1, type: ContentType = ContentType.SHORT): CatalogPage {
         require(page in 1..100)

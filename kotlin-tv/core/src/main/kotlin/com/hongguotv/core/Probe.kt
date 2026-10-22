@@ -2,6 +2,18 @@ package com.hongguotv.core
 
 fun main(args: Array<String>) {
     val repository=ContentRepository()
+    if(args.contains("--tv-rankings")) {
+        try {
+            for(board in RankBoard.entries) {
+                val snapshot=repository.rankSnapshot(board)
+                check(snapshot.items.isNotEmpty()) { "Empty ${board.name} board" }
+                println("board=${board.name}; items=${snapshot.items.size}; topics=${snapshot.topics.joinToString(",")}; ranks=${snapshot.ranking.positions.values.mapNotNull { it.rank }.minOrNull()}..${snapshot.ranking.positions.values.mapNotNull { it.rank }.maxOrNull()}")
+            }
+        } finally {
+            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        }
+        return
+    }
     if(args.contains("--official-qr-login")) {
         try {
             val login=WebLogin(repository.http)
