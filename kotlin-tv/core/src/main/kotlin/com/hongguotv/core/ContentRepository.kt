@@ -21,7 +21,7 @@ data class Series(val id: String, val title: String, val cover: String = "", val
 data class Detail(val series: Series, val episodes: List<String>)
 data class RankPosition(val rank: Int?, val heat: String, val metrics: String = "")
 data class ComicRanking(val positions: Map<String,RankPosition>, val totalPages: Int, val updatedText: String)
-data class CatalogPage(val items: List<Series>, val hasMore: Boolean, val ranking: ComicRanking? = null)
+data class CatalogPage(val items: List<Series>, val hasMore: Boolean, val ranking: ComicRanking? = null, val discovery: DiscoveryInfo? = null)
 data class StreamInfo(val url: String, val key: ByteArray?, val quality: String)
 class SearchSessionExpiredException: IOException("搜索结果已过期，请从第 1 页重新搜索")
 
@@ -95,6 +95,17 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         val lastPage=section.optJSONObject("pagination")?.optInt("totalPages",100) ?: 100
         return CatalogPage(items,items.isNotEmpty() && page<minOf(lastPage,100))
     }
+    fun discover(category: DramaCategory,topic: String="",page: Int=1): CatalogPage {
+        require(page in 1..100 && (topic.isEmpty() || topic.matches(Regex("[a-z0-9]+(?:-[a-z0-9]+)*"))))
+        val path="/category/${category.route}"+if(topic.isBlank()) "" else "/$topic"
+        val data=router("$site$path?page=$page")
+        val section=data.optJSONObject("category_$") ?: data.optJSONObject("category_page") ?: throw IOException("分类找剧数据已变化")
+        val info=DiscoveryParser.info(section,category,topic,page)
+        val rows=section.optJSONArray("recommendList") ?: throw IOException("分类剧集列表缺失")
+        val items=valid(rows.objects().map(::card))
+        if(rows.length()>0 && items.isEmpty()) throw IOException("分类剧集格式已变化")
+        return CatalogPage(items,items.isNotEmpty() && page<info.totalPages,discovery=info)
+    }
     fun search(keyword: String, page: Int = 1, type: ContentType = ContentType.SHORT): CatalogPage {
         require(keyword.isNotBlank() && keyword.length<=80 && page in 1..100)
         // The website search does not constrain content type. Never use it for comics.
@@ -109,7 +120,12 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         val section=data.optJSONObject("search_(keyword)/page") ?: data.optJSONObject("search_page") ?: throw IOException("搜索数据暂不可用")
         val rows=section.optJSONArray("searchList") ?: throw IOException("搜索数据结构已变化")
         val items=valid(rows.objects().map(::card))
-        return CatalogPage(items,items.isNotEmpty() && page<100)
+        val more=when {
+            section.has("hasMore") -> section.optBoolean("hasMore")
+            section.optInt("totalPages")>0 -> page<section.optInt("totalPages")
+            else -> page<100
+        }
+        return CatalogPage(items,items.isNotEmpty() && page<100 && more)
     }
     private fun appSearch(keyword: String, page: Int, type: ContentType): CatalogPage {
         val values=VendorConstants.device.toMutableMap()

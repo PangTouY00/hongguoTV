@@ -56,3 +56,7 @@
 ## 收藏与历史来源
 
 收藏/观看历史各有本机、账户子页签；LibrarySources 仅保存界面偏好，不迁移记录。账户收藏读取 video_shelf_info，由 AccountController 的会话代次隔离，失败保留同账号旧数据，退出和切换立即清空。顶部删除了独立账户历史入口，预约/设置内部索引变为 5/6。详情及快捷操作中分开提供本机/账户收藏；账户写入使用 video/update，确认账号、先读后写再回读，未确认时不自动重试。协议及尚未验证的边界见 [ACCOUNT_SYNC.md](ACCOUNT_SYNC.md)。
+
+## 找剧入口
+
+顶部原搜索页改为找剧。空关键词走官网 `/category/{real-drama|comic-drama|ai-drama}/{topic?}` 的服务端分类，题材来自 selectorList，必须核对 categoryRoute 和分页。提交关键词仍用跨类型 searchAll，不继承分类条件，不以本页过滤假装全局搜索筛选。返回分类恢复 DramaDiscoveryState 的页码、作品、题材及焦点；滚动键包含类型和题材。详情见 [DRAMA_DISCOVERY.md](../kotlin-tv/DRAMA_DISCOVERY.md)。
