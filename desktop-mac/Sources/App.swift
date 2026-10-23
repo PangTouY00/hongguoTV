@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var model = Model()
     var body: some Scene {
-        Window("红果 TV · Mac", id: "main") { ContentView(model: model)
+        Window("hongguoMac", id: "main") { ContentView(model: model)
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in model.shutdown() }
         }
             .defaultSize(width: 1200, height: 820)

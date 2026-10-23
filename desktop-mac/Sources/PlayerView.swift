@@ -12,7 +12,7 @@ private final class PlaybackWindow: NSWindow {
     @Published var controlsVisible = true
     @Published var position: Double = 0
     @Published var duration: Double = 0
-    private var timer: Timer?
+    private var timer: Task<Void, Never>?
     private var observer: Any?
     private var monitor: Any?
     private var window: NSWindow?
@@ -47,13 +47,12 @@ private final class PlaybackWindow: NSWindow {
         revealControls()
     }
     func revealControls() {
-        controlsVisible = true; timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self else { return }
+        controlsVisible = true; timer?.cancel()
+        timer = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                guard !Task.isCancelled, let self else { return }
                 if NSEvent.pressedMouseButtons != 0 { self.revealControls() }
                 else { self.controlsVisible = false }
-            }
         }
     }
     func togglePlayback() {
@@ -61,7 +60,7 @@ private final class PlaybackWindow: NSWindow {
         revealControls()
     }
     func close() {
-        timer?.invalidate(); timer = nil
+        timer?.cancel(); timer = nil
         if let observer { player.removeTimeObserver(observer); self.observer = nil }
         if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
         window?.close(); window?.contentView = nil; window = nil

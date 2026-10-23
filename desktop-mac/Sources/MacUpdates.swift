@@ -18,7 +18,7 @@ struct MacManifest: Decodable {
         guard schema == 1, bundleID == "com.hongguotv.mac", build > 0, architecture == "arm64",
               minMacOS >= 13, minMacOS <= ProcessInfo.processInfo.operatingSystemVersion.majorVersion,
               size > 0, size <= 300 * 1024 * 1024,
-              fileName.range(of: "^HongguoTV-mac-arm64-[0-9][A-Za-z0-9.+-]{0,80}\\.zip$", options: .regularExpression) != nil,
+              fileName.range(of: "^(hongguoMac|HongguoTV-mac)-arm64-[0-9][A-Za-z0-9.+-]{0,80}\\.zip$", options: .regularExpression) != nil,
               sha256.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else {
             throw NSError(domain: "MacUpdate", code: 1, userInfo: [NSLocalizedDescriptionKey: "Mac 更新清单不兼容，请查看发布页面。"])
         }
@@ -72,7 +72,7 @@ struct MacManifest: Decodable {
                 var digest = SHA256()
                 while let bytes = try input.read(upToCount: 1024 * 1024), !bytes.isEmpty { digest.update(data: bytes) }
                 guard digest.finalize().map({ String(format: "%02x", $0) }).joined() == manifest.sha256 else { throw URLError(.cannotDecodeContentData) }
-                let folder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0].appendingPathComponent("HongguoTV-Mac/" + UUID().uuidString)
+                let folder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0].appendingPathComponent("hongguoMac/" + UUID().uuidString)
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                 let destination = folder.appendingPathComponent(manifest.fileName)
                 try FileManager.default.copyItem(at: temporary, to: destination)

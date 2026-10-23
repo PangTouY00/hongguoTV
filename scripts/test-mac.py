@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 
 root = Path(__file__).resolve().parent.parent
-resources = root / "outputs/mac/HongguoTV.app/Contents/Resources"
+resources = root / "outputs/mac/hongguoMac.app/Contents/Resources"
 process = subprocess.Popen([str(resources / "runtime/bin/java"), "--add-modules", "jdk.httpserver", "-cp", str(resources / "lib/*"), "com.hongguotv.desktop.MainKt"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 try:
