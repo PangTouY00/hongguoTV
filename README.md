@@ -6,7 +6,7 @@
 
 ## Android TV 下载与安装
 
-首次安装请下载 **v0.1.1 或更高版本**，之后可在 App 内更新。更新源已切换至 GitCode，安装包在 GitCode 与 GitHub 同步发布，应用内更新使用 GitCode。低于 v0.1.1 的版本需手动覆盖安装一次。
+首次安装请下载 **v0.1.1 或更高版本**，之后可在 App 内更新。更新源已切换至 GitCode，后续安装包仅在 GitCode 发布（如果我不偷懒的话就都发），GitHub 继续维护源码。低于 v0.1.1 的版本需手动覆盖安装一次。
 
 [GitHub v0.1.1 安装入口](https://github.com/tsukiyo-zero/hongguoTV/releases/tag/kotlin-v0.1.1) · [GitCode 最新版与发布记录](https://gitcode.com/tsukiyo-zero/hongguoTV/releases)
 
