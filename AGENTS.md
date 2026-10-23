@@ -1,7 +1,7 @@
 # Repository workflow
 
 - The stable branch is `main`. Keep existing upstream history and GPL notices.
-- The user prefers flat branch names without `codex/` or other grouping prefixes. Use `feature-...` and `fix-...`; `android6-support` records the completed compatibility work.
+- The user prefers flat branch names without grouping prefixes. Use `feature-...` and `fix-...`; `android6-support` records the completed compatibility work.
 - `main` supports Android 6+ (minSdk 23), including Android 8+. The user explicitly authorized merging the verified Android 6 compatibility feature as the common baseline. Keep a single APK/version line; check both API 23 and API 26 when changing native compatibility.
 - For subsequent features and fixes, branch from the latest `main` using `feature-<short-description>` or `fix-<short-description>`. Implement and validate there, then use a pull request to merge into `main`; do not directly push new feature work to `main` unless the user explicitly authorizes it.
 - The initial migration of the existing working features into this repository's `main` is authorized directly by the user.
@@ -12,3 +12,5 @@
 - App updates use only `tsukiyo-zero/hongguoTV` Releases. A source push or CI artifact is not a release. Follow `kotlin-tv/AUTO_UPDATES.md`; do not reintroduce the upstream cross-repository publishing workflow.
 
 - The user prefers to install APKs and perform manual emulator/TV tests themselves, then send screenshots. Run automated checks and package locally; do not operate the emulator or install test builds unless explicitly requested again.
+
+- The native Mac client lives in `desktop-mac/`. The user authorized merging the tested Mac client into `main`; continue future Mac development on the long-lived `feature-mac-client` branch, retaining it after PR merges. Sync from `main` as needed. TV remains the priority; Mac has independent version/build numbers and a fixed `mac-stable` GitCode Release with `mac-update.json`, never marked Latest.
