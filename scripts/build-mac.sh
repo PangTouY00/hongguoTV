@@ -19,11 +19,13 @@ swiftc -parse-as-library -O -target "$(uname -m)-apple-macosx13.0" \
     "$ROOT/desktop-mac/Sources/"*.swift -o "$APP/Contents/MacOS/hongguoMac"
 cp "$ROOT/desktop-mac/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp "$ROOT/desktop-mac/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/desktop-mac/THIRD_PARTY.md" "$APP/Contents/Resources/THIRD_PARTY.md"
 cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 cp "$ROOT/kotlin-tv/NOTICE.md" "$APP/Contents/Resources/NOTICE.md"
 codesign --force --deep --sign - "$APP"
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")
-ARCHIVE="$DEST/hongguoMac-$(uname -m)-$VERSION-test.zip"
+BUILD=$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$APP/Contents/Info.plist")
+ARCHIVE="$DEST/hongguoMac-$(uname -m)-$VERSION-build$BUILD-test.zip"
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ARCHIVE"
 python3 "$ROOT/scripts/prepare-mac-release.py" --app "$APP" --zip "$ARCHIVE"
 echo "$APP"

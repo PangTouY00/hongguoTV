@@ -11,6 +11,19 @@ import AVKit
     @Published var episode: Int?
     @Published var hasMore = false
     let player = AVPlayer()
+    @Published var showComments = false
+    lazy var comments = MacComments { [weak self] series, episode in
+        guard let self else { throw URLError(.cancelled) }
+        return try await self.request("comments", ["series": series, "episode": episode])
+    }
+    lazy var commentThread = MacCommentThread { [weak self] series, episode, cursor in
+        guard let self else { throw URLError(.cancelled) }
+        return try await self.request("comment-page", ["series": series, "episode": episode, "cursor": cursor])
+    }
+    lazy var danmaku = MacDanmaku { [weak self] series, episode, start, duration in
+        guard let self else { throw URLError(.cancelled) }
+        return try await self.request("danmaku", ["series": series, "episode": episode, "start": String(start), "duration": String(duration)])
+    }
     lazy var fullscreenPlayback = FullscreenPlayback(player: player, model: self)
     let library: LocalLibrary
     let updates = MacUpdates()
@@ -186,6 +199,7 @@ import AVKit
     }
     func open(_ series: Series, trial: Bool = false) {
         perform {
+            self.comments.clear(); self.commentThread.clear(); self.danmaku.clear()
             self.message = "正在读取剧集…"
             let detail: Detail
             if trial, let cached = self.homeWarmDetail, cached.series.id == series.id, self.homeWarmQuality == self.quality { detail = cached }
@@ -219,6 +233,7 @@ import AVKit
             guard !Task.isCancelled else { return }
             guard let url = URL(string: result.url), url.host == "127.0.0.1" else { throw URLError(.badURL) }
             self.player.pause()
+            self.danmaku.clear()
             self.player.replaceCurrentItem(with: AVPlayerItem(url: url))
             self.activeSeries = detail.series; self.activeEpisodeID = detail.episodes[index]; self.activeEpisodeIndex = index
             self.activeTrial = trial; self.preview = trial
@@ -279,7 +294,7 @@ import AVKit
     }
 
     func shutdown() {
-        fullscreenPlayback.close(); homeWarmTask?.cancel(); homeWarmDetail = nil; pendingHomeSeries = nil
+        comments.clear(); commentThread.clear(); danmaku.clear(); fullscreenPlayback.close(); homeWarmTask?.cancel(); homeWarmDetail = nil; pendingHomeSeries = nil
         stopping = true; pendingNext = false; pendingTrial = false; pendingResume = false; relatedTask?.cancel(); loginTask?.cancel(); uploadTask?.cancel(); cloudTask?.cancel()
         saveProgress(); action?.cancel()
         if let progressObserver { player.removeTimeObserver(progressObserver); self.progressObserver = nil }

@@ -17,6 +17,9 @@ fun main() {
     var feedCursor=DramaFeedState().recommendationCursor
     val catalogLock=Any()
     val account=MacAccount(repository)
+    val publicComments=PublicComments(repository.http)
+    val timedComments=TimedComments()
+    val appCommentPages=AppCommentPages()
     val token=UUID.randomUUID().toString()
     val server=HttpServer.create(InetSocketAddress("127.0.0.1",0),16)
     val executor=Executors.newFixedThreadPool(6)
@@ -48,6 +51,9 @@ fun main() {
                 json(exchange,account.handle(exchange,operation.removePrefix("account/"),query));return@createContext
             }
             when(operation) {
+                "comment-page" -> json(exchange,appCommentPages.read(query["series"].orEmpty(),query["episode"].orEmpty(),query["cursor"].orEmpty()))
+                "danmaku" -> json(exchange,timedComments.read(query["series"].orEmpty(),query["episode"].orEmpty(),query["start"]?.toLong() ?: -1,query["duration"]?.toLong() ?: -1))
+                "comments" -> json(exchange,publicComments.read(query["series"].orEmpty(),query["episode"].orEmpty()))
                 "search" -> {
                     val result=repository.searchAll(query["q"].orEmpty(),query["page"]?.toInt() ?: 1)
                     json(exchange,JSONObject().put("items",JSONArray(result.items.map { it.toJson() })).put("hasMore",result.hasMore))

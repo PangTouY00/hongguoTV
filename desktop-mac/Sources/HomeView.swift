@@ -61,7 +61,7 @@ struct HomeFeedView: View {
             }
             if let detail = model.detail, model.showDetail {
                 HStack(alignment: .top, spacing: 24) {
-                    NativePlayer(player: model.player, model: model).background(.black).cornerRadius(16)
+                    NativePlayer(player: model.player, model: model).overlay { DanmakuOverlay(model: model, danmaku: model.danmaku) }.background(.black).cornerRadius(16)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     ScrollView {
                         VStack(alignment: .leading, spacing: 20) {
@@ -76,6 +76,8 @@ struct HomeFeedView: View {
                                 Button(library.favorite(detail.series.id) ? "取消本机收藏" : "加入本机收藏") { library.toggleFavorite(detail.series) }
                                 if model.account?.loggedIn == true { Button("加入账户收藏") { model.cloudFavorite(detail.series, add: true) } }
                             }
+                            DanmakuControl(danmaku: model.danmaku)
+                    Button { model.showComments = true } label: { Label("评论与剧评", systemImage: "text.bubble") }.disabled(model.episode == nil)
                             Divider()
                             HStack {
                                 Button { model.moveRecommendation(-1) } label: { Label("上一部", systemImage: "chevron.up") }

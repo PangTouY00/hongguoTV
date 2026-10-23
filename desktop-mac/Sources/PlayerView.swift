@@ -13,6 +13,7 @@ private final class PlaybackWindow: NSWindow {
     @Published var controlsVisible = true
     @Published var playing = false
     @Published var panelOpen = false
+    @Published var commentsOpen = false
     @Published var position: Double = 0
     @Published var duration: Double = 0
     private var timer: Task<Void, Never>?
@@ -26,25 +27,28 @@ private final class PlaybackWindow: NSWindow {
         position = now.isFinite ? max(0, now) : 0
         duration = length.isFinite ? max(0, length) : 0
         playing = player.rate > 0
-        let screen = NSScreen.main ?? NSScreen.screens[0]
-        let window = PlaybackWindow(contentRect: screen.frame, styleMask: [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
+        let source = NSApp.keyWindow
+        let alreadyFullscreen = source?.styleMask.contains(.fullScreen) == true
+        let screen = source?.screen ?? NSScreen.main ?? NSScreen.screens[0]
+        let window = PlaybackWindow(contentRect: screen.frame, styleMask: alreadyFullscreen ? [.borderless] : [.titled, .closable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        window.collectionBehavior = [.fullScreenPrimary]
+        window.collectionBehavior = alreadyFullscreen ? [.fullScreenAuxiliary, .canJoinAllSpaces] : [.fullScreenPrimary]
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.delegate = self
         window.backgroundColor = .black
-        window.level = .normal
+        window.level = alreadyFullscreen ? .floating : .normal
         window.acceptsMouseMovedEvents = true
         window.contentView = NSHostingView(rootView: FullscreenSurface(playback: self))
         self.window = window
         window.makeKeyAndOrderFront(nil)
-        window.toggleFullScreen(nil)
+        if !alreadyFullscreen { window.toggleFullScreen(nil) }
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDown, .leftMouseDragged, .keyDown]) { [weak self] event in
             guard let self, event.window === self.window else { return event }
             if event.type == .keyDown && event.keyCode == 53 {
-                if self.panelOpen { self.panelOpen = false; self.revealControls() } else { self.close() }; return nil
+                if self.panelOpen || self.commentsOpen { self.panelOpen = false; self.commentsOpen = false; self.revealControls() } else { self.close() }; return nil
             }
+            if event.type == .keyDown, self.window?.firstResponder is NSTextView { return event }
             if event.type == .keyDown && [123,124].contains(event.keyCode) { self.model?.skipPlayback(event.keyCode == 123 ? -10 : 10); self.revealControls(); return nil }
             if event.type == .keyDown && [125,126].contains(event.keyCode), self.model?.preview == true { self.model?.moveRecommendation(event.keyCode == 125 ? 1 : -1); self.revealControls(); return nil }
             if event.type == .keyDown && event.keyCode == 49 { self.togglePlayback(); return nil }
@@ -67,7 +71,7 @@ private final class PlaybackWindow: NSWindow {
         timer = Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 2_500_000_000)
                 guard !Task.isCancelled, let self else { return }
-                if self.panelOpen || NSEvent.pressedMouseButtons != 0 { self.revealControls() }
+                if self.panelOpen || self.commentsOpen || NSEvent.pressedMouseButtons != 0 { self.revealControls() }
                 else { self.controlsVisible = false }
         }
     }
@@ -83,7 +87,7 @@ private final class PlaybackWindow: NSWindow {
     func windowDidExitFullScreen(_ notification: Notification) { close() }
     func windowWillClose(_ notification: Notification) { cleanup(); window?.contentView = nil; window = nil }
     private func cleanup() {
-        panelOpen = false
+        panelOpen = false; commentsOpen = false
         timer?.cancel(); timer = nil
         if let observer { player.removeTimeObserver(observer); self.observer = nil }
         if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
@@ -115,6 +119,7 @@ private struct FullscreenSurface: View {
         ZStack {
             Color.black
             CleanVideo(player: playback.player)
+            if let model = playback.model { DanmakuOverlay(model: model, danmaku: model.danmaku) }
             if playback.controlsVisible {
                 VStack {
                     HStack {
@@ -136,6 +141,14 @@ private struct FullscreenSurface: View {
                             if let model = playback.model { FullscreenSettings(model: model, playback: playback) }
                         }
                     }.padding(24).background(LinearGradient(colors: [.clear, .black.opacity(0.9)], startPoint: .top, endPoint: .bottom))
+                }
+            }
+            if playback.commentsOpen, let model = playback.model {
+                HStack { Spacer()
+                    VStack(spacing: 0) {
+                        HStack { Spacer(); Button { playback.commentsOpen = false; playback.revealControls() } label: { Image(systemName: "xmark") } }.padding(16)
+                        CommentsPanel(model: model, comments: model.comments, thread: model.commentThread)
+                    }.frame(width: 420).background(.black.opacity(0.95)).padding(.vertical, 50)
                 }
             }
             if playback.panelOpen, let model = playback.model {
@@ -160,7 +173,9 @@ private struct FullscreenSettings: View {
     var body: some View {
         Group {
             if model.preview { Button("观看全集") { model.watchFull(); playback.panelOpen = true } }
-            Button("选集") { playback.panelOpen.toggle(); playback.revealControls() }
+            DanmakuControl(danmaku: model.danmaku)
+            Button("评论") { playback.commentsOpen.toggle(); playback.panelOpen = false; playback.revealControls() }
+            Button("选集") { playback.panelOpen.toggle(); playback.commentsOpen = false; playback.revealControls() }
             Menu("\(String(model.quality))P") {
                 ForEach([480,720,1080], id: \.self) { quality in Button("\(quality)P") { model.changeQuality(quality); playback.revealControls() } }
             }.disabled(model.busy)

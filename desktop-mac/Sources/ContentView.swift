@@ -71,6 +71,12 @@ struct ContentView: View {
                 }
                 .searchable(text: $model.query, placement: .toolbar, prompt: "搜索全部剧集")
                 .onSubmit(of: .search) { model.search() }
+                .sheet(isPresented: $model.showComments) {
+                    VStack(spacing: 0) {
+                        HStack { Spacer(); Button("关闭") { model.showComments = false } }.padding(12)
+                        CommentsPanel(model: model, comments: model.comments, thread: model.commentThread)
+                    }.frame(width: 540, height: 680)
+                }
         }.task {
             while model.busy && !Task.isCancelled { try? await Task.sleep(nanoseconds: 100_000_000) }
             if !Task.isCancelled && model.navigation == "搜索" && model.rows.isEmpty { model.navigate("首页") }
@@ -202,9 +208,11 @@ struct EpisodeView: View {
                         Button("下一集") { model.play(episode + 1) }.disabled(model.busy || episode + 1 >= detail.episodes.count)
                     }
                 }
-                NativePlayer(player: model.player, model: model).frame(height: 380).background(.black).cornerRadius(12)
+                NativePlayer(player: model.player, model: model).overlay { DanmakuOverlay(model: model, danmaku: model.danmaku) }.frame(height: 380).background(.black).cornerRadius(12)
                 HStack(spacing: 16) {
                     Button(model.resumeLabel) { model.resume() }.disabled(model.busy)
+                    DanmakuControl(danmaku: model.danmaku)
+                    Button { model.showComments = true } label: { Label("评论与剧评", systemImage: "text.bubble") }.disabled(model.episode == nil)
                     Menu("收藏") {
                         Button(library.favorite(detail.series.id) ? "取消本机收藏" : "加入本机收藏") { library.toggleFavorite(detail.series) }
                         if model.account?.loggedIn == true { Button("加入账户收藏") { model.cloudFavorite(detail.series, add: true) } }
