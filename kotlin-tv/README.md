@@ -22,7 +22,7 @@
 
 ## 版本与签名
 
-修改 `app/build.gradle.kts` 中 `versionCode`、`versionName` 后重新构建。环境变量 `HONGGUOTV_VERSION_CODE`、`HONGGUOTV_VERSION_NAME` 会覆盖文件中的默认值。内部版本号按所有已分发 APK 递增，测试包也计入；分支名、APK 文件名或 Git 标签不会自动改变 APK 内部版本。
+修改 `app/build.gradle.kts` 中 `versionCode`、`versionName` 后重新构建。环境变量 `HONGGUOTV_VERSION_CODE`、`HONGGUOTV_VERSION_NAME` 会覆盖文件中的默认值。正式上线时递增版本号与 versionCode，编译调试期间保持不变，测试包通过文件名区分；当前正式版 0.1.2，下一正式版 0.1.3。分支名、APK 文件名或 Git 标签不会自动改变 APK 内部版本。
 
 开发 APK 使用本机 Debug 签名。电视已经安装的版本只能由相同包名、相同签名的新版覆盖；换电脑或改用其他签名可能无法覆盖安装。不要删除、替换现有签名密钥，不要将密钥或密码提交到仓库。
 
@@ -48,3 +48,5 @@ Release 构建读取 `kotlin-tv/keystore.properties`（已忽略）或对应环�
 框架回归覆盖 API 23、API 26。具体电视的解码、声音、遥控器和实际账号同步仍需要设备验证。由维护者改代码、自动化检查和打包，用户安装测试并反馈截图；不自动操作用户模拟器。
 
 排查播放、账户或旧系统兼容问题前，先读 [开发排查笔记](../docs/DEVELOPMENT_NOTES.md)。第三方来源与许可见 [NOTICE.md](NOTICE.md)。
+
+评论与弹幕调试入口和验收范围见 [SOCIAL.md](SOCIAL.md)。

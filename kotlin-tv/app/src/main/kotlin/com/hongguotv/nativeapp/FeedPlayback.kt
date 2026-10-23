@@ -48,7 +48,11 @@ internal class PublicFeedBackend(
         }
         return page
     }
-    override fun recommendations(page: Int,cursor: RecommendationCursor)=rememberHints(RecommendationFeed(http,recommendationAccount,cursor).page(page))
+    private fun <T> timed(stage: String, action: ()->T): T {
+        val start=android.os.SystemClock.elapsedRealtime()
+        try { return action() } finally { android.util.Log.i("HongguoTV","Home $stage elapsedMs=${android.os.SystemClock.elapsedRealtime()-start}") }
+    }
+    override fun recommendations(page: Int,cursor: RecommendationCursor)=timed("recommendations") { rememberHints(RecommendationFeed(http,recommendationAccount,cursor).page(page)) }
     override fun categoryRecommendations(category: DramaCategory,page: Int,cursor: RecommendationCursor)=rememberHints(RecommendationFeed(http,recommendationAccount,cursor,category).page(page))
     override fun catalog(category: DramaCategory,page: Int)=repository.discover(category,page=page)
     override fun detail(series: Series)=repository.detail(series.id)
@@ -59,8 +63,8 @@ internal class PublicFeedBackend(
     }
     override fun trial(series: Series): TrialClip {
         val hint=synchronized(trialHints) { trialHints[series.id] } ?: return prepare(detail(series))
-        val video=RemoteVideo(http,repository.stream(hint.episodeId,quality))
-        try { return TrialClip(Detail(series,listOf(hint.episodeId)),video.prepare(),hint.episodeCount) }
+        val video=RemoteVideo(http,timed("play-address") { repository.stream(hint.episodeId,quality) })
+        try { return TrialClip(Detail(series,listOf(hint.episodeId)),timed("media-index") { video.prepare() },hint.episodeCount) }
         catch(error: Exception) { video.close();throw error }
     }
     override fun preload(series: Series): TrialClip {
@@ -89,6 +93,7 @@ internal interface TrialPlayback {
     fun queue(clip: TrialClip) {}
     fun remove(seriesId: String) {}
     fun select(clip: TrialClip,position: Long,autoplay: Boolean): Boolean=false
+    fun canPrefetch(): Boolean=true
     fun pause()
     fun resume()
     fun restart()
@@ -104,6 +109,7 @@ internal class Media3TrialPlayback(context: Context): TrialPlayback {
         useController=false;isFocusable=false;resizeMode=AspectRatioFrameLayout.RESIZE_MODE_FIT
         setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING);this.player=this@Media3TrialPlayback.player
     }
+    override fun canPrefetch()=player.isPlaying && player.totalBufferedDuration>=3000
     override val view: View get()=surface
     override var status: ((TrialStatus)->Unit)?=null
     private var activeId: String?=null
