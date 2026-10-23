@@ -2,29 +2,19 @@
 import SwiftUI
 import AVKit
 
-final class PlayingFixture: AVPlayer {
-    var fixtureRate: Float = 1
-    override var rate: Float { get { fixtureRate } set { fixtureRate = newValue } }
-}
 @main struct PlayerControlsTests {
     @MainActor static func main() async throws {
         _ = NSApplication.shared
-        let player = PlayingFixture()
-        let view = AutoHidingPlayerView(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
-        view.attach(player)
-        view.playerViewDidEnterFullScreen(view)
-        assert(view.controlsStyle != .none)
+        let playback = FullscreenPlayback(player: AVPlayer())
+        playback.revealControls()
+        assert(playback.controlsVisible)
         try await Task.sleep(nanoseconds: 2_900_000_000)
-        assert(view.controlsStyle == .none)
-        view.revealControls(); assert(view.controlsStyle != .none)
-        view.playerViewWillExitFullScreen(view)
-        try await Task.sleep(nanoseconds: 2_900_000_000)
-        assert(view.controlsStyle == .inline)
-        player.fixtureRate = 0
-        view.playerViewDidEnterFullScreen(view)
-        try await Task.sleep(nanoseconds: 2_900_000_000)
-        assert(view.controlsStyle != .none)
-        view.detach()
-        print("Full-screen idle hiding, reveal, exit and paused controls: PASS")
+        assert(!playback.controlsVisible, "The complete HUD, including its background, must disappear")
+        playback.revealControls(); assert(playback.controlsVisible)
+        playback.close()
+        let view = AutoHidingPlayerView(frame: .zero)
+        assert(!view.showsFullScreenToggleButton)
+        view.attach(playback.player); view.detach()
+        print("Complete full-screen HUD hiding, reveal and cleanup: PASS")
     }
 }

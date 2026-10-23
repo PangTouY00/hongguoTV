@@ -4,7 +4,7 @@ TV 为主要维护目标。Mac 独立保留在 `feature-mac-client` 特性分支
 
 ## 安装和功能
 
-解压 `outputs/mac/HongguoTV-mac-arm64-0.2.1-test.zip`，打开 HongguoTV.app 或拖入「应用程序」。支持 Apple Silicon（arm64）、macOS 13+，自带 Java 17，不需另装运行环境。使用本机临时签名，未经 Apple 公证；当前用于本机试验。
+解压 `outputs/mac/HongguoTV-mac-arm64-0.2.2-test.zip`，打开 HongguoTV.app 或拖入「应用程序」。支持 Apple Silicon（arm64）、macOS 13+，自带 Java 17，不需另装运行环境。使用本机临时签名，未经 Apple 公证；当前用于本机试验。
 
 左侧固定导航可切换功能；片单使用自适应多列卡片铺满内容区，打开作品后再显示独立播放页，工具栏右上角可搜索。
 
@@ -48,6 +48,8 @@ python3 scripts/test-mac.py
 Mac 固定读取同仓库 GitCode Release **mac-stable** 的 mac-update.json。首次发布时建立此标签/发行版，但**不要设为 Latest**；Latest 保留给 TV。后续在 mac-stable 上传新版本 ZIP、替换 mac-update.json，旧 ZIP 可保留。每次提高 Info.plist 的 CFBundleVersion，清单依据实际 bundle 元数据和 ZIP 哈希生成。
 
 不要将 mac-update.json 改名为 update.json，也不要用 Mac 包替换电视附件。Mac 更新只允许 GitCode 及其官方文件 CDN 的 HTTPS 跳转，检查大小和 SHA256 后保存到下载目录，不自动执行或替换应用。
+
+Mac 与 TV 版本号独立。例如 TV 0.1.2 与 Mac 0.2.2 可以同时存在；Mac 下一版递增 build（当前为 5），TV 仍按 Android versionCode 递增。Mac 的 mac-stable 标签保持不变，无需随每次更新新建标签。
 
 ## 实现与边界
 

@@ -58,6 +58,7 @@ import AVKit
     @Published var preview = false
     private var activeTrial = false
     private var pendingTrial = false
+    private var pendingResume = false
     private var cloudResume: (Int, Double)?
     private var helper: Process?
     private var input: Pipe?
@@ -146,6 +147,7 @@ import AVKit
             defer {
                 busy = false
                 if pendingTrial && !stopping { pendingTrial = false; play(0, trial: true) }
+                else if pendingResume && !stopping { pendingResume = false; resume() }
                 else if pendingNext && !stopping {
                     pendingNext = false
                     if let episode { play(episode + 1) }
@@ -182,7 +184,7 @@ import AVKit
             self.player.pause(); self.player.replaceCurrentItem(with: nil)
             self.activeSeries = nil; self.activeEpisodeID = nil; self.activeEpisodeIndex = nil
             self.pendingNext = false
-            self.detail = detail; self.showDetail = true; self.episode = nil; self.preview = trial; self.pendingTrial = trial
+            self.detail = detail; self.showDetail = true; self.episode = nil; self.preview = trial; self.pendingTrial = trial; self.pendingResume = !trial
             if self.section == "账户" && self.cloudType == "账户历史", let cloud = self.cloudRows.first(where: { $0.id == series.id }), let id = cloud.episodeID, let index = detail.episodes.firstIndex(of: id) {
                 self.cloudResume = (index, cloud.position ?? 0)
             } else { self.cloudResume = nil }
@@ -261,7 +263,7 @@ import AVKit
     }
 
     func shutdown() {
-        stopping = true; pendingNext = false; pendingTrial = false; relatedTask?.cancel(); loginTask?.cancel(); uploadTask?.cancel(); cloudTask?.cancel()
+        stopping = true; pendingNext = false; pendingTrial = false; pendingResume = false; relatedTask?.cancel(); loginTask?.cancel(); uploadTask?.cancel(); cloudTask?.cancel()
         saveProgress(); action?.cancel()
         if let progressObserver { player.removeTimeObserver(progressObserver); self.progressObserver = nil }
         if let endObserver { NotificationCenter.default.removeObserver(endObserver); self.endObserver = nil }

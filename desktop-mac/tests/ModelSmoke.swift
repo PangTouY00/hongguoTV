@@ -24,6 +24,7 @@ import AVFoundation
         model.open(series)
         try await wait({ !model.busy })
         assert(model.detail != nil)
+        assert(model.episode == 0, "Opening a new series must automatically start its first episode")
         model.play(0, position: 10)
         try await wait({ !model.busy })
         try await wait({ model.player.currentTime().seconds > 10.2 })
