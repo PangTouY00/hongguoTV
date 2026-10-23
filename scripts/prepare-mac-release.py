@@ -21,5 +21,5 @@ manifest = dict(schema=1, bundleID=metadata["CFBundleIdentifier"], build=int(met
                 version=metadata["CFBundleShortVersionString"], architecture="arm64",
                 minMacOS=int(metadata["LSMinimumSystemVersion"].split(".")[0]), fileName=args.zip.name,
                 size=args.zip.stat().st_size, sha256=digest.hexdigest(),
-                notes="Mac 试验版：首页刷剧、下一部预加载、我的入口、相关作品封面、系统全屏及全屏内选集、清晰度和倍速。")
+                notes="新增本集评论下滑连续加载、筛选排序与复制；新增真实时间轴弹幕，支持开关、重试和播放同步。改善弹幕清晰度与移动连续性，修复主窗口全屏时的视频全屏入口。整剧剧评仍为官网节选，发送和回复尚未接入。")
 (args.zip.parent / "mac-update.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
