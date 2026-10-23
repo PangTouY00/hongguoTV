@@ -12,3 +12,5 @@
 - App updates use only `tsukiyo-zero/hongguoTV` Releases. A source push or CI artifact is not a release. Follow `kotlin-tv/AUTO_UPDATES.md`; do not reintroduce the upstream cross-repository publishing workflow.
 
 - The user prefers to install APKs and perform manual emulator/TV tests themselves, then send screenshots. Run automated checks and package locally; do not operate the emulator or install test builds unless explicitly requested again.
+
+- The native Mac client lives in `desktop-mac/`. The user authorized merging the tested Mac client into `main`; continue future Mac development on the long-lived `feature-mac-client` branch, retaining it after PR merges. Sync from `main` as needed. TV remains the priority; Mac has independent version/build numbers and a fixed `mac-stable` GitCode Release with `mac-update.json`, never marked Latest.

@@ -1,10 +1,10 @@
 # hongguoTV
 
-非官方红果短剧 Android TV 客户端，为电视和遥控器操作提供适配。
+非官方红果短剧客户端，主要维护 Android TV 版，同时提供原生 Mac 客户端 hongguoMac。
 
 当前使用 `kotlin-tv/` 中的 Kotlin 原生客户端，支持 **Android 6.0 及以上**。安装一个 APK 即可使用，无需部署 Node 或 Docker。稳定代码在 `main`；实际版本以构建配置和发布附件为准。
 
-## 下载与安装
+## Android TV 下载与安装
 
 首次安装请下载 **v0.1.1 或更高版本**，之后可在 App 内更新。更新源已切换至 GitCode，后续安装包仅在 GitCode 发布，GitHub 继续维护源码。低于 v0.1.1 的版本需手动覆盖安装一次。
 
@@ -23,6 +23,26 @@
 - 局域网手机输入、应用内检查更新。
 
 本机记录与账户云端记录分开保存。退出或切换账号会清除旧账号的云端列表，不删除本机历史。账号能力及尚需核对的边界见 [账号同步说明](docs/ACCOUNT_SYNC.md)。
+
+## Mac 客户端 hongguoMac
+
+支持 **Apple Silicon（M 系列芯片）、macOS 13 及以上**。解压 ZIP，将 `hongguoMac.app` 拖入「应用程序」即可使用，自带运行环境，无需另外安装 Java。
+
+[Mac 固定发布入口](https://gitcode.com/tsukiyo-zero/hongguoTV/releases/mac-stable) · [Mac 构建、更新与使用说明](desktop-mac/README.md)
+
+- 首页推荐、漫剧和真人剧试播，支持切换作品、换批与下一部首集预加载。
+- 搜索、分类找剧、排行榜、相关作品与前后季浏览。
+- 红果扫码登录、账户收藏、观看历史、预约和正式观看进度同步；另有本机收藏与历史。
+- 全屏播放、选集、清晰度、倍速、自动下一集及断点续播；全屏控制栏空闲后隐藏。
+- 上下方向键切换试播作品，空格播放或暂停，左右方向键快退或快进 10 秒。
+
+Mac 登录态保存在本机钥匙串，不随安装包分发。当前使用临时签名，尚未经过 Apple 公证；评论、回复和弹幕尚未接入。
+
+### Mac 更新与开发
+
+Mac 与 TV **分别管理版本号和更新清单**。Mac 固定读取 GitCode 同仓库 `mac-stable` Release 中的 `mac-update.json`；每次发布上传新 ZIP 并替换该清单，保持标签不变，**不要将 Mac Release 设为 Latest／最新版**，最新版保留给 TV。Mac 目前下载并校验更新包后，需要手动解压替换应用。
+
+已验证的 Mac 版本纳入 `main`。后续 Mac 开发继续在长期分支 **`feature-mac-client`** 进行，测试通过后按需通过 PR 合并到 `main`，不随每个 Mac 功能另开分支。TV 仍是主要维护版本，Mac 源码位于 `desktop-mac/`。
 
 ## 维护资料
 

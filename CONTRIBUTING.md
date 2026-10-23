@@ -17,7 +17,13 @@ git switch -c feature-account-page
 git push -u origin feature-account-page
 ```
 
-## 单一版本线
+## Mac 开发分支
+
+`desktop-mac/` 是原生 Mac 客户端，后续持续在长期分支 `feature-mac-client` 开发，更新前按需合入最新 `main`。测试通过后通过 PR 合并到 `main`，合并后保留此分支。TV 优先维护；Mac 修改避免改变 TV 的包名、签名和版本号。
+
+Mac 的版本号与构建号在 `desktop-mac/Info.plist` 中独立递增，使用 `scripts/build-mac.sh` 打包并生成 `mac-update.json`；验证运行 `bash scripts/test-mac-local.sh`，在线验证按需运行 `python3 scripts/test-mac.py`。发布使用 GitCode `mac-stable`，不设为 Latest。详见 [Mac 说明](desktop-mac/README.md)。
+
+## Android 单一版本线
 
 实际版本以 `kotlin-tv/app/build.gradle.kts`、构建时环境变量和已分发 APK 为准。不要用旧文档的版本号覆盖当前配置。
 
