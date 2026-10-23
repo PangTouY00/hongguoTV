@@ -58,6 +58,14 @@ try:
     with opener.open(urllib.request.Request(play["url"], headers={"Range": "bytes=0-1"}), timeout=60) as response:
         assert response.status == 206 and len(response.read()) == 2
     rejected(play["url"], 416, {"Range": "bytes=999999999999-"})
+    next_detail = get("warm", id=first["items"][1]["id"], quality=1080)
+    assert next_detail["episodes"]
+    with opener.open(urllib.request.Request(play["url"], headers={"Range": "bytes=0-1"}), timeout=60) as response:
+        assert response.status == 206 and len(response.read()) == 2, "Preload interrupted current video"
+    previous = play
+    play = get("play", id=next_detail["episodes"][0], quality=1080)
+    rejected(previous["url"], 404)
+    print("Next work warm-up preserves current playback and promotes prepared stream: PASS", flush=True)
     with tempfile.TemporaryDirectory(prefix="hongguotv-mac-test-") as temporary:
         decoder = Path(temporary) / "playback-check"
         subprocess.run(["swiftc", "-parse-as-library", str(root / "desktop-mac/tests/PlaybackSmoke.swift"), "-o", str(decoder)], check=True)

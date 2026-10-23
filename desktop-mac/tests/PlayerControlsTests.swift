@@ -11,6 +11,13 @@ import AVKit
         try await Task.sleep(nanoseconds: 2_900_000_000)
         assert(!playback.controlsVisible, "The complete HUD, including its background, must disappear")
         playback.revealControls(); assert(playback.controlsVisible)
+        playback.panelOpen = true
+        try await Task.sleep(nanoseconds: 2_900_000_000)
+        assert(playback.controlsVisible, "Episode selection must keep the controls visible")
+        playback.panelOpen = false; playback.revealControls()
+        let window = NSWindow(contentRect: .zero, styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        let options = playback.window(window, willUseFullScreenPresentationOptions: [])
+        assert(options.contains(.fullScreen) && options.contains(.autoHideDock) && options.contains(.autoHideMenuBar))
         playback.close()
         let view = AutoHidingPlayerView(frame: .zero)
         assert(!view.showsFullScreenToggleButton)

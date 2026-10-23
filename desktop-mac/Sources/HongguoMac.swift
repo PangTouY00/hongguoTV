@@ -11,6 +11,7 @@ import AVKit
     @Published var episode: Int?
     @Published var hasMore = false
     let player = AVPlayer()
+    lazy var fullscreenPlayback = FullscreenPlayback(player: player, model: self)
     let library: LocalLibrary
     let updates = MacUpdates()
     @Published var section = "搜索"
@@ -59,6 +60,12 @@ import AVKit
     private var activeTrial = false
     private var pendingTrial = false
     private var pendingResume = false
+    var pendingHomeSeries: Series?
+    var homeWarmTask: Task<Void, Never>?
+    var homeWarmDetail: Detail?
+    var homeWarmQuality: Int?
+    var homeGeneration = UUID()
+    @Published var homeCategory = "ALL"
     private var cloudResume: (Int, Double)?
     private var helper: Process?
     private var input: Pipe?
@@ -146,7 +153,8 @@ import AVKit
         action = Task {
             defer {
                 busy = false
-                if pendingTrial && !stopping { pendingTrial = false; play(0, trial: true) }
+                if let next = pendingHomeSeries, !stopping { pendingHomeSeries = nil; open(next, trial: true) }
+                else if pendingTrial && !stopping { pendingTrial = false; play(0, trial: true) }
                 else if pendingResume && !stopping { pendingResume = false; resume() }
                 else if pendingNext && !stopping {
                     pendingNext = false
@@ -179,7 +187,9 @@ import AVKit
     func open(_ series: Series, trial: Bool = false) {
         perform {
             self.message = "正在读取剧集…"
-            let detail: Detail = try await self.request("detail", ["id": series.id])
+            let detail: Detail
+            if trial, let cached = self.homeWarmDetail, cached.series.id == series.id, self.homeWarmQuality == self.quality { detail = cached }
+            else { detail = try await self.request("detail", ["id": series.id]) }
             self.saveProgress()
             self.player.pause(); self.player.replaceCurrentItem(with: nil)
             self.activeSeries = nil; self.activeEpisodeID = nil; self.activeEpisodeIndex = nil
@@ -219,15 +229,21 @@ import AVKit
             if autoplay { self.player.playImmediately(atRate: self.speed) }
             self.saveProgress()
             self.message = "第 \(index + 1) 集 · \(result.quality)"
+            if trial && self.section == "首页" { self.warmNextHome() }
         }
     }
     func watchFull() {
         preview = false; activeTrial = false; saveProgress()
+        let current = player.currentTime().seconds, duration = player.currentItem?.duration.seconds ?? 0
+        if duration.isFinite && duration > 0 && current >= duration - 0.5 { play(episode ?? 0) }
+        else if player.currentItem != nil { player.playImmediately(atRate: speed) }
         message = "已进入正式观看，可选择集数"
     }
     func moveRecommendation(_ delta: Int) {
-        guard let id = detail?.series.id, let index = catalogRows.firstIndex(where: { $0.id == id }), catalogRows.indices.contains(index + delta) else { message = "当前批次已到边界，可换一批或加载更多"; return }
-        open(catalogRows[index + delta], trial: true)
+        guard !busy, let id = detail?.series.id, let index = catalogRows.firstIndex(where: { $0.id == id }) else { return }
+        if catalogRows.indices.contains(index + delta) { open(catalogRows[index + delta], trial: true) }
+        else if delta > 0 && section == "首页" && catalogMore { loadHome(more: true) }
+        else { message = "当前批次已到边界，可以换一批" }
     }
     var resumeLabel: String {
         if let cloudResume { return "继续账号第 \(cloudResume.0 + 1) 集" }
@@ -263,6 +279,7 @@ import AVKit
     }
 
     func shutdown() {
+        fullscreenPlayback.close(); homeWarmTask?.cancel(); homeWarmDetail = nil; pendingHomeSeries = nil
         stopping = true; pendingNext = false; pendingTrial = false; pendingResume = false; relatedTask?.cancel(); loginTask?.cancel(); uploadTask?.cancel(); cloudTask?.cancel()
         saveProgress(); action?.cancel()
         if let progressObserver { player.removeTimeObserver(progressObserver); self.progressObserver = nil }

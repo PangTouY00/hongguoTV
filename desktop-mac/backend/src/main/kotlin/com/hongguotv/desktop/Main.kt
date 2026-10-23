@@ -23,6 +23,9 @@ fun main() {
     server.executor=executor
     val lock=Any()
     var current: Pair<String,RemoteVideo>?=null
+    val warmLock=Any()
+    data class WarmClip(val episode: String,val quality: Int,val actual: String,val video: RemoteVideo)
+    var warmed: WarmClip?=null
     fun json(exchange: HttpExchange, value: JSONObject, status: Int=200) {
         val bytes=value.toString().toByteArray(Charsets.UTF_8)
         exchange.responseHeaders.set("Content-Type","application/json; charset=utf-8")
@@ -78,17 +81,35 @@ fun main() {
                     val detail=repository.detail(query["id"].orEmpty())
                     json(exchange,JSONObject().put("series",detail.series.toJson()).put("episodes",JSONArray(detail.episodes)))
                 }
+                "warm" -> synchronized(warmLock) {
+                    val detail=repository.detail(query["id"].orEmpty())
+                    val episode=detail.episodes.firstOrNull() ?: error("No episodes")
+                    val quality=query["quality"]?.toInt() ?: 1080
+                    require(quality in setOf(480,720,1080))
+                    val stream=repository.stream(episode,quality)
+                    val clip=RemoteVideo(repository.http,stream)
+                    try { clip.warm() } catch(problem: Exception) { clip.close();throw problem }
+                    synchronized(lock) { warmed?.video?.close();warmed=WarmClip(episode,quality,stream.quality,clip) }
+                    json(exchange,JSONObject().put("series",detail.series.toJson()).put("episodes",JSONArray(detail.episodes)))
+                }
                 "play" -> {
                     val quality=query["quality"]?.toInt() ?: 1080
                     require(quality in setOf(480,720,1080))
-                    val stream=repository.stream(query["id"].orEmpty(),quality)
-                    val clip=RemoteVideo(repository.http,stream)
-                    try { clip.prepare() } catch(problem: Exception) { clip.close();throw problem }
+                    val cached=synchronized(lock) {
+                        warmed?.takeIf { it.episode==query["id"] && it.quality==quality }?.also { warmed=null }
+                    }
+                    val prepared=cached ?: run {
+                        val stream=repository.stream(query["id"].orEmpty(),quality)
+                        val clip=RemoteVideo(repository.http,stream)
+                        try { clip.prepare() } catch(problem: Exception) { clip.close();throw problem }
+                        WarmClip(query["id"].orEmpty(),quality,stream.quality,clip)
+                    }
+                    val clip=prepared.video
                     val id=UUID.randomUUID().toString()
                     synchronized(lock) { current?.second?.close();current=id to clip }
-                    json(exchange,JSONObject().put("url","http://127.0.0.1:${server.address.port}/$token/video?id=$id").put("quality",stream.quality))
+                    json(exchange,JSONObject().put("url","http://127.0.0.1:${server.address.port}/$token/video?id=$id").put("quality",prepared.actual))
                 }
-                "stop" -> { synchronized(lock) { current?.second?.close();current=null };json(exchange,JSONObject().put("ok",true)) }
+                "stop" -> { synchronized(lock) { current?.second?.close();current=null;warmed?.video?.close();warmed=null };json(exchange,JSONObject().put("ok",true)) }
                 "video" -> {
                     val selected=synchronized(lock) { current?.takeIf { it.first==query["id"] }?.second }
                     if(selected==null) { exchange.sendResponseHeaders(404,-1);return@createContext }
@@ -126,7 +147,7 @@ fun main() {
         } finally { exchange.close() }
     }
     Runtime.getRuntime().addShutdownHook(Thread {
-        synchronized(lock) { current?.second?.close();current=null }
+        synchronized(lock) { current?.second?.close();current=null;warmed?.video?.close();warmed=null }
         repository.http.dispatcher.cancelAll()
         account.close();server.stop(0);executor.shutdownNow()
         repository.http.dispatcher.cancelAll();repository.http.connectionPool.evictAll()

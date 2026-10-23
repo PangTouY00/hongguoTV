@@ -14,5 +14,7 @@ for source in "$ROOT/desktop-mac/Sources/"*.swift; do
 done
 swiftc -parse-as-library "${SOURCES[@]}" "$ROOT/desktop-mac/tests/CloudHistoryTests.swift" -o "$TESTDIR/cloud"
 "$TESTDIR/cloud"
-swiftc -parse-as-library "$ROOT/desktop-mac/Sources/PlayerView.swift" "$ROOT/desktop-mac/tests/PlayerControlsTests.swift" -o "$TESTDIR/controls"
+swiftc -parse-as-library "${SOURCES[@]}" "$ROOT/desktop-mac/tests/PlayerControlsTests.swift" -o "$TESTDIR/controls"
 "$TESTDIR/controls"
+swiftc -parse-as-library "${SOURCES[@]}" "$ROOT/desktop-mac/tests/HomeFeedTests.swift" -o "$TESTDIR/feed"
+"$TESTDIR/feed"

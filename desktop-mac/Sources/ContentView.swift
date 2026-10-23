@@ -28,7 +28,11 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 240)
         } detail: {
             VStack(spacing: 0) {
-                if model.showDetail, let detail = model.detail {
+                if model.section == "首页" && (model.preview || !model.showDetail) {
+                    HomeFeedView(model: model, library: library)
+                } else if model.section == "我的" {
+                    MyAccountView(model: model, library: library)
+                } else if model.showDetail, let detail = model.detail {
                     EpisodeView(model: model, library: library, detail: detail)
                 } else if model.section == "登录" {
                     VStack(alignment: .leading, spacing: 24) {
@@ -67,6 +71,9 @@ struct ContentView: View {
                 }
                 .searchable(text: $model.query, placement: .toolbar, prompt: "搜索全部剧集")
                 .onSubmit(of: .search) { model.search() }
+        }.task {
+            while model.busy && !Task.isCancelled { try? await Task.sleep(nanoseconds: 100_000_000) }
+            if !Task.isCancelled && model.navigation == "搜索" && model.rows.isEmpty { model.navigate("首页") }
         }.frame(minWidth: 1000, minHeight: 720).tint(.orange).preferredColorScheme(.dark)
     }
     private var libraryView: some View {
@@ -195,7 +202,7 @@ struct EpisodeView: View {
                         Button("下一集") { model.play(episode + 1) }.disabled(model.busy || episode + 1 >= detail.episodes.count)
                     }
                 }
-                NativePlayer(player: model.player).frame(height: 380).background(.black).cornerRadius(12)
+                NativePlayer(player: model.player, model: model).frame(height: 380).background(.black).cornerRadius(12)
                 HStack(spacing: 16) {
                     Button(model.resumeLabel) { model.resume() }.disabled(model.busy)
                     Menu("收藏") {
@@ -231,10 +238,14 @@ struct EpisodeView: View {
                             ForEach(model.related) { work in
                                 Button { if work.upcoming { model.reserve(work) } else { model.open(work.series) } } label: {
                                     VStack(alignment: .leading, spacing: 6) {
-                                        Text(work.series.title).lineLimit(2)
+                                        AsyncImage(url: URL(string: work.series.cover)) { image in image.resizable().scaledToFill() }
+                                            placeholder: { Rectangle().fill(.gray.opacity(0.18)).overlay(Image(systemName: "film")) }
+                                            .frame(width: 150, height: 200).clipped().cornerRadius(10)
+                                        Text(work.series.title).font(.headline).lineLimit(2).frame(height: 40, alignment: .topLeading)
                                         Text(work.upcoming ? "待上线 · 预约" : work.season).font(.caption).foregroundStyle(.secondary)
-                                    }.frame(width: 180, height: 60, alignment: .leading)
-                                }.disabled(model.busy || (work.upcoming && model.account?.loggedIn != true))
+                                    }.frame(width: 150, alignment: .leading)
+                                }.buttonStyle(.plain).padding(4)
+                                .disabled(model.busy || (work.upcoming && model.account?.loggedIn != true))
                             }
                         }
                     }

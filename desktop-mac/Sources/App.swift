@@ -14,7 +14,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in model.shutdown() }
         }
             .defaultSize(width: 1200, height: 820)
-            .commands { CommandGroup(replacing: .newItem) {} }
+            .commands {
+                CommandGroup(replacing: .newItem) {}
+                CommandMenu("播放") {
+                    Button("播放 / 暂停") { model.togglePlayback() }.keyboardShortcut(.space, modifiers: []).disabled(!model.showDetail || model.busy)
+                    Button("上一部") { model.moveRecommendation(-1) }.keyboardShortcut(.upArrow, modifiers: []).disabled(!model.preview || model.busy)
+                    Button("下一部") { model.moveRecommendation(1) }.keyboardShortcut(.downArrow, modifiers: []).disabled(!model.preview || model.busy)
+                    Button("快退 10 秒") { model.skipPlayback(-10) }.keyboardShortcut(.leftArrow, modifiers: []).disabled(!model.showDetail)
+                    Button("快进 10 秒") { model.skipPlayback(10) }.keyboardShortcut(.rightArrow, modifiers: []).disabled(!model.showDetail)
+                }
+            }
     }
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
