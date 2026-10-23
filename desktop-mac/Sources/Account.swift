@@ -59,7 +59,7 @@ extension Model {
             if let saved = try SessionKeychain.load() {
                 let result: AccountResult = try await request("account/restore", [:], body: ["credentials": saved])
                 guard generation == accountGeneration && account == nil && !accountBusy else { return }
-                account = result
+                acceptAccount(result)
             }
         } catch { accountMessage = "上次账号暂时无法验证，可重新扫码或稍后重开应用。" }
     }
@@ -81,9 +81,12 @@ extension Model {
                     let result: AccountResult = try await request("account/poll", ["loginID": qr.loginID])
                     try Task.checkCancellation()
                     if result.loggedIn {
-                        account = result; qrImage = nil; pendingLoginID = nil; cloudRows = []; lastUpload = .distantPast
-                        if let credentials = result.credentials { try SessionKeychain.save(credentials) }
+                        acceptAccount(result); qrImage = nil; pendingLoginID = nil; lastUpload = .distantPast
                         accountMessage = "登录成功，播放进度会定期上传。"
+                        if let credentials = result.credentials {
+                            do { try SessionKeychain.save(credentials) }
+                            catch { accountMessage = "已登录，但登录态未能保存到钥匙串；下次可能需要重新扫码。" }
+                        }
                         return
                     }
                 }
@@ -105,6 +108,7 @@ extension Model {
         guard !busy else { return }
         accountGeneration += 1
         cancelLogin(); uploadTask?.cancel()
+        cloudTask?.cancel(); cloudRequestID = UUID(); cloudLoading = false; cloudError = nil; cloudLoadedKey = nil
         account = nil; cloudRows = []; accountMessage = "已退出账号，本机记录保留。"
         accountBusy = true
         Task {
@@ -114,15 +118,32 @@ extension Model {
             do { try SessionKeychain.delete() } catch { accountMessage = error.localizedDescription }
         }
     }
+    func acceptAccount(_ result: AccountResult) {
+        account = result
+        cloudRows = []; cloudError = nil; cloudLoadedKey = nil
+        if section == "账户" { loadCloud() }
+    }
     func loadCloud() {
-        guard let identity = account?.id, !busy else { return }
+        cloudTask?.cancel()
+        let requestID = UUID(); cloudRequestID = requestID
+        guard let identity = account?.id else {
+            cloudRows = []; cloudLoading = false; cloudError = nil; cloudLoadedKey = nil
+            return
+        }
         let type = cloudType
         let path = type == "账户历史" ? "history" : type == "账户收藏" ? "favorites" : "reservations"
-        perform {
-            self.cloudRows = []; self.message = "正在同步\(type)…"
-            let result: CloudResult = try await self.request("account/" + path, ["online": String(type != "待上线")])
-            guard self.account?.id == identity else { return }
-            self.cloudRows = result.items; self.message = "已读取 \(result.items.count) 条\(type) · 历史最多50条，预约每类最多20条"
+        cloudLoading = true; cloudError = nil; cloudLoadedKey = nil; cloudRows = []
+        cloudTask = Task {
+            defer { if cloudRequestID == requestID { cloudLoading = false } }
+            do {
+                let result: CloudResult = try await request("account/" + path, ["online": String(type != "待上线")])
+                guard !Task.isCancelled, cloudRequestID == requestID, account?.id == identity, cloudType == type else { return }
+                cloudRows = result.items; cloudLoadedKey = identity + ":" + type
+                message = "已读取 \(result.items.count) 条\(type)"
+            } catch {
+                guard !Task.isCancelled, cloudRequestID == requestID, account?.id == identity else { return }
+                cloudError = "\(type)读取失败：\(error.localizedDescription)"
+            }
         }
     }
     func cloudFavorite(_ series: Series, add: Bool) {
@@ -167,10 +188,6 @@ struct AccountPanel: View {
                     Spacer()
                     Button("退出") { model.logout() }.disabled(model.busy)
                 }
-                Picker("账号片单", selection: $model.cloudType) {
-                    ForEach(["账户历史", "账户收藏", "已上线", "待上线"], id: \.self) { Text($0).tag($0) }
-                }.disabled(model.busy).onChange(of: model.cloudType) { _ in model.loadCloud() }
-                Button("刷新账号片单") { model.loadCloud() }.disabled(model.busy)
             } else {
                 if let image = model.qrImage {
                     Image(nsImage: image).interpolation(.none).resizable().scaledToFit().frame(width: 220, height: 220).padding(10).background(.white)

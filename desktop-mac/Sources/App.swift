@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Window("红果 TV · Mac", id: "main") { ContentView(model: model)
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in model.shutdown() }
         }
+            .defaultSize(width: 1200, height: 820)
             .commands { CommandGroup(replacing: .newItem) {} }
     }
     init() {

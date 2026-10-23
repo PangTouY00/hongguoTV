@@ -8,3 +8,11 @@ swiftc -parse-as-library "$ROOT/desktop-mac/Sources/Models.swift" "$ROOT/desktop
 "$TESTDIR/library"
 swiftc -parse-as-library "$ROOT/desktop-mac/Sources/MacUpdates.swift" "$ROOT/desktop-mac/tests/MacUpdateTests.swift" -o "$TESTDIR/updates"
 "$TESTDIR/updates"
+SOURCES=()
+for source in "$ROOT/desktop-mac/Sources/"*.swift; do
+    if [ "$(basename "$source")" != App.swift ]; then SOURCES+=("$source"); fi
+done
+swiftc -parse-as-library "${SOURCES[@]}" "$ROOT/desktop-mac/tests/CloudHistoryTests.swift" -o "$TESTDIR/cloud"
+"$TESTDIR/cloud"
+swiftc -parse-as-library "$ROOT/desktop-mac/Sources/PlayerView.swift" "$ROOT/desktop-mac/tests/PlayerControlsTests.swift" -o "$TESTDIR/controls"
+"$TESTDIR/controls"

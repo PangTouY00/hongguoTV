@@ -21,5 +21,5 @@ manifest = dict(schema=1, bundleID=metadata["CFBundleIdentifier"], build=int(met
                 version=metadata["CFBundleShortVersionString"], architecture="arm64",
                 minMacOS=int(metadata["LSMinimumSystemVersion"].split(".")[0]), fileName=args.zip.name,
                 size=args.zip.stat().st_size, sha256=digest.hexdigest(),
-                notes="Mac 试验版：本机收藏与续播、分类榜单、相关作品、账号扫码同步及推荐试播。")
+                notes="Mac 试验版：固定侧栏与全宽片单、账户历史自动加载、全屏播放控制栏空闲隐藏。")
 (args.zip.parent / "mac-update.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
