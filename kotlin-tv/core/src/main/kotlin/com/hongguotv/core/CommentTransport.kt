@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-package com.hongguotv.desktop
+package com.hongguotv.core
 
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -22,9 +22,9 @@ internal class CommentTransport {
             .header("Accept","application/json").header("X-XS-From-Web","0").header("Sdk-Version","2").header("Comment-Source",source.toString()).header("Server-Channel",channel.toString())
             .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
         signature.headers(encoded).forEach { (k,v)->request.header(k,v) }
-        return http.newCall(request.build()).execute().use { response ->
+        return RequestScope.execute(http.newCall(request.build())) { response ->
             if(!response.isSuccessful) throw IOException("评论读取失败（HTTP ${response.code}）")
-            val bytes=response.body?.byteStream()?.readNBytes(2*1024*1024+1) ?: throw IOException("评论响应为空")
+            val bytes=response.body?.byteStream()?.let { readCommentBytes(it,2*1024*1024) } ?: throw IOException("评论响应为空")
             if(bytes.size>2*1024*1024) throw IOException("评论响应过大")
             JSONObject(String(bytes,Charsets.UTF_8))
         }

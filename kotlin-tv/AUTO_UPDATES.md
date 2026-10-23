@@ -6,7 +6,7 @@
 
 ## 发布流程
 
-1. 在 `app/build.gradle.kts` 调整 versionName，增加 versionCode。内部版本号必须超过此前所有分发 APK，包含内部测试包。允许跳过未公开的版本号，无需补发每个中间版本。环境变量可覆盖默认版本，打包后核对 APK 实际元数据。
+1. 在 `app/build.gradle.kts` 调整 versionName，增加 versionCode。正式发布内部版本号必须超过上一正式版本；调试过程中不递增，使用文件名区分。允许跳过未公开的版本号，无需补发每个中间版本。环境变量可覆盖默认版本，打包后核对 APK 实际元数据。
 2. 使用同一包名 `com.hongguotv.nativeapp` 和现有签名构建，检查最低系统、版本和签名。不要换用新 Debug 签名或将签名密钥提交到仓库。构建方法见 [README](README.md)。
 3. 执行 `./scripts/build-kotlin.sh`，自动在 `outputs/releases/<tag>/` 生成配套 APK 和 `update.json`。清单从实际 APK 提取版本、包名、最低系统，并计算大小和 SHA256；环境变量覆盖后的版本也会正确读取。直接运行 Gradle 或 IDEA 的普通构建任务仍只生成 APK。
 4. 在 GitCode 创建同仓库 Release。Target 选择实际打包所用的提交或分支；APK 若来自尚未合并的功能分支，不能误选 main。

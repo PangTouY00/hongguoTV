@@ -102,6 +102,7 @@ class MainActivity: Activity() {
     private val sleepTimer=SleepTimer { android.os.SystemClock.elapsedRealtime() }
     private var sleepStopped=false
     private var playerView: PlayerView?=null
+    private val social by lazy { TvSocial(this,{ player },{ if(screen=="player" || screen=="detail") detail?.let { data -> data.episodes.getOrNull(episodeIndex)?.let { data.series.id to it } } else null }) }
     private lateinit var favoriteMonitor: FavoriteMonitor
     private val favoriteBadges=mutableMapOf<String,TextView>()
     private var favoriteStatus: TextView?=null
@@ -919,7 +920,6 @@ class MainActivity: Activity() {
             return view
         }
         heading(playback,"播放偏好","所有剧集共用，播放中也可调整")
-        heading(device,"数据管理","本机记录的备份与恢复")
         lateinit var qualityButton: TextView
         qualityButton=setting(playback,"默认清晰度  ·  ${library.maxQuality}P") { showQualityPicker(qualityButton,false) }
         lateinit var defaultSpeed: TextView
@@ -931,21 +931,6 @@ class MainActivity: Activity() {
             library.autoNext=!library.autoNext
             autoNextButton.text="自动连播  ·  ${if(library.autoNext) "开启" else "关闭"}"
         }
-        lateinit var backup: TextView
-        backup=setting(device,"手机备份与恢复") {
-            runCatching { LibraryBackup.encode(library.snapshot()) }.onSuccess { encoded ->
-                tvTools.libraryTransfer(encoded,backup) { data,restoreSettings ->
-                    favoriteMonitor.stop(); library.restore(data,restoreSettings)
-                    tabState.clear(); tabFocus.clear(); catalogFocus=""; page=1
-                    showCatalog(); favoriteMonitor.check()
-                    Toast.makeText(this,"记录已合并恢复",Toast.LENGTH_LONG).show()
-                }
-            }.onFailure { tvTools.info("无法生成备份","本机记录暂时无法导出，请重试。",backup) }
-        }
-        lateinit var hidden: TextView
-        hidden=setting(device,"恢复隐藏推荐  ·  ${library.hidden().size} 部") {
-            library.unhideAll(); hidden.text="恢复隐藏推荐  ·  0 部"; Toast.makeText(this,"热门推荐已恢复",Toast.LENGTH_SHORT).show()
-        }
         heading(device,"应用与更新","检查新版、查看开源信息")
         lateinit var updates: TextView
         updates=setting(device,"版本与更新  ·  ${BuildConfig.VERSION_NAME}") { updater.show(updates) }
@@ -954,7 +939,7 @@ class MainActivity: Activity() {
         }
         heading(playback,"红果账户","账户收藏、历史与预约随账号同步")
         val account=setting(playback,"登录与账户管理") { cloudAccount.show() }
-        val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,account); val right=listOf(backup,hidden,updates,license)
+        val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,account); val right=listOf(updates,license)
         listOf(left,right).forEach { items -> items.forEachIndexed { index,view ->
             view.nextFocusUpId=items.getOrNull(index-1)?.id ?: nav[tab].id
             view.nextFocusDownId=items.getOrNull(index+1)?.id ?: view.id
@@ -1044,11 +1029,11 @@ class MainActivity: Activity() {
         val resumeIndex=progress?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } } ?: 0
         val watched=library.watched(data.series.id)
         val continueTarget=ResumePlayback.target(data.episodes,progress?.episodeId,progress?.position ?: 0,progress?.completed==true)
-        var focusEpisodes: ()->Unit={}
         val play=addButton(actions,if(watched) "重新观看" else if(progress!=null) "继续第 ${continueTarget.index+1} 集" else "开始观看") {
             playEpisode(if(watched) 0 else continueTarget.index,if(watched) 0 else continueTarget.position)
         }
-        val chooseEpisodes=addButton(actions,"选集 · 共 ${data.episodes.size} 集") { focusEpisodes() }
+        lateinit var detailComments: TextView
+        detailComments=addButton(actions,"评论 · 第 ${episodeIndex+1} 集") { social.showComments(detailComments) }
         val secondary=row().apply { setPadding(0,dp(8),0,0) };info.addView(secondary)
         accountFavoriteButton=addButton(secondary,cloudAccount.favoriteActionLabel(data.series.id)) {
             accountFavoriteAction(data.series,accountFavoriteButton)
@@ -1062,10 +1047,11 @@ class MainActivity: Activity() {
         }
         lateinit var synopsisButton: TextView
         synopsisButton=addButton(secondary,if(synopsisExpanded) "收起简介" else "完整简介") {
+            val previousScroll=scroll.scrollY
             synopsisExpanded=!synopsisExpanded
             synopsis.maxLines=if(synopsisExpanded) 20 else 2
             synopsisButton.text=if(synopsisExpanded) "收起简介" else "完整简介"
-            synopsisButton.post { synopsisButton.requestRectangleOnScreen(android.graphics.Rect(0,0,synopsisButton.width,synopsisButton.height),false) }
+            scroll.post { scroll.scrollTo(0,previousScroll) }
         }
         content.addView(hero)
         val groupRow=row(); groupRow.setPadding(0,dp(3),0,dp(5))
@@ -1085,12 +1071,10 @@ class MainActivity: Activity() {
             content.addView(line,lp(-1,dp(49)))
         }
         episodes.forEachIndexed { i,v -> v.nextFocusLeftId=if(i%10==0) v.id else episodes[i-1].id; v.nextFocusRightId=if(i%10==9 || i==episodes.lastIndex) v.id else episodes[i+1].id; if(i>=10) v.nextFocusUpId=episodes[i-10].id; v.nextFocusDownId=if(i+10<episodes.size) episodes[i+10].id else v.id }
-        focusEpisodes={
-            if(episodeIndex/20!=group) { group=episodeIndex/20;showDetail(true) }
-            else episodes.getOrNull(episodeIndex-group*20)?.requestFocus()
-        }
-        val primary=listOf(play,chooseEpisodes)
+        val primary=listOf(play,detailComments)
+        play.setTextColor(accent)
         val secondaryActions=listOf(accountFavoriteButton!!,favorite,synopsisButton)
+        secondaryActions.forEach { it.textSize=13f;it.setTextColor(muted) }
         primary.forEachIndexed { i,v -> v.nextFocusLeftId=primary.getOrNull(i-1)?.id ?: v.id;v.nextFocusRightId=primary.getOrNull(i+1)?.id ?: v.id;v.nextFocusDownId=secondaryActions[minOf(i,secondaryActions.lastIndex)].id }
         secondaryActions.forEachIndexed { i,v -> v.nextFocusUpId=primary[minOf(i,primary.lastIndex)].id;v.nextFocusLeftId=secondaryActions.getOrNull(i-1)?.id ?: v.id;v.nextFocusRightId=secondaryActions.getOrNull(i+1)?.id ?: v.id;v.nextFocusDownId=jump.id }
         episodes.take(10).forEach { it.nextFocusUpId=jump.id }
@@ -1123,6 +1107,7 @@ class MainActivity: Activity() {
     }
     private fun playEpisode(index: Int,position: Long=0,autoplay: Boolean=true,recovering: Boolean=false) {
         updater.interrupt()
+        social.reset()
         val data=detail ?: return
         var playbackStarted=android.os.SystemClock.elapsedRealtime()
         val reuse=screen=="player" && player!=null && playerView!=null && !recovering && !playError
@@ -1163,6 +1148,7 @@ class MainActivity: Activity() {
                 setKeepContentOnPlayerReset(true); setShutterBackgroundColor(Color.BLACK); setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
             }
             playerView=view; root.addView(view,FrameLayout.LayoutParams(-1,-1))
+            social.attach(root)
             hud=column().apply { setPadding(dp(widthDp()*.05f),dp(20),dp(widthDp()*.05f),(resources.displayMetrics.heightPixels*.05f).toInt()); background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.TRANSPARENT,Color.argb(240,11,15,21))) }
             playbackTitle=text("",23f).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setTypeface(null,Typeface.BOLD) }; hud.addView(playbackTitle)
             playbackText=text("",15f,muted).apply { setPadding(0,dp(10),0,dp(9)) }; hud.addView(playbackText)
@@ -1306,6 +1292,7 @@ class MainActivity: Activity() {
         library.save(old)
         cloudAccount.upload(CloudProgress(old.series,old.episodeId,old.episodeIndex,old.position,old.duration,old.updatedAt),data.episodes.size,true)
         val previous=video;val previousHttp=playbackHttp
+        social.reset()
         video=next;playbackHttp=queuedHttp;episodeIndex=queuedEpisode;group=episodeIndex/20
         queuedNext=null;queuedHttp=null;queuedEpisode=-1
         if(p.currentMediaItemIndex>0) p.removeMediaItems(0,p.currentMediaItemIndex)
@@ -1449,6 +1436,10 @@ class MainActivity: Activity() {
         val options=row().apply { setPadding(0,dp(8),0,0) }; controls.addView(options)
         lateinit var episodes: TextView
         episodes=addButton(options,"选集") { showEpisodePanel(episodes) }
+        lateinit var commentsButton: TextView
+        commentsButton=addButton(options,"评论") { social.showComments(commentsButton) }
+        lateinit var danmakuButton: TextView
+        danmakuButton=addButton(options,"弹幕设置") { social.settings(danmakuButton) }
         lateinit var more: TextView
         more=addButton(options,"播放设置") {
             tvTools.choose("播放设置",listOf("倍速 ${PlaybackSpeed.label(library.playbackSpeed)}","清晰度 ${library.maxQuality}P","画面 ${library.frameMode.label}","定时 ${sleepTimer.label()}","从头播放"),more,{ choice ->
@@ -1529,6 +1520,7 @@ class MainActivity: Activity() {
         cloudAccount.upload(CloudProgress(progress.series,progress.episodeId,progress.episodeIndex,progress.position,progress.duration,progress.updatedAt),data.episodes.size,completed || !p.isPlaying || !foreground)
     }
     private fun releasePlayer() {
+        social.reset()
         cancelRecovery(); cancelPrefetch(); mediaSession.deactivate(); tvTools.close()
         val wasForeground=foreground; foreground=false
         val oldPanel=episodePanel; episodePanel=null; oldPanel?.dismiss(); foreground=wasForeground
@@ -1602,7 +1594,7 @@ class MainActivity: Activity() {
         }
     }
     override fun onResume() {
-        super.onResume(); foreground=true; main.removeCallbacks(tick); main.post(tick)
+        super.onResume(); foreground=true; social.foreground(true); main.removeCallbacks(tick); main.post(tick)
         updater.resume()
         if(library.isLoaded) {
             if(initialCatalogPending) showCatalog(load=true)
@@ -1622,6 +1614,7 @@ class MainActivity: Activity() {
         } else libraryLoadError?.let(::showLibraryError)
     }
     override fun onPause() {
+        social.foreground(false)
         updater.pause();homeFeed?.pause()
         foreground=false; main.removeCallbacks(tick); cancelRecovery(); cancelPrefetch(); mediaSession.deactivate()
         sleepTimer.cancel(); favoriteMonitor.stop(); detailAutoplay=false; requestedAutoplay=false; pausedForLifecycle=true
@@ -1641,6 +1634,7 @@ class MainActivity: Activity() {
     override fun onDestroy() {
         generation++; cancelWork()
         if(networkRegistered) connectivity.unregisterNetworkCallback(networkCallback)
+        social.destroy()
         favoriteMonitor.destroy(); tvTools.destroy(); updater.destroy(); saveProgress(); cloudAccount.destroy(); releasePlayer(); library.close()
         artwork.close(); releaseCatalogViews(); mediaSession.release(); main.removeCallbacksAndMessages(null)
         io.shutdownNow(); prefetchWorker.shutdownNow(); networkCleanup.shutdown()

@@ -53,6 +53,8 @@ class RemoteVideo(private val http: OkHttpClient, val info: StreamInfo): Closeab
         if(prefix.size<size) prefix=prefix+range(prefix.size.toLong(),size-1L).bytes
         return this
     }
+    /** Bytes already held locally; a player can consume these before another network range. */
+    fun cachedBytes(start: Long): Int = (prefix.size.toLong()-start).coerceIn(0,Int.MAX_VALUE.toLong()).toInt()
     fun read(start: Long,length: Int): ByteArray {
         require(length in 1..1024*1024 && start>=0)
         if(closed) throw IOException("播放请求已取消")

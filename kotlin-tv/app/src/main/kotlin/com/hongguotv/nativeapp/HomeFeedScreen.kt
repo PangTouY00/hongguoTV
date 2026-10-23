@@ -151,15 +151,19 @@ internal class HomeFeedScreen(
         if(focusNav) nav[0].requestFocus() else stage.requestFocus()
         if(foreground) resume()
     }
+    private val prefetchPoll=object: Runnable { override fun run() {
+        if(!active || closed) return
+        prefetchUpcoming();main.postDelayed(this,1000)
+    } }
     fun resume() {
         if(closed || active) return
-        active=true
+        active=true;main.removeCallbacks(prefetchPoll);main.postDelayed(prefetchPoll,1000)
         if(clip!=null) { if(!state.userPaused && !state.ended) playback.resume();paintActions();prefetchUpcoming() }
         else if(state.current!=null) loadCurrent() else loadPage(false)
     }
     fun pause() {
         if(closed) return
-        remember();active=false;playback.pause();cancelRequest();cancelPrefetch();paintActions()
+        remember();active=false;main.removeCallbacks(prefetchPoll);playback.pause();cancelRequest();cancelPrefetch();paintActions()
     }
     fun back(): Boolean {
         if(actions.visibility!=View.VISIBLE) return false
@@ -266,7 +270,7 @@ internal class HomeFeedScreen(
     }
     /** One speculative download at a time, after the current player is ready. */
     private fun prefetchUpcoming() {
-        if(closed || !active || clip==null || failed || loading || prefetchJob!=null) return
+        if(closed || !active || clip==null || failed || loading || prefetchJob!=null || !playback.canPrefetch()) return
         trimCache()
         val upcoming=state.items.drop(state.index+1).take(3)
         val next=upcoming.firstOrNull { it.id !in cachedTrials && it.id !in attemptedPrefetch }
@@ -339,6 +343,7 @@ internal class HomeFeedScreen(
     }
     override fun close() {
         if(closed) return
+        main.removeCallbacks(prefetchPoll)
         clearCurrent();clearCache();closed=true;active=false;stage.keepScreenOn=false
         playback.release();backend.close();worker.shutdownNow()
     }

@@ -8,7 +8,7 @@
 - The active Android client is `kotlin-tv/`. Keep historical React Native sources unless the task specifically concerns their removal.
 - Run relevant checks. Native changes normally require `:core:test :app:testDebugUnitTest :app:assembleDebug :app:lintDebug`; documentation-only changes do not need Android builds.
 - APKs, build output, account sessions, phone numbers, verification codes, passwords, and signing keys must not be committed. Credentials must not appear in logs or documentation.
-- Preserve package identity and signing continuity for updates. Increase `versionCode` for each distributed APK.
+- Preserve package identity and signing continuity for updates. Increase `versionCode` for each formal release; keep versionName/versionCode unchanged during debugging and distinguish debug APKs by filename. Current TV release is 0.1.2; next formal release is 0.1.3.
 - App updates use only `tsukiyo-zero/hongguoTV` Releases. A source push or CI artifact is not a release. Follow `kotlin-tv/AUTO_UPDATES.md`; do not reintroduce the upstream cross-repository publishing workflow.
 
 - The user prefers to install APKs and perform manual emulator/TV tests themselves, then send screenshots. Run automated checks and package locally; do not operate the emulator or install test builds unless explicitly requested again.
