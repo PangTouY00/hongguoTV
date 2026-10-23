@@ -1,36 +1,57 @@
 # Mac 试验客户端
 
-TV 是主要维护目标。Mac 端目前仅验证搜索、剧集详情、选集和播放，不承诺与 TV 同步更新；不包含账号登录、收藏、推荐首页、历史记录、自动连播和应用内更新。
+TV 为主要维护目标。Mac 独立保留在 `feature-mac-client` 特性分支，不合并 main，按需要维护。Mac 版本与 Android 版本独立。
 
-## 运行
+## 安装和功能
 
-在本机生成的 `outputs/mac/HongguoTV.app` 可直接打开，也可拖入「应用程序」。当前构建针对 Apple Silicon（arm64），最低 macOS 13。自带精简 Java 17 运行环境，不需要另装 Java。使用本机临时签名，尚未经过 Apple 公证，不适合作为正式公共发行版。
+解压 `outputs/mac/HongguoTV-mac-arm64-0.2.0-test.zip`，打开 HongguoTV.app 或拖入「应用程序」。支持 Apple Silicon（arm64）、macOS 13+，自带 Java 17，不需另装运行环境。使用本机临时签名，未经 Apple 公证；当前用于本机试验。
 
-搜索剧名后，点击左侧结果，在右侧选择集数。播放控件支持暂停、音量、进度拖动及全屏。关闭窗口即退出并清理辅助进程。应用不写入账号信息和观看记录；视频只在内存中按需解密，不保存完整视频文件。
+左侧菜单可切换：
+
+- 搜索：全部剧集搜索、分页。
+- 找剧、榜单：真人剧、漫剧、AI 剧，题材筛选；榜单使用 TV 同款热播榜数据。
+- 推荐：官方综合、漫剧和真人剧推荐，换一批、加载更多。点击作品会试播首集，可点上一部、下一部、观看全集。推荐试播不写本机历史、不上传账号进度；点观看全集或选集后才进入正式观看。未实现 TV 的预加载无缝切换，也未验证账号个性化效果。
+- 收藏、历史：Mac 本机片单；支持右键管理。记录每 5 秒及切集、关闭时保存，继续播放按分集 ID 匹配。支持自动下一集、0.5～2 倍速、480/720/1080P 上限，切清晰度保留播放位置和暂停状态，实际清晰度取决于源提供的兼容资源。
+- 账户：红果官方扫码登录；账户收藏、账户历史、预约（已上线/待上线）。账户历史最多读取50条，预约每类最近20条；右键可操作账户收藏，相关作品的待上线项目可预约。
+- 更新：检查、下载、校验 Mac 更新包，最后由用户手动退出、解压、替换应用。
+
+剧集详情包含总集数和相关作品，可查看其他季。Mac 原生播放器提供暂停、音量、时间拖动、全屏等控件。关闭窗口会退出应用并停止辅助进程。
+
+## 数据和账号
+
+Mac 本机记录存于 `~/Library/Application Support/HongguoTVMac/library.json`，与 TV 数据分开。登录态只存于 macOS 钥匙串，不写入片单文件或仓库；辅助服务仅在内存中使用会话。退出账号清除钥匙串登录态与界面云端列表，保留本机收藏、历史。
+
+正式观看时每隔至少30秒上传一次进度。失败时保留本机记录并显示状态。扫码获取二维码已做匿名联网检查，实际账号授权、账户收藏写入、跨设备续播等需本人在手机和 Mac 对照验证；不把扫码成功等同于所有云端能力验证通过。
 
 ## 构建与验证
 
-需 JDK 17（含 jlink）、Gradle 8.14.3 和 Xcode Command Line Tools。构建当前机器架构的应用：
+需 JDK 17（含 jlink）、Gradle 8.14.3、Xcode Command Line Tools。独立 Gradle 工程直接复用 `kotlin-tv/core`，不会改 TV 构建配置、包名、版本或更新源。
 
 ```sh
 JAVA_HOME=/你的/JDK17路径 \
 HONGGUOTV_GRADLE=/你的/gradle路径 \
 bash scripts/build-mac.sh
-```
 
-可选联网验证（会访问官方匿名接口并播放一集的部分内容，不需要登录）：
+# 不联网的记录、清单校验测试
+bash scripts/test-mac-local.sh
 
-```sh
+# 自愿执行的匿名联网测试：搜索、分类、榜单、相关、推荐、二维码生成、原生播放和拖动
 python3 scripts/test-mac.py
 ```
 
-验证搜索、分页、详情、本地服务访问限制、Range 响应、AVPlayer 流式解码及拖动、辅助进程退出。测试不操作电视或 Android 模拟器。
+`tests/ModelSmoke.swift` 还验证实际播放控制的进度持久化、暂停状态下切清晰度、倍速、自动下一集和试播记录隔离；使用临时记录，禁用账号恢复。未操作 TV 或 Android 模拟器。
 
-## 结构与边界
+## Mac 更新发布
 
-- `Sources/`：SwiftUI 窗口与 AVKit 原生播放界面。
-- `backend/`：复用 `kotlin-tv/core` 中的搜索、详情、播放解析、MP4 解密。仅监听随机的 `127.0.0.1` 端口，随机路径令牌，拒绝携带 Origin 的跨站请求。
-- 独立 Gradle 工程，不改变 TV 的构建配置、包名、版本或更新源。
-- 视频窗口使用 NSViewRepresentable 包装 AVPlayerView；避免当前系统中 SwiftUI VideoPlayer 初始化 _AVKit_SwiftUI 导致的崩溃。已在实际窗口验证打开详情和播放首集。
-- 网站接口及 macOS 支持的媒体格式会影响可用性。已验证的样本不代表全部剧集都兼容。
-- GPL-3.0-only；保留仓库历史和第三方许可。构建产物内附 LICENSE 与第三方声明，发布时须提供对应源码。
+构建自动产生 ZIP 和 **mac-update.json**，与电视的 update.json 区分。
+
+Mac 固定读取同仓库 GitCode Release **mac-stable** 的 mac-update.json。首次发布时建立此标签/发行版，但**不要设为 Latest**；Latest 保留给 TV。后续在 mac-stable 上传新版本 ZIP、替换 mac-update.json，旧 ZIP 可保留。每次提高 Info.plist 的 CFBundleVersion，清单依据实际 bundle 元数据和 ZIP 哈希生成。
+
+不要将 mac-update.json 改名为 update.json，也不要用 Mac 包替换电视附件。Mac 更新只允许 GitCode 及其官方文件 CDN 的 HTTPS 跳转，检查大小和 SHA256 后保存到下载目录，不自动执行或替换应用。
+
+## 实现与边界
+
+- SwiftUI 窗口、AVPlayerView 原生播放器，避免当前系统 SwiftUI VideoPlayer 的初始化崩溃。
+- 后端复用搜索、详情、账号、推荐和 MP4 解密；随机 127.0.0.1 端口及路径令牌，拒绝带 Origin 的跨站请求；账号写操作要求 POST。
+- 视频按需在内存中解密，不持久化完整影片。网站接口及系统支持的媒体格式会影响可用性，样本验证不代表全部剧集均兼容。
+- GPL-3.0-only；保留仓库历史和第三方声明，构建产物包含 LICENSE/NOTICE。分发时提供对应特性分支的实际源码提交。

@@ -14,6 +14,9 @@ import java.util.concurrent.Executors
 /** Private loopback bridge. The native player receives decrypted ranges, never account data. */
 fun main() {
     val repository=ContentRepository()
+    var feedCursor=DramaFeedState().recommendationCursor
+    val catalogLock=Any()
+    val account=MacAccount(repository)
     val token=UUID.randomUUID().toString()
     val server=HttpServer.create(InetSocketAddress("127.0.0.1",0),16)
     val executor=Executors.newFixedThreadPool(6)
@@ -30,27 +33,60 @@ fun main() {
     server.createContext("/") { exchange ->
         try {
             val path=exchange.requestURI.path
-            if(!path.startsWith("/$token/") || exchange.requestMethod !in setOf("GET","HEAD") || exchange.requestHeaders.getFirst("Origin")!=null) {
+            if(!path.startsWith("/$token/") || exchange.requestMethod !in setOf("GET","HEAD","POST") || exchange.requestHeaders.getFirst("Origin")!=null) {
                 exchange.sendResponseHeaders(403,-1);return@createContext
             }
             val query=exchange.requestURI.rawQuery.orEmpty().split('&').filter { it.contains('=') }.associate {
                 val parts=it.split('=',limit=2)
                 URLDecoder.decode(parts[0],"UTF-8") to URLDecoder.decode(parts[1],"UTF-8")
             }
-            when(path.removePrefix("/$token/")) {
+            val operation=path.removePrefix("/$token/")
+            if(operation.startsWith("account/")) {
+                json(exchange,account.handle(exchange,operation.removePrefix("account/"),query));return@createContext
+            }
+            when(operation) {
                 "search" -> {
                     val result=repository.searchAll(query["q"].orEmpty(),query["page"]?.toInt() ?: 1)
                     json(exchange,JSONObject().put("items",JSONArray(result.items.map { it.toJson() })).put("hasMore",result.hasMore))
+                }
+                "catalog" -> {
+                    val category=DramaCategory.valueOf(query["category"] ?: "COMIC")
+                    val page=query["page"]?.toInt() ?: 1
+                    val result=repository.discover(category,query["topic"].orEmpty(),page)
+                    json(exchange,JSONObject().put("items",JSONArray(result.items.map { it.toJson() })).put("hasMore",result.hasMore)
+                        .put("topics",JSONArray(result.discovery?.topics.orEmpty().map { JSONObject().put("id",it.id).put("label",it.label) })))
+                }
+                "rank" -> {
+                    val snapshot=repository.rankSnapshot(RankBoard.valueOf(query["board"] ?: "COMIC"))
+                    val positions=JSONObject().apply { snapshot.ranking.positions.forEach { (id,value) -> put(id,JSONObject().put("rank",value.rank ?: JSONObject.NULL).put("heat",value.heat)) } }
+                    json(exchange,JSONObject().put("items",JSONArray(snapshot.filtered(query["topic"].orEmpty()).map { it.toJson() })).put("hasMore",false).put("positions",positions)
+                        .put("topics",JSONArray(snapshot.topics.map { JSONObject().put("id",it).put("label",it) })))
+                }
+                "feed" -> synchronized(catalogLock) {
+                    if(query["refresh"]=="true") feedCursor=feedCursor.nextBatch()
+                    val category=query["category"]?.takeIf { it!="ALL" }?.let { DramaCategory.valueOf(it) }
+                    val page=query["page"]?.toInt() ?: 1
+                    if(page==1 && query["refresh"]!="true") feedCursor=DramaFeedState().recommendationCursor
+                    val result=RecommendationFeed(repository.http,account=account.snapshot(),cursor=feedCursor,category=category).page(page)
+                    json(exchange,JSONObject().put("items",JSONArray(result.items.map { it.toJson() })).put("hasMore",result.hasMore).put("topics",JSONArray()))
+                }
+                "related" -> {
+                    val items=repository.related(query["id"].orEmpty())
+                    json(exchange,JSONObject().put("items",JSONArray(items.map { JSONObject().put("series",it.series.toJson()).put("season",it.season).put("upcoming",it.upcoming) })))
                 }
                 "detail" -> {
                     val detail=repository.detail(query["id"].orEmpty())
                     json(exchange,JSONObject().put("series",detail.series.toJson()).put("episodes",JSONArray(detail.episodes)))
                 }
                 "play" -> {
-                    val clip=RemoteVideo(repository.http,repository.stream(query["id"].orEmpty(),1080)).prepare()
+                    val quality=query["quality"]?.toInt() ?: 1080
+                    require(quality in setOf(480,720,1080))
+                    val stream=repository.stream(query["id"].orEmpty(),quality)
+                    val clip=RemoteVideo(repository.http,stream)
+                    try { clip.prepare() } catch(problem: Exception) { clip.close();throw problem }
                     val id=UUID.randomUUID().toString()
                     synchronized(lock) { current?.second?.close();current=id to clip }
-                    json(exchange,JSONObject().put("url","http://127.0.0.1:${server.address.port}/$token/video?id=$id"))
+                    json(exchange,JSONObject().put("url","http://127.0.0.1:${server.address.port}/$token/video?id=$id").put("quality",stream.quality))
                 }
                 "stop" -> { synchronized(lock) { current?.second?.close();current=null };json(exchange,JSONObject().put("ok",true)) }
                 "video" -> {
@@ -91,7 +127,8 @@ fun main() {
     }
     Runtime.getRuntime().addShutdownHook(Thread {
         synchronized(lock) { current?.second?.close();current=null }
-        server.stop(0);executor.shutdownNow()
+        repository.http.dispatcher.cancelAll()
+        account.close();server.stop(0);executor.shutdownNow()
         repository.http.dispatcher.cancelAll();repository.http.connectionPool.evictAll()
         repository.http.dispatcher.executorService.shutdownNow()
     })
