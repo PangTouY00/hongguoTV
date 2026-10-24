@@ -46,6 +46,78 @@
 
 本集评论可连续读取，整剧剧评仍为官网公开节选。评论和弹幕均只读，未提供发送、回复或点赞操作；首页首集试播暂未接入评论与弹幕。实现与验收边界见 [评论与弹幕说明](kotlin-tv/SOCIAL.md)。
 
+## TV 界面预览
+
+### 首页
+
+推荐试播、接着看、收藏更新与稍后看。
+
+![首页](docs/screenshots/tv-home.png)
+
+### 分类找剧
+
+支持关键词搜索、分类与题材筛选，以及手机扫码输入。
+
+![分类找剧](docs/screenshots/tv-discover.png)
+
+### 排行榜
+
+查看综合、真人剧、漫剧和 AI 剧热播榜，支持榜内题材筛选。
+
+![排行榜](docs/screenshots/tv-ranking.png)
+
+### 收藏
+
+本机收藏与账户收藏分开管理，本机收藏支持检查剧集更新。
+
+![收藏](docs/screenshots/tv-favorites.png)
+
+### 观看历史
+
+查看本机或账户观看历史，接着上次的位置继续播放。
+
+![观看历史](docs/screenshots/tv-history.png)
+
+### 账户预约
+
+查看待上线与已上线作品，及时发现预约剧集的上线情况。
+
+![账户预约](docs/screenshots/tv-reservations.png)
+
+### 剧集详情
+
+查看简介、选择集数、管理收藏，浏览相关作品与其他季。
+
+![剧集详情](docs/screenshots/tv-detail.png)
+
+### 播放与选集
+
+支持清晰度、倍速、画面模式、自动连播与定时停止。
+
+![播放界面](docs/screenshots/tv-player.png)
+
+![播放选集](docs/screenshots/tv-episodes.png)
+
+### 评论与弹幕
+
+本集评论支持连续加载，时间轴弹幕可调整字号、速度和密度。
+
+![本集评论](docs/screenshots/tv-comments.png)
+
+![弹幕效果](docs/screenshots/tv-danmaku.png)
+
+### 账户管理
+
+扫码登录红果，管理账号并查看同步状态。
+
+![账户管理](docs/screenshots/tv-account.png)
+
+### 设置
+
+调整播放偏好，检查应用更新。
+
+![设置](docs/screenshots/tv-settings.png)
+
 ## Mac 客户端 hongguoMac
 
 支持 **Apple Silicon（M 系列芯片）、macOS 13 及以上**。解压 ZIP，将 `hongguoMac.app` 拖入「应用程序」即可使用，自带运行环境，无需另外安装 Java。
