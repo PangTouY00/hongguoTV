@@ -94,3 +94,11 @@ API 23/26 的播放器接口替身测试检查追加/领取资源、无需重启
 - GitCode 更新：先匿名请求 releases/latest?type=latest，再按 tag 读取 update.json；清单标签须与 Latest 一致。附件使用 gitcode.com 稳定地址，跟随 file-cdn.gitcode.com 的临时签名跳转，不能持久化 CDN 地址。源码同步不等于发布，需单独上传配套附件并设为 Latest。GitHub 旧版需一次覆盖升级。
 
 - 搜索网页现改为客户端加载，/search/<keyword> 不再包含 _ROUTER_DATA。全部剧集搜索应读取官方 GET /api/search/result?query=<encoded>&page=N，响应直接包含 searchList、pageNum、totalPages、hasMore；video_data 为对象。不要把 HTML 页面或缺少 searchList 的响应当作空结果。已用“大佬”验证前两页各 10 条。
+
+## 找剧组合筛选（2026-10-24）
+
+- TV 找剧使用官网 App 的 `POST /reading/distribution/category/landpage/v/`，与首页兼容目录和 Mac 使用的网页分类分开。查询版本参数在此请求内设为 73532，沿用本项目签名器；匿名实测全部、真人、漫剧、AI 均返回剧集。
+- 条件放在 `select_items`：`genre`、`category_dim_theme`、`category_dim_role`、`category_dim_epoch`、`sort`、`gender`、`online_time`、`creation_status`，各值为数组；空数组代表不限制，不能将 `gender=["0"]` 当成全部，它代表女频。选项 ID 与分组来自 `selector_rows`，不从旧网页分类路径猜测。
+- 首批 `offset=0`、`need_selector_panel=true`、`req_type=default`；续批使用响应的 `next_offset` 和 `session_id`，`req_type=only_content`。最多 100 批；偏移不前进或续页会话缺失时报错，不按本地条数伪造游标。会话不进入日志或文档样例。
+- 卡片来自 `data.video_data`，读取 `series_id`、`title`、`cover`、`episode_cnt`、`video_desc` 和 `category_schema`；加载失败保留列表，改变条件或离开页面使旧回调作废。组合条件变化从首批开始，切类型清空旧条件。
+- HGTV 1.2.3 正式包的分类协议与其公开 main 的旧网页分类实现不同。本轮仅静态核对公开包的接口字段，并直接向平台验证协议，未移植它的实现代码；不以公开 main 的单行分类作为 1.2.3 功能边界。

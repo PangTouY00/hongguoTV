@@ -17,7 +17,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.annotation.LooperMode
-import org.robolectric.shadows.ShadowAlertDialog
 import org.robolectric.shadows.ShadowLooper
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Future
@@ -37,25 +36,29 @@ class DramaDiscoveryScreenTest {
         decor.measure(View.MeasureSpec.makeMeasureSpec(960,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(540,View.MeasureSpec.EXACTLY));decor.layout(0,0,960,540)
         ShadowLooper.idleMainLooper()
     }
-    private fun response(request: Request): String {
-        if(request.url.encodedPath=="/incent_resource/suggestion")
-            return """{"suggest_list":[{"name":"大佬，你该出手了"}]}"""
-        val searching=request.url.encodedPath=="/api/search/result"
-        val page=request.url.queryParameter("page")?.toInt() ?: 1
-        val pieces=request.url.pathSegments
-        val type=pieces.getOrNull(1) ?: "comic-drama"
-        val topic=pieces.getOrNull(2).orEmpty()
-        val id=if(searching) "900" else (100+page).toString()
-        val rows=JSONArray().put(JSONObject().put("series_id",id).put("series_name",if(searching) "搜索结果剧" else "分类第$page 页"))
-        val section=if(searching) JSONObject().put("hasMore",false).put("searchList",rows)
-        else JSONObject().put("isSuccess",true).put("recommendList",rows)
-            .put("categoryRoute",JSONObject().put("contentType",type).put("enabled",true).put("canonicalPath",request.url.encodedPath))
-            .put("selectorList",JSONArray().put(JSONObject().put("items",JSONArray().put(JSONObject().put("selector_item_id",if(type=="real-drama") "romance" else "fantasy").put("show_name",if(type=="real-drama") "爱情" else "玄幻")))))
-            .put("pagination",JSONObject().put("pageNum",page).put("totalPages",2).put("pageSize",24).put("total",48))
-        if(searching) return section.toString()
-        return "<script>_ROUTER_DATA="+JSONObject().put("loaderData",JSONObject().put(if(searching) "search_page" else "category_$",section))+";</script>"
+    private fun body(request: Request): JSONObject {
+        val buffer=okio.Buffer();request.body!!.writeTo(buffer);return JSONObject(buffer.readUtf8())
     }
-    @Test fun browseSearchAndReturnPreserveServerCategoryPageAndFocus() {
+    private fun views(view: View): List<View> = listOf(view)+(if(view is ViewGroup) (0 until view.childCount).flatMap { views(view.getChildAt(it)) } else emptyList())
+    private fun response(request: Request): String {
+        if(request.url.encodedPath=="/incent_resource/suggestion") return """{"suggest_list":[{"name":"大佬，你该出手了"}]}"""
+        if(request.url.encodedPath=="/api/search/result") return """{"hasMore":false,"searchList":[{"series_id":"900","series_name":"搜索结果剧"}]}"""
+        val input=body(request);val offset=input.getInt("offset")
+        val real=input.getJSONObject("select_items").getJSONArray("genre").optString(0)=="short_play"
+        val rows=JSONArray()
+        fun row(type: String,vararg options: Pair<String,String>) {
+            rows.put(JSONObject().put("type",type).put("items",JSONArray().apply { options.forEach { (id,name) -> put(JSONObject().put("selector_item_id",id).put("show_name",name)) } }))
+        }
+        row("genre","short_play" to "真人剧","comic_series" to "漫剧","ai_series" to "AI剧")
+        row("category_dim_theme",(if(real) "cate_5000" else "cate_7") to if(real) "爱情" else "玄幻")
+        row("category_dim_role","cate_36" to "重生");row("category_dim_epoch","cate_1" to "都市")
+        row("sort","hot_score" to "最高热度");row("gender","0" to "女频","1" to "男频");row("online_time","days_7" to "7天内上新")
+        val data=JSONObject().put("video_data",JSONArray().put(JSONObject().put("series_id","${101+offset}").put("title","分类第${offset+1}页")))
+            .put("has_more",offset==0).put("next_offset",offset+1).put("session_id","test-cursor")
+        if(input.getBoolean("need_selector_panel")) data.put("selector_rows",rows)
+        return JSONObject().put("code",0).put("data",data).toString()
+    }
+    @Test fun combinedFiltersPagingSearchAndReturnKeepServerConditionsAndSelection() {
         val controller=Robolectric.buildActivity(MainActivity::class.java).create();val activity=controller.get()
         try {
             val library=get(activity,"library") as Library
@@ -74,62 +77,38 @@ class DramaDiscoveryScreenTest {
             MainActivity::class.java.getDeclaredMethod("switchTab",Int::class.javaPrimitiveType).apply { isAccessible=true }.invoke(activity,1)
             pump(activity)
             val root=activity.findViewById<View>(android.R.id.content)
-            assertTrue(texts(root).any { it.text.toString()=="找剧" })
-            assertTrue(texts(root).any { it.text.toString()=="分类第1 页" })
-            val initial=get(activity,"continuousCatalog") as ContinuousCatalogView
-            assertTrue("Poster ${initial.grid.getChildAt(0).height} fits the TV list viewport ${initial.grid.height}",initial.grid.getChildAt(0).height<=initial.grid.height)
-            val typing=get(activity,"searchInput") as EditText
-            typing.setText("dalao")
-            ShadowLooper.idleMainLooper(350,TimeUnit.MILLISECONDS)
-            val suggestions=get(activity,"searchSuggestions") as SearchSuggestionsView
-            (get(suggestions,"job") as Future<*>).get(5,TimeUnit.SECONDS)
-            ShadowLooper.idleMainLooper();layout(activity)
-            val suggestion=texts(root).single { it.text.toString()=="大佬，你该出手了" }
-            assertEquals(suggestion.id,typing.nextFocusDownId)
-            assertTrue(initial.grid.getChildAt(0).height<=initial.grid.height)
-            assertEquals(1,get(activity,"page"));assertEquals(1,initial.grid.adapter.count)
-            typing.setText("");layout(activity)
-            texts(root).single { it.text.toString().startsWith("题材：") }.performClick()
-            val dialog=ShadowAlertDialog.getLatestAlertDialog()
-            texts(dialog.window!!.decorView).single { it.text.toString()=="玄幻" }.performClick();pump(activity)
-            assertEquals("/category/comic-drama/fantasy",requests.last().url.encodedPath)
-            failNext.set(true)
-            texts(root).single { it.text.toString()=="加载更多" }.performClick();pump(activity)
-            assertEquals(1,get(activity,"page"))
-            assertTrue(texts(root).any { it.text.toString()=="分类第1 页" })
-            texts(root).single { it.text.toString()=="重试加载" }.performClick();pump(activity)
-            assertEquals(2,get(activity,"page"))
-            val browser=get(activity,"continuousCatalog") as ContinuousCatalogView
+            assertNotNull(root.findViewById<View>((get(activity,"searchInput") as EditText).nextFocusDownId))
+            for(label in listOf("主题","设定","背景","推荐","受众","时间")) assertTrue(label,texts(root).any { it.text.toString()==label })
+            texts(root).single { it.text.toString()=="重生" }.performClick();pump(activity)
+            texts(root).single { it.text.toString()=="都市" }.performClick();pump(activity)
+            val selected=body(requests.last()).getJSONObject("select_items")
+            assertEquals("cate_36",selected.getJSONArray("category_dim_role").getString(0))
+            assertEquals("cate_1",selected.getJSONArray("category_dim_epoch").getString(0))
+            assertTrue(texts(root).single { it.text.toString()=="都市" }.hasFocus())
+            val browser=views(root).filterIsInstance<ContinuousCatalogView>().single()
+            failNext.set(true);browser.next.performClick();pump(activity)
+            assertEquals(1,browser.grid.adapter.count)
+            assertEquals("重试加载",browser.next.text.toString())
+            browser.next.performClick();pump(activity)
+            assertEquals("test-cursor",body(requests.last()).getString("session_id"))
+            assertEquals(1,body(requests.last()).getInt("offset"));assertEquals(2,browser.grid.adapter.count)
             browser.grid.setSelection(1);browser.enter();layout(activity)
-            assertEquals("before search selection","102",browser.capture()?.id)
-            val input=get(activity,"searchInput") as EditText
-            assertNotEquals(browser.grid.id,input.nextFocusDownId)
-            input.setText("大佬")
+            assertEquals("102",browser.capture()?.id)
+            val state=get(activity,"discoveryBrowser") as DiscoveryBrowserState
+            assertTrue(state.expanded)
+            val input=get(activity,"searchInput") as EditText;input.setText("大佬")
             texts(root).single { it.text.toString()=="搜索" }.performClick();pump(activity)
             assertTrue(texts(root).any { it.text.toString()=="搜索结果剧" })
-            assertFalse(texts(root).any { it.text.toString().startsWith("题材：") })
-            assertEquals("saved category selection","102",(get(activity,"discovery") as DramaDiscoveryState).browse?.focus)
             val count=requests.size
-            texts(root).single { it.text.toString()=="返回分类" }.performClick()
+            texts(root).single { it.text.toString()=="返回分类" }.performClick();layout(activity)
             assertEquals(count,requests.size)
-            assertEquals("",get(activity,"query"));assertEquals(2,get(activity,"page"))
-            assertEquals("fantasy",(get(activity,"discovery") as DramaDiscoveryState).topic)
-            layout(activity)
-            assertTrue(texts(root).any { it.text.toString()=="分类第2 页" })
-            val restored=get(activity,"continuousCatalog") as ContinuousCatalogView
-            assertTrue(restored.grid.hasFocus());assertEquals("102",restored.capture()?.id)
-            assertEquals(2,restored.grid.adapter.count) // Both pages remain in the list after returning.
-            // Inline topics use the same server route as the complete-topic dialog.
-            texts(root).single { it.text.toString()=="全部题材" }.performClick();pump(activity)
-            assertEquals("/category/comic-drama",requests.last().url.encodedPath)
-            assertEquals("",(get(activity,"discovery") as DramaDiscoveryState).topic)
-            texts(root).single { it.text.toString()=="玄幻" }.performClick();pump(activity)
-            assertEquals("/category/comic-drama/fantasy",requests.last().url.encodedPath)
-            assertTrue(texts(root).single { it.text.toString()=="玄幻" }.hasFocus())
+            val restored=views(root).filterIsInstance<ContinuousCatalogView>().single()
+            assertEquals("102",restored.capture()?.id);assertEquals(2,restored.grid.adapter.count)
+            assertEquals("cate_36",state.selection.values["category_dim_role"])
             texts(root).single { it.text.toString()=="真人剧" }.performClick();pump(activity)
-            assertEquals("/category/real-drama",requests.last().url.encodedPath)
-            assertEquals("",(get(activity,"discovery") as DramaDiscoveryState).topic)
-            assertEquals(listOf("爱情"),(get(activity,"discovery") as DramaDiscoveryState).info!!.topics.map { it.label })
+            assertEquals(mapOf("genre" to "short_play"),state.selection.values)
+            assertTrue(texts(root).any { it.text.toString()=="爱情" })
+            assertFalse(texts(root).any { it.text.toString()=="玄幻" })
         } finally { controller.destroy() }
     }
 }

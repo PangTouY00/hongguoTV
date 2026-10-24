@@ -89,12 +89,8 @@ class MainActivity: Activity() {
     private lateinit var library: Library
     private var searchDraft: String?=null
     private var searchSuggestions: SearchSuggestionsView?=null
-    private val discovery=DramaDiscoveryState()
-    private val discoveryFilters=mutableListOf<View>()
-    private var discoveryTopicRow: LinearLayout?=null
-    private val discoveryTopicChips=linkedMapOf<String,TextView>()
-    private var discoveryStatus: TextView?=null
-    private var discoveryTopic: TextView?=null
+    private val discoveryBrowser=DiscoveryBrowserState()
+    private var discoveryScreen: DiscoveryScreen?=null
     private lateinit var tvTools: TvTools
     private lateinit var updater: AppUpdater
     private data class DetailVisit(val detail: Detail,val episode: Int,val group: Int)
@@ -313,7 +309,7 @@ class MainActivity: Activity() {
     }
     private fun releaseCatalogViews() {
         searchSuggestions?.close();searchSuggestions=null
-        discoveryTopicRow=null;discoveryTopicChips.clear()
+        discoveryScreen?.close();discoveryScreen=null
         continuousCatalog?.let { view ->
             view.capture()?.let { continuousPositions[continuousKey]=it }
             view.close()
@@ -326,7 +322,7 @@ class MainActivity: Activity() {
         catalogScroll?.let { scrollPositions[catalogPageKey]=it.scrollY }
         catalogBody=null
         homeScreen=null; selectionPreview=null; catalogScroll=null
-        nav.clear(); discoveryFilters.clear();discoveryStatus=null;discoveryTopic=null; sourceButtons.clear(); typeButtons.clear(); searchInput=null; searchButton=null; searchActions.clear()
+        nav.clear(); sourceButtons.clear(); typeButtons.clear(); searchInput=null; searchButton=null; searchActions.clear()
         historyManage=null; rankRefresh=null; rankSubtitle=null; collectionBack=null; favoriteBadges.clear()
         favoriteStatus=null; favoriteCheck=null; homeUpdates=null; resumeCards.clear()
         catalogCards.clear(); cardImages.clear()
@@ -512,34 +508,20 @@ class MainActivity: Activity() {
             nav.forEach { it.nextFocusDownId=input.id }
             input.setOnEditorActionListener { _,_,_-> search(); true }; container.addView(searchRow)
             searchSuggestions=SearchSuggestionsView(this,input,listOfNotNull(searchButton)+searchActions,
-                { if(query.isBlank()) discoveryFilters.getOrNull(discovery.category.ordinal)
+                { if(query.isBlank()) discoveryScreen?.entry()
                   else continuousCatalog?.grid ?: catalogBody?.getFocusables(View.FOCUS_DOWN)?.firstOrNull() },
                 repository::searchSuggestions,::runSearch).also { container.addView(it) }
             if(query.isBlank()) {
-                val filters=row().apply { setPadding(0,dp(8),0,dp(5)) }
-                DramaCategory.entries.forEach { category ->
-                    discoveryFilters+=addButton(filters,category.label,discovery.category==category) {
-                        if(discovery.category!=category) changeDiscovery(category,"")
-                    }.apply { nextFocusUpId=input.id }
-                }
-                filters.addView(Space(this),lp(0,1).apply { weight=1f })
-                discoveryTopic=addButton(filters,"题材：${discovery.topicLabel()}") { chooseDiscoveryTopic() }.apply { nextFocusUpId=input.id;isEnabled=discovery.info!=null }
-                discoveryFilters+=discoveryTopic!!
-                discoveryFilters+=addButton(filters,"重置") { changeDiscovery(discovery.category,"") }.apply { nextFocusUpId=input.id }
-                discoveryFilters+=addButton(filters,"刷新") { saveDiscoveryDraft();showCatalog(true,focusType=true) }.apply { nextFocusUpId=input.id }
-                container.addView(filters)
-                val topics=row().apply { setPadding(0,0,0,dp(5)) }
-                topics.addView(text("题材",12f,muted),lp(dp(40),-2))
-                val topicScroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false;isFocusable=false }
-                discoveryTopicRow=row();topicScroll.addView(discoveryTopicRow)
-                topics.addView(topicScroll,lp(0,-2).apply { weight=1f });container.addView(topics)
-                renderDiscoveryTopics()
-                discoveryStatus=text(discoveryDescription(),12f,muted).apply { maxLines=1;ellipsize=TextUtils.TruncateAt.END;setPadding(0,0,0,dp(5)) }
-                container.addView(discoveryStatus)
-                val selected=discoveryFilters[discovery.category.ordinal]
-                input.nextFocusDownId=selected.id
-                searchButton?.nextFocusDownId=selected.id;searchActions.forEach { it.nextFocusDownId=selected.id }
-            } else container.addView(text("关键词搜索覆盖全部剧集 · 返回分类可按类型和题材找剧",12f,muted).apply { setPadding(0,dp(6),0,dp(5)) })
+                val browser=DiscoveryScreen(this,discoveryBrowser,input,::loadCover,
+                    { openDetail(it,false) },::quickActions,
+                    { selection,cursor,done -> work({ repository.filteredDiscovery(selection,cursor) },{ done(it,null) },{ done(null,it) }) })
+                discoveryScreen=browser;browser.navigationChanged={ searchSuggestions?.updateNavigation() }
+                container.addView(browser,lp(-1,0).apply { weight=1f })
+                browser.start(!focusNav);searchSuggestions?.updateNavigation()
+                if(focusNav) nav[tab].requestFocus()
+                return
+            }
+            container.addView(text("关键词搜索覆盖全部剧集 · 返回分类可组合筛选",12f,muted).apply { setPadding(0,dp(6),0,dp(5)) })
 
         } else if(tab>2) {
             val heading=row().apply { setPadding(0,dp(12),0,dp(6)) }
@@ -608,11 +590,10 @@ class MainActivity: Activity() {
         }
         if(load) {
             if(tab==0) catalogGrid(body,focusNav,focusType,loading=true)
-            else { message(body,"正在加载…"); if(tab==1 && focusType && discoveryFilters.isNotEmpty()) discoveryFilters[discovery.category.ordinal].requestFocus() else if(focusType) typeButtons[library.contentType]?.requestFocus() else nav[tab].requestFocus() }
+            else { message(body,"正在加载…"); if(focusType) typeButtons[library.contentType]?.requestFocus() else nav[tab].requestFocus() }
             val requestTab=tab; val requestPage=page; val requestQuery=query; val requestType=library.contentType
-            val requestCategory=discovery.category;val requestTopic=discovery.topic
             work({
-                val result=when(requestTab) { 0 -> repository.home(requestPage,requestType); 2 -> repository.comicRanking(requestPage); else -> if(requestQuery.isBlank()) repository.discover(requestCategory,requestTopic,requestPage) else repository.searchAll(requestQuery,requestPage) }
+                val result=when(requestTab) { 0 -> repository.home(requestPage,requestType); 2 -> repository.comicRanking(requestPage); else -> repository.searchAll(requestQuery,requestPage) }
                 result
             }, { result ->
                 if(requestTab==0 && requestPage==1) library.cacheHome(requestType,result.items,result.hasMore)
@@ -622,22 +603,12 @@ class MainActivity: Activity() {
                 } else {
                     catalog=result.items; hasMore=result.hasMore; ranking=result.ranking
                     val keepNav=nav.any { it.hasFocus() }; val keepType=typeButtons.values.any { it.hasFocus() }
-                    val keepDiscovery=discoveryFilters.indexOfFirst { it.hasFocus() };val keepInput=searchInput?.hasFocus()==true
-                    val keepTopic=discoveryTopicChips.entries.firstOrNull { it.value.hasFocus() }?.key
+                    val keepInput=searchInput?.hasFocus()==true
                     val keepSuggestion=searchSuggestions?.findFocus()
-                    if(requestTab==1 && requestQuery.isBlank()) {
-                        discovery.info=result.discovery
-                        discovery.browse=DiscoveryMemory(page,catalog,hasMore,catalogFocus,result.discovery)
-                        discoveryStatus?.text=discoveryDescription()
-                        discoveryTopic?.text="题材：${discovery.topicLabel()}";discoveryTopic?.isEnabled=true
-                        renderDiscoveryTopics()
-                    }
                     rankSubtitle?.text=ranking?.updatedText?.ifBlank { "来源：红果漫剧热播榜" } ?: "来源：红果漫剧热播榜"
                     body.removeAllViews(); catalogGrid(body,keepNav || focusNav,keepType || focusType)
                     if(keepInput) searchInput?.requestFocus()
                     else if(keepSuggestion!=null) keepSuggestion.requestFocus()
-                    else if(keepTopic!=null) discoveryTopicChips[keepTopic]?.requestFocus()
-                    else if(keepDiscovery>=0) discoveryFilters.getOrNull(keepDiscovery)?.requestFocus()
                 }
             }, { problem ->
                 if(requestTab==0 && requestPage==1) {
@@ -672,7 +643,7 @@ class MainActivity: Activity() {
             body.addView(heading)
             typeButtons.values.forEach { it.nextFocusDownId=collectionBack!!.id }
         }
-        catalogPageKey="$tab:${collection.orEmpty()}:$page:$query:${if(accountCatalog()) cloudAccount.historyScope else 0}:${if(tab==1) discovery.category.route+"/"+discovery.topic else ""}:$reservationOnline:${if(tab==3) librarySources.accountFavorites else if(tab==4) librarySources.accountHistory else false}"
+        catalogPageKey="$tab:${collection.orEmpty()}:$page:$query:${if(accountCatalog()) cloudAccount.historyScope else 0}:$reservationOnline:${if(tab==3) librarySources.accountFavorites else if(tab==4) librarySources.accountHistory else false}"
         if(tab==1 && collection==null) {
             renderContinuousDiscovery(body,focusNav,focusType)
             return
@@ -699,7 +670,7 @@ class MainActivity: Activity() {
                 typeButtons.values.forEach { it.nextFocusDownId=resumeCards.first().id }
                 resumeCards.forEach { it.nextFocusDownId=it.id }
             }
-            if(focusType && discoveryFilters.isNotEmpty()) discoveryFilters[discovery.category.ordinal].requestFocus() else if(focusType) typeButtons[library.contentType]?.requestFocus() else if(collectionBack!=null && !focusNav) collectionBack?.requestFocus() else if(discoveryFilters.isNotEmpty() && !focusNav) discoveryFilters[discovery.category.ordinal].requestFocus() else if(sourceButtons.isNotEmpty() && !focusNav) sourceButtons[if(isAccountHistory() || isAccountFavorites()) 1 else 0].requestFocus() else if(focusNav || resumeCards.isEmpty()) nav[tab].requestFocus() else resumeCards.first().requestFocus()
+            if(focusType) typeButtons[library.contentType]?.requestFocus() else if(collectionBack!=null && !focusNav) collectionBack?.requestFocus() else if(sourceButtons.isNotEmpty() && !focusNav) sourceButtons[if(isAccountHistory() || isAccountFavorites()) 1 else 0].requestFocus() else if(focusNav || resumeCards.isEmpty()) nav[tab].requestFocus() else resumeCards.first().requestFocus()
             return
         }
         val cards=mutableListOf<View>(); val count=6; val gap=dp(14); val width=((resources.displayMetrics.widthPixels*.9f-gap*(count-1))/count).toInt()
@@ -744,7 +715,7 @@ class MainActivity: Activity() {
         var prev: View?=null; var next: View?=null
         if(tab<=2 || localCatalog()) {
             prev=addButton(paging,"上一页") { if(page>1) { page--; catalogFocus=""; showCatalog(!localCatalog()) } }.apply { isEnabled=page>1; isFocusable=page>1; alpha=if(page>1) 1f else .4f }
-            paging.addView(text(if(localCatalog()) "第 $page / ${maxOf(1,(catalog.size+pageSize-1)/pageSize)} 页" else if(tab==1 && query.isBlank() && discovery.info!=null) "第 $page / ${maxOf(1,discovery.info!!.totalPages)} 页" else if(tab==2 && ranking!=null) "第 $page / ${ranking!!.totalPages} 页" else "第 $page 页",14f,muted).apply { gravity=Gravity.CENTER },lp(dp(if(tab==2) 135 else 95),dp(44)))
+            paging.addView(text(if(localCatalog()) "第 $page / ${maxOf(1,(catalog.size+pageSize-1)/pageSize)} 页" else if(tab==2 && ranking!=null) "第 $page / ${ranking!!.totalPages} 页" else "第 $page 页",14f,muted).apply { gravity=Gravity.CENTER },lp(dp(if(tab==2) 135 else 95),dp(44)))
             next=addButton(paging,"下一页") { if(hasMore) { page++; catalogFocus=""; showCatalog(!localCatalog()) } }.apply { isEnabled=hasMore; isFocusable=hasMore; alpha=if(hasMore) 1f else .4f }
             if(collection=="hot" && !hasMore && collectionReturn?.hasMore==true) {
                 next=addButton(paging,"下一批热门") { collection=null; collectionReturn=null; page=2; catalogFocus=""; showCatalog(true) }
@@ -776,15 +747,7 @@ class MainActivity: Activity() {
         searchInput?.nextFocusDownId=cards.first().id
         searchButton?.nextFocusDownId=cards[minOf(4,cards.lastIndex)].id
         searchActions.forEach { it.nextFocusDownId=cards[minOf(4,cards.lastIndex)].id }
-        if(discoveryFilters.isNotEmpty()) {
-            val selected=discoveryFilters[discovery.category.ordinal]
-            discoveryFilters.forEach { it.nextFocusDownId=cards.first().id }
-            searchInput?.nextFocusDownId=selected.id;searchButton?.nextFocusDownId=selected.id
-            searchActions.forEach { it.nextFocusDownId=selected.id }
-            cards.take(count).forEach { it.nextFocusUpId=selected.id }
-        }
-        if(focusType && discoveryFilters.isNotEmpty()) discoveryFilters[discovery.category.ordinal].requestFocus()
-        else if(focusType) typeButtons[library.contentType]?.requestFocus() else if(focusNav) nav[tab].requestFocus()
+        if(focusType) typeButtons[library.contentType]?.requestFocus() else if(focusNav) nav[tab].requestFocus()
         else if(resumeCards.isNotEmpty() && (catalogFocus.isEmpty() || catalogFocus.startsWith("resume:"))) (resumeCards.firstOrNull { it.tag==catalogFocus } ?: resumeCards.first()).requestFocus()
         else cards[displayed.indexOfFirst { it.id==catalogFocus }.coerceAtLeast(0)].requestFocus()
         val savedScroll=scrollPositions[catalogPageKey]
@@ -813,11 +776,9 @@ class MainActivity: Activity() {
         }
     }
     private fun renderContinuousDiscovery(body: LinearLayout,focusNav: Boolean,focusType: Boolean) {
-        val requestQuery=query;val category=discovery.category;val topic=discovery.topic
-        // Category/topic already appear in the filters; the footer owns loaded-count feedback.
-        discoveryStatus?.visibility=View.GONE
-        continuousKey="$requestQuery:${category.route}:$topic"
-        val upper=discoveryTopicChips[topic] ?: discoveryFilters.getOrNull(category.ordinal) ?: searchInput ?: nav[tab]
+        val requestQuery=query
+        continuousKey=requestQuery
+        val upper=searchInput ?: nav[tab]
         lateinit var browser: ContinuousCatalogView
         browser=ContinuousCatalogView(this,6,upper,{ item,recycled ->
             val card=recycled as? CatalogPosterCard ?: CatalogPosterCard(this)
@@ -827,16 +788,11 @@ class MainActivity: Activity() {
         { item,anchor -> catalogFocus=item.id;quickActions(item,anchor) },{
             val nextPage=page+1
             if(nextPage>100) { hasMore=false;browser.append(emptyList(),false) }
-            else work({ if(requestQuery.isBlank()) repository.discover(category,topic,nextPage) else repository.searchAll(requestQuery,nextPage) },{ result ->
+            else work({ repository.searchAll(requestQuery,nextPage) },{ result ->
                 if(continuousCatalog===browser) {
                     val seen=catalog.mapTo(HashSet()) { it.id }
                     catalog=catalog+result.items.filter { seen.add(it.id) }
                     page=nextPage;hasMore=result.hasMore && page<100
-                    if(requestQuery.isBlank()) {
-                        discovery.info=result.discovery ?: discovery.info
-                        discovery.browse=DiscoveryMemory(page,catalog,hasMore,catalogFocus,discovery.info)
-                        discoveryStatus?.text=discoveryDescription()
-                    }
                     browser.append(result.items,hasMore)
                 }
             },{ problem ->
@@ -851,15 +807,12 @@ class MainActivity: Activity() {
         val position=catalogFocus.takeIf { it.isNotBlank() }?.let { id -> continuousPositions[continuousKey]?.takeIf { it.id==id } ?: ContinuousCatalogView.Position(id,0) }
         browser.show(catalog,hasMore && page<100,position)
         nav.forEach { it.nextFocusDownId=searchInput?.id ?: upper.id }
-        searchInput?.nextFocusDownId=if(discoveryFilters.isNotEmpty()) upper.id else browser.grid.id
-        searchButton?.nextFocusDownId=if(discoveryFilters.isNotEmpty()) upper.id else browser.grid.id
-        searchActions.forEach { it.nextFocusDownId=if(discoveryFilters.isNotEmpty()) upper.id else browser.grid.id }
-        val selectedCategory=discoveryFilters.getOrNull(category.ordinal)
-        discoveryFilters.forEach { it.nextFocusDownId=discoveryTopicChips[topic]?.id ?: browser.grid.id }
-        discoveryTopicChips.values.forEach { it.nextFocusUpId=selectedCategory?.id ?: searchInput!!.id;it.nextFocusDownId=browser.grid.id }
+        searchInput?.nextFocusDownId=browser.grid.id
+        searchButton?.nextFocusDownId=browser.grid.id
+        searchActions.forEach { it.nextFocusDownId=browser.grid.id }
         searchSuggestions?.updateNavigation()
         if(focusNav) nav[tab].requestFocus()
-        else if(focusType) (selectedCategory ?: upper).requestFocus()
+        else if(focusType) upper.requestFocus()
         else browser.enter()
     }
     private fun reservationNotice(series: Series,anchor: View): Boolean {
@@ -1042,51 +995,13 @@ class MainActivity: Activity() {
         nav[tab].requestFocus()
     }
     private fun saveDiscoveryDraft() { (searchInput as? EditText)?.let { searchDraft=it.text.toString() } }
-    private fun discoveryDescription(): String = "${discovery.category.label} · ${discovery.topicLabel()}"+
-        (discovery.info?.let { " · ${it.total} 部 · 按分类浏览，输入关键词可搜索全部剧集" } ?: " · 正在读取分类…")
-    private fun changeDiscovery(category: DramaCategory,topic: String) {
-        val info=discovery.info.takeIf { discovery.category==category }
-        saveDiscoveryDraft();discovery.select(category,topic);discovery.info=info
-        page=1;catalog=emptyList();hasMore=false;catalogFocus="";showCatalog(true,focusType=true)
-    }
-    private fun renderDiscoveryTopics() {
-        val row=discoveryTopicRow ?: return
-        row.removeAllViews();discoveryTopicChips.clear()
-        val topics=listOf(DramaTopic("","全部题材"))+discovery.info?.topics.orEmpty()
-        topics.forEach { topic ->
-            discoveryTopicChips[topic.id]=addButton(row,topic.label,discovery.topic==topic.id) {
-                if(discovery.topic!=topic.id) {
-                    changeDiscovery(discovery.category,topic.id)
-                    discoveryTopicChips[topic.id]?.requestFocus()
-                }
-            }.apply {
-                textSize=12f;minHeight=dp(34);setPadding(dp(11),dp(7),dp(11),dp(7))
-                nextFocusUpId=discoveryFilters.getOrNull(discovery.category.ordinal)?.id ?: searchInput!!.id
-                nextFocusDownId=continuousCatalog?.grid?.id ?: id
-            }
-        }
-        val chips=discoveryTopicChips.values.toList()
-        chips.forEachIndexed { i,view ->
-            view.nextFocusLeftId=chips.getOrNull(i-1)?.id ?: view.id
-            view.nextFocusRightId=chips.getOrNull(i+1)?.id ?: view.id
-        }
-    }
-    private fun chooseDiscoveryTopic() {
-        val info=discovery.info ?: return
-        val topics=listOf(DramaTopic("","全部题材"))+info.topics
-        val selected=topics.indexOfFirst { it.id==discovery.topic }.coerceAtLeast(0)
-        tvTools.chooseGrid("${discovery.category.label} · 选择题材",topics.map { it.label },selected,discoveryTopic) { i -> changeDiscovery(discovery.category,topics[i].id) }
-    }
     private fun returnToDiscovery() {
-        val saved=discovery.browse
-        query="";searchDraft="";page=saved?.page ?: 1;catalog=saved?.items.orEmpty();hasMore=saved?.hasMore ?: false;catalogFocus=saved?.focus.orEmpty()
-        discovery.info=saved?.info ?: discovery.info
+        query="";searchDraft="";page=1;catalog=emptyList();hasMore=false;catalogFocus=""
         (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(searchInput?.windowToken,0)
-        showCatalog(load=saved==null)
+        showCatalog(load=false)
     }
     private fun runSearch(value: String) {
         val clean=value.trim().take(80); if(clean.isEmpty()) { returnToDiscovery();return }
-        if(tab==1 && query.isBlank() && catalog.isNotEmpty()) discovery.browse=DiscoveryMemory(page,catalog,hasMore,continuousCatalog?.capture()?.id ?: catalogFocus,discovery.info)
         (searchInput as? EditText)?.let { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(it.windowToken,0) }
         library.rememberSearch(clean,ContentType.SHORT);searchDraft=clean;query=clean;tab=1;page=1;catalogFocus="";showCatalog(true)
     }
