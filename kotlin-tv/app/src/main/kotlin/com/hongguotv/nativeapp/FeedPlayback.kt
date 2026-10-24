@@ -6,6 +6,8 @@ import android.view.View
 import androidx.media3.common.*
 import androidx.media3.exoplayer.*
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.exoplayer.source.preload.DefaultPreloadManager
+import androidx.media3.exoplayer.source.preload.TargetPreloadStatusControl
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.hongguotv.core.*
@@ -69,14 +71,9 @@ internal class PublicFeedBackend(
         val hint=synchronized(trialHints) { trialHints[series.id] } ?: return prepare(detail(series))
         return TrialClip(Detail(series,listOf(hint.episodeId)),timed("play-address") { open(hint.episodeId) },hint.episodeCount)
     }
-    override fun preload(series: Series): TrialClip {
-        val clip=trial(series)
-        try { clip.video.warm();return clip } catch(error: Exception) { clip.close();throw error }
-    }
-    override fun prefetch(detail: Detail): TrialClip {
-        val clip=prepare(detail)
-        try { clip.video.warm();return clip } catch(error: Exception) { clip.close();throw error }
-    }
+    // Publish the prepared header immediately. Media3 preloads samples according to duration;
+    // a foreground switch must not wait for an additional fixed 1 MiB speculative download.
+    override fun preload(series: Series): TrialClip=trial(series)
     override fun close() {
         if(!closed.compareAndSet(false,true)) return
         // Idle TLS socket closure may write close_notify. Never do it on Android's UI thread.
@@ -92,7 +89,8 @@ internal interface TrialPlayback {
     val view: View
     var status: ((TrialStatus)->Unit)?
     fun load(clip: TrialClip,position: Long,autoplay: Boolean)
-    fun queue(clip: TrialClip) {}
+    fun setCurrentIndex(index: Int) {}
+    fun queue(clip: TrialClip,index: Int) {}
     fun remove(seriesId: String) {}
     fun select(clip: TrialClip,position: Long,autoplay: Boolean): Boolean=false
     fun canPrefetch(): Boolean=true
@@ -105,16 +103,39 @@ internal interface TrialPlayback {
 }
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 internal class Media3TrialPlayback(context: Context): TrialPlayback {
-    private val player=ExoPlayer.Builder(context,DefaultRenderersFactory(context).setEnableDecoderFallback(true))
-        .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(2500,10000,500,1000).setTargetBufferBytes(6*1024*1024).setPrioritizeTimeOverSizeThresholds(false).build()).build()
+    private var currentIndex=0
+    private var preloading=false
+    private val preloadBuilder=DefaultPreloadManager.Builder(context,
+        TargetPreloadStatusControl<Int,DefaultPreloadManager.PreloadStatus> { index ->
+            // Keep parsed tracks and existing samples during hand-off; NOT_PRELOADED clears them.
+            if(!preloading || index==currentIndex) DefaultPreloadManager.PreloadStatus.PRELOAD_STATUS_TRACKS_SELECTED
+            else when(index-currentIndex) {
+                1 -> DefaultPreloadManager.PreloadStatus.specifiedRangeLoaded(1500L)
+                -1 -> DefaultPreloadManager.PreloadStatus.specifiedRangeLoaded(1000L)
+                2,3 -> DefaultPreloadManager.PreloadStatus.PRELOAD_STATUS_TRACKS_SELECTED
+                else -> DefaultPreloadManager.PreloadStatus.PRELOAD_STATUS_NOT_PRELOADED
+            }
+        })
+        .setRenderersFactory(DefaultRenderersFactory(context).setEnableDecoderFallback(true))
+        .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(2500,10000,500,1000)
+            .setTargetBufferBytes(6*1024*1024).setPlayerTargetBufferBytes("preload",4*1024*1024)
+            .setPrioritizeTimeOverSizeThresholds(false).build())
+    private val preloadManager=preloadBuilder.build()
+    private val player=preloadBuilder.buildExoPlayer()
+    private val items=linkedMapOf<String,MediaItem>()
     private val surface=PlayerView(context).apply {
         useController=false;isFocusable=false;resizeMode=AspectRatioFrameLayout.RESIZE_MODE_FIT
         setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING);this.player=this@Media3TrialPlayback.player
     }
-    override fun canPrefetch()=player.isPlaying && player.totalBufferedDuration>=3000
+    override fun canPrefetch(): Boolean {
+        val allowed=player.isPlaying && player.totalBufferedDuration>=1500
+        if(allowed!=preloading) { preloading=allowed;preloadManager.invalidate() }
+        return allowed
+    }
     override val view: View get()=surface
     override var status: ((TrialStatus)->Unit)?=null
     private var activeId: String?=null
+    private var startedAt=0L
     init {
         player.pauseAtEndOfMediaItems=true
         player.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),true)
@@ -134,32 +155,46 @@ internal class Media3TrialPlayback(context: Context): TrialPlayback {
                     status?.invoke(TrialStatus.ENDED)
             }
             override fun onPlayerError(error: PlaybackException) { if(active()) status?.invoke(TrialStatus.ERROR) }
+            override fun onRenderedFirstFrame() {
+                if(active()) android.util.Log.i("HongguoTV","Home first-frame elapsedMs=${android.os.SystemClock.elapsedRealtime()-startedAt}")
+            }
         })
     }
     private fun key(clip: TrialClip)=clip.detail.series.id+":"+clip.episodeId
     private fun source(clip: TrialClip)=ProgressiveMediaSource.Factory { VideoDataSource(clip.video) }.createMediaSource(
         MediaItem.Builder().setMediaId(key(clip)).setUri("hongguotv://trial/${clip.episodeId}").setMimeType(MimeTypes.VIDEO_MP4).build())
-    override fun load(clip: TrialClip,position: Long,autoplay: Boolean) {
-        activeId=key(clip)
-        player.setMediaSource(source(clip));player.seekTo(position.coerceAtLeast(0));player.prepare();player.playWhenReady=autoplay
+    override fun setCurrentIndex(index: Int) {
+        currentIndex=index;preloading=false
+        preloadManager.setCurrentPlayingIndex(index);preloadManager.invalidate()
     }
-    override fun queue(clip: TrialClip) {
-        if((0 until player.mediaItemCount).none { player.getMediaItemAt(it).mediaId==key(clip) }) player.addMediaSource(source(clip))
+    private fun register(clip: TrialClip,index: Int): MediaItem = items.getOrPut(key(clip)) {
+        val source=source(clip)
+        preloadManager.add(source,index)
+        source.mediaItem
+    }
+    private fun play(clip: TrialClip,position: Long,autoplay: Boolean) {
+        val item=register(clip,currentIndex)
+        activeId=key(clip);startedAt=android.os.SystemClock.elapsedRealtime()
+        player.setMediaSource(checkNotNull(preloadManager.getMediaSource(item)),position.coerceAtLeast(0))
+        player.prepare();player.playWhenReady=autoplay
+    }
+    override fun load(clip: TrialClip,position: Long,autoplay: Boolean)=play(clip,position,autoplay)
+    override fun queue(clip: TrialClip,index: Int) {
+        register(clip,index);preloadManager.invalidate()
     }
     override fun remove(seriesId: String) {
-        val index=(0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).mediaId.startsWith("$seriesId:") } ?: return
-        if(player.getMediaItemAt(index).mediaId!=activeId) player.removeMediaItem(index)
+        val id=items.keys.firstOrNull { it.startsWith("$seriesId:") } ?: return
+        if(id!=activeId) items.remove(id)?.let { preloadManager.remove(it) }
     }
     override fun select(clip: TrialClip,position: Long,autoplay: Boolean): Boolean {
-        val index=(0 until player.mediaItemCount).firstOrNull { player.getMediaItemAt(it).mediaId==key(clip) } ?: return false
-        activeId=key(clip);player.seekTo(index,position.coerceAtLeast(0));player.playWhenReady=autoplay
-        if(player.playbackState==Player.STATE_READY) status?.invoke(TrialStatus.READY)
+        if(key(clip) !in items) return false
+        play(clip,position,autoplay)
         return true
     }
-    override fun pause()=player.pause()
+    override fun pause() { player.pause();preloading=false;preloadManager.invalidate() }
     override fun resume()=player.play()
     override fun restart() { player.seekTo(0);player.play() }
     override fun position()=player.currentPosition.coerceAtLeast(0)
-    override fun clear() { activeId=null;player.stop();player.clearMediaItems() }
-    override fun release() { status=null;surface.player=null;player.release() }
+    override fun clear() { activeId=null;preloading=false;player.stop();player.clearMediaItems();preloadManager.reset();items.clear() }
+    override fun release() { status=null;surface.player=null;player.release();preloadManager.release();items.clear() }
 }

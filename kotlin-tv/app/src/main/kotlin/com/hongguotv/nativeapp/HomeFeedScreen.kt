@@ -29,6 +29,7 @@ internal class HomeFeedScreen(
     private var job: java.util.concurrent.Future<*>?=null
     private var prefetchScope: RequestScope?=null
     private var prefetchJob: java.util.concurrent.Future<*>?=null
+    private var prefetchTarget: String?=null
     private data class CachedTrial(val clip: TrialClip,val savedAt: Long=android.os.SystemClock.elapsedRealtime())
     private val cachedTrials=linkedMapOf<String,CachedTrial>()
     private val attemptedPrefetch=mutableSetOf<String>()
@@ -153,11 +154,11 @@ internal class HomeFeedScreen(
     }
     private val prefetchPoll=object: Runnable { override fun run() {
         if(!active || closed) return
-        prefetchUpcoming();main.postDelayed(this,1000)
+        prefetchUpcoming();main.postDelayed(this,250)
     } }
     fun resume() {
         if(closed || active) return
-        active=true;main.removeCallbacks(prefetchPoll);main.postDelayed(prefetchPoll,1000)
+        active=true;main.removeCallbacks(prefetchPoll);main.postDelayed(prefetchPoll,250)
         if(clip!=null) { if(!state.userPaused && !state.ended) playback.resume();paintActions();prefetchUpcoming() }
         else if(state.current!=null) loadCurrent() else loadPage(false)
     }
@@ -196,12 +197,12 @@ internal class HomeFeedScreen(
     private fun cancelRequest() { generation++;scope?.cancel();scope=null;job?.cancel(true);job=null;loading=false }
     private fun cancelPrefetch() {
         prefetchGeneration++;prefetchScope?.cancel();prefetchScope=null
-        prefetchJob?.cancel(true);prefetchJob=null;attemptedPrefetch.clear();attemptedBatch=0
+        prefetchJob?.cancel(true);prefetchJob=null;prefetchTarget=null;attemptedPrefetch.clear();attemptedBatch=0
     }
     private fun closeCached(cached: CachedTrial) { playback.remove(cached.clip.detail.series.id);cached.clip.close() }
     private fun clearCache() { cachedTrials.values.forEach(::closeCached);cachedTrials.clear() }
-    private fun clearCurrent(retain: Boolean=false,keepPlayer: Boolean=false) {
-        remember();cancelRequest();cancelPrefetch();if(!keepPlayer) playback.clear()
+    private fun clearCurrent(retain: Boolean=false,keepPlayer: Boolean=false,keepPrefetch: Boolean=false) {
+        remember();cancelRequest();if(!keepPrefetch) cancelPrefetch();if(!keepPlayer) playback.clear()
         clip?.let {
             if(retain && !failed) {
                 cachedTrials.put(it.detail.series.id,CachedTrial(it))?.let(::closeCached)
@@ -245,10 +246,15 @@ internal class HomeFeedScreen(
     private fun loadCurrent() {
         val series=state.current ?: return
         if(!active || closed) return
-        clearCurrent();failed=false;describe();status.visibility=View.VISIBLE;status.text="正在准备第一集试播…"
+        clearCurrent(keepPrefetch=prefetchTarget==series.id);failed=false;describe();status.visibility=View.VISIBLE;status.text="正在准备第一集试播…"
         trimCache()
         val cached=takeCached(series.id)
-        if(cached!=null) attach(cached) else request({ backend.trial(series) },{ it.close() },::attach)
+        if(cached!=null) attach(cached)
+        else if(prefetchTarget==series.id && prefetchJob!=null) {
+            // Promote the in-flight download instead of cancelling and resolving the same URL again.
+            loading=true
+            android.util.Log.i("HongguoTV","Home promoted in-flight preload")
+        } else request({ backend.trial(series) },{ it.close() },::attach)
     }
     private fun attach(next: TrialClip) {
         clip=next
@@ -256,11 +262,16 @@ internal class HomeFeedScreen(
         meta.text="第一集试播 · 共 ${next.episodeCount} 集"+(series.tags.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
         if(series.description.isNotBlank()) intro.text=series.description
         val autoplay=active && !state.userPaused && !state.ended
+        playback.setCurrentIndex(state.offset+state.index)
         if(!playback.select(next,state.position,autoplay)) {
             playback.load(next,state.position,autoplay)
-            cachedTrials.values.forEach { playback.queue(it.clip) }
+            cachedTrials.values.forEach { queueCached(it.clip) }
         }
         paintActions()
+    }
+    private fun queueCached(clip: TrialClip) {
+        val index=state.items.indexOfFirst { it.id==clip.detail.series.id }
+        if(index>=0) playback.queue(clip,state.offset+index)
     }
     private fun trimCache() {
         val allowed=state.items.subList((state.index-1).coerceAtLeast(0),minOf(state.index+4,state.items.size)).map { it.id }.toSet()
@@ -278,17 +289,20 @@ internal class HomeFeedScreen(
             if(upcoming.size<3 && state.hasMore && state.page<100 && attemptedBatch!=state.page+1) prefetchBatch()
             return
         }
-        attemptedPrefetch+=next.id
+        attemptedPrefetch+=next.id;prefetchTarget=next.id
         val token=prefetchGeneration;val requestScope=RequestScope();prefetchScope=requestScope
         prefetchJob=worker.submit {
             val prepared=runCatching { requestScope.run { backend.preload(next) } }.getOrNull()
             main.post {
                 if(closed || !active || token!=prefetchGeneration) prepared?.close()
                 else {
-                    prefetchJob=null;prefetchScope=null
-                    if(prepared!=null) {
+                    prefetchJob=null;prefetchScope=null;prefetchTarget=null
+                    if(state.current?.id==next.id && clip==null) {
+                        loading=false
+                        if(prepared!=null) attach(prepared) else loadCurrent()
+                    } else if(prepared!=null) {
                         cachedTrials.put(next.id,CachedTrial(prepared))?.let(::closeCached)
-                        playback.queue(prepared)
+                        queueCached(prepared)
                     }
                     prefetchUpcoming()
                 }
@@ -318,7 +332,7 @@ internal class HomeFeedScreen(
         }
         val target=state.items.getOrNull(state.index+delta) ?: return
         val ready=takeCached(target.id)
-        clearCurrent(retain=true,keepPlayer=ready!=null)
+        clearCurrent(retain=true,keepPlayer=ready!=null,keepPrefetch=target.id==prefetchTarget)
         if(state.move(delta)) {
             if(ready!=null) { failed=false;describe();status.visibility=View.VISIBLE;status.text="正在切换作品…";attach(ready);trimCache() }
             else loadCurrent()
