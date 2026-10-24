@@ -1623,6 +1623,9 @@ class MainActivity: Activity() {
     private fun goBack() {
         if(!library.isLoaded) { finish(); return }
         if(screen=="catalog" && tab==0 && homeFeed?.back()==true) return
+        if(screen=="catalog" && tab==1 && query.isBlank() && !nav[1].hasFocus()) {
+            discoveryScreen?.backToTop();nav[1].requestFocus();return
+        }
         when(screen) {
             "player" -> if(hud.visibility==View.VISIBLE && !playError) hidePlaybackOverlay() else returnToDetail()
             "detail" -> {

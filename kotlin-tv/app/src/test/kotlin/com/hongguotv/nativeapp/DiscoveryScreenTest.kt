@@ -21,6 +21,45 @@ import org.robolectric.shadows.ShadowLooper
 @LooperMode(LooperMode.Mode.PAUSED)
 @GraphicsMode(GraphicsMode.Mode.LEGACY)
 class DiscoveryScreenTest {
+    private fun layout(view: View) {
+        view.measure(View.MeasureSpec.makeMeasureSpec(960,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(420,View.MeasureSpec.EXACTLY))
+        view.layout(0,0,960,420);ShadowLooper.idleMainLooper()
+    }
+    @Test fun returningFromDetailRestoresOffscreenChosenChipAndHeaderWithoutLayoutDrift() {
+        val controller=Robolectric.buildActivity(Activity::class.java).setup();val activity=controller.get()
+        val upper=TextView(activity).apply { id=View.generateViewId();isFocusable=true }
+        val state=DiscoveryBrowserState().apply {
+            loaded=true;selection=DiscoverySelection(mapOf("category_dim_role" to "cate_29"))
+            groups=listOf(this@DiscoveryScreenTest.groups[0],DiscoveryGroup("category_dim_role","设定",(0..29).map { DiscoveryFilter("cate_$it","测试设定$it") }),
+                this@DiscoveryScreenTest.groups[2],DiscoveryGroup("category_dim_theme","主题",listOf(DiscoveryFilter("cate_7","玄幻"))),
+                DiscoveryGroup("sort","推荐",listOf(DiscoveryFilter("hot_score","最高热度"))),
+                DiscoveryGroup("gender","受众",listOf(DiscoveryFilter("0","女频"))),
+                DiscoveryGroup("online_time","时间",listOf(DiscoveryFilter("days_7","7天内上新"))))
+            items=(1..60).map { Series("$it","作品$it") }
+        }
+        fun screen()=DiscoveryScreen(activity,state,upper,{ _,_-> },{}, { _,_-> },{ _,_,_->fail("Restoration fetched network") })
+        val first=screen();var returned: DiscoveryScreen?=null
+        try {
+            activity.setContentView(first);first.start(false);layout(first)
+            val chosen=views(first).filterIsInstance<TextView>().single { it.text.toString()=="测试设定29" }
+            assertTrue(chosen.isSelected)
+            assertTrue(views(first).filterIsInstance<HorizontalScrollView>().any { it.scrollX>0 })
+            val grid=views(first).filterIsInstance<ContinuousCatalogView>().single()
+            grid.enter();grid.grid.setSelection(6);layout(first);layout(first)
+            assertTrue(first.scrollY>0)
+            val offset=first.scrollY;repeat(3) { layout(first) };assertEquals(offset,first.scrollY)
+            first.close()
+            val savedStep=state.browseStep
+            val next=screen();returned=next;activity.setContentView(next);next.start(false);layout(next)
+            assertEquals(savedStep,state.browseStep)
+            assertTrue(views(next).filterIsInstance<TextView>().single { it.text.toString()=="测试设定29" }.isSelected)
+            assertTrue(views(next).filterIsInstance<HorizontalScrollView>().any { it.scrollX>0 })
+            assertEquals(offset,next.scrollY)
+            next.backToTop();layout(next);layout(next)
+            assertEquals(0,next.scrollY)
+            assertEquals("1",views(next).filterIsInstance<ContinuousCatalogView>().single().capture()?.id)
+        } finally { first.close();returned?.close();controller.pause().stop().destroy() }
+    }
     private fun views(view: View): List<View> = listOf(view)+(if(view is ViewGroup) (0 until view.childCount).flatMap { views(view.getChildAt(it)) } else emptyList())
     private val groups=listOf(DiscoveryGroup("genre","类型",listOf(DiscoveryFilter("short_play","真人剧"))),
         DiscoveryGroup("category_dim_role","设定",listOf(DiscoveryFilter("cate_36","重生"))),

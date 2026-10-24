@@ -102,9 +102,27 @@ class DramaDiscoveryScreenTest {
             val count=requests.size
             texts(root).single { it.text.toString()=="返回分类" }.performClick();layout(activity)
             assertEquals(count,requests.size)
-            val restored=views(root).filterIsInstance<ContinuousCatalogView>().single()
+            var restored=views(root).filterIsInstance<ContinuousCatalogView>().single()
             assertEquals("102",restored.capture()?.id);assertEquals(2,restored.grid.adapter.count)
             assertEquals("cate_36",state.selection.values["category_dim_role"])
+            for(label in listOf("重生","都市")) {
+                val chip=texts(root).single { it.text.toString()==label }
+                assertTrue("Restored filter $label",chip.isSelected)
+            }
+            val savedSelection=state.selection
+            set(activity,"detail",Detail(Series("102","分类第2页"),listOf("1001")))
+            MainActivity::class.java.getDeclaredMethod("showDetail",Boolean::class.javaPrimitiveType).apply { isAccessible=true }.invoke(activity,false)
+            pump(activity)
+            MainActivity::class.java.getDeclaredMethod("goBack").apply { isAccessible=true }.invoke(activity)
+            layout(activity)
+            restored=views(root).filterIsInstance<ContinuousCatalogView>().single()
+            assertEquals("102",restored.capture()?.id);assertEquals(savedSelection,state.selection)
+            for(label in listOf("重生","都市")) assertTrue(texts(root).single { it.text.toString()==label }.isSelected)
+            MainActivity::class.java.getDeclaredMethod("goBack").apply { isAccessible=true }.invoke(activity)
+            layout(activity)
+            assertEquals("101",restored.capture()?.id)
+            assertTrue(texts(root).single { it.text.toString()=="找剧" }.hasFocus())
+            assertEquals(0,(get(activity,"discoveryScreen") as DiscoveryScreen).scrollY)
             texts(root).single { it.text.toString()=="真人剧" }.performClick();pump(activity)
             assertEquals(mapOf("genre" to "short_play"),state.selection.values)
             assertTrue(texts(root).any { it.text.toString()=="爱情" })

@@ -21,6 +21,26 @@ import org.robolectric.shadows.ShadowLooper
 @LooperMode(LooperMode.Mode.PAUSED)
 @GraphicsMode(GraphicsMode.Mode.LEGACY)
 class ContinuousCatalogViewTest {
+    @Test fun remoteNavigationLoadsWithoutFooterFocusAndShowsOnlyFailureRetry() {
+        val controller=Robolectric.buildActivity(Activity::class.java).setup();val activity=controller.get()
+        var calls=0
+        val upper=TextView(activity).apply { id=View.generateViewId();isFocusable=true }
+        val browser=ContinuousCatalogView(activity,6,upper,{ item,recycled ->
+            (recycled as? TextView ?: TextView(activity)).apply { text=item.title;minHeight=80 }
+        },{},{},{_,_->},{calls++})
+        try {
+            activity.setContentView(browser);browser.useRemoteNavigation();browser.show(rows(1,60),true);browser.enter();layout(browser)
+            assertEquals(View.GONE,browser.top.visibility);assertEquals(View.GONE,browser.next.visibility)
+            browser.grid.setSelection(54);layout(browser)
+            browser.grid.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_DPAD_DOWN))
+            assertEquals(1,calls);assertTrue(browser.grid.hasFocus())
+            browser.fail();assertEquals(View.VISIBLE,browser.next.visibility)
+            browser.next.requestFocus();browser.next.performClick();assertEquals(2,calls)
+            browser.append(rows(61,84),false);layout(browser)
+            assertEquals(View.GONE,browser.next.visibility);assertTrue(browser.grid.hasFocus())
+            browser.resetToTop();upper.requestFocus();layout(browser);assertEquals("1",browser.capture()?.id)
+        } finally { browser.close();controller.pause().stop().destroy() }
+    }
     private fun rows(from: Int,to: Int)=(from..to).map { Series("$it","作品$it") }
     private fun layout(view: View) {
         view.measure(View.MeasureSpec.makeMeasureSpec(960,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(420,View.MeasureSpec.EXACTLY))
