@@ -64,6 +64,9 @@ class MainActivity: Activity() {
     private var collectionFocus=""
     private var collectionBack: View?=null
     private val pageSize=20
+    private var continuousCatalog: ContinuousCatalogView?=null
+    private val continuousPositions=linkedMapOf<String,ContinuousCatalogView.Position>()
+    private var continuousKey=""
     private var catalogScroll: ScrollView?=null
     private var catalogBody: LinearLayout?=null
     private var homePosition: HomeScreen.Position?=null
@@ -306,6 +309,12 @@ class MainActivity: Activity() {
         generation++; cancelWork(); artwork.cancelPage()
     }
     private fun releaseCatalogViews() {
+        continuousCatalog?.let { view ->
+            view.capture()?.let { continuousPositions[continuousKey]=it }
+            view.close()
+        }
+        continuousCatalog=null
+        while(continuousPositions.size>20) continuousPositions.remove(continuousPositions.keys.first())
         homeFeed?.close();homeFeed=null
         relatedSection=null;accountFavoriteButton=null
         homeScreen?.let { homePosition=it.capturePosition() }
@@ -345,7 +354,7 @@ class MainActivity: Activity() {
         parent.addView(text(detail,13f,muted)); addButton(parent,"重试",onClick=retry).requestFocus()
     }
     private fun switchTab(next: Int) {
-        if(tab==1) saveDiscoveryDraft()
+        if(tab==1) { saveDiscoveryDraft();continuousCatalog?.capture()?.let { catalogFocus=it.id } }
         leaveCollection()
         tabState[tab]=CatalogState(page,catalog,hasMore,ranking); tabFocus[tab]=catalogFocus
         tab=next; val saved=tabState[next]; page=saved?.page ?: 1; catalog=saved?.items ?: emptyList(); hasMore=saved?.hasMore ?: false; ranking=saved?.ranking; catalogFocus=tabFocus[next].orEmpty()
@@ -644,6 +653,10 @@ class MainActivity: Activity() {
             typeButtons.values.forEach { it.nextFocusDownId=collectionBack!!.id }
         }
         catalogPageKey="$tab:${collection.orEmpty()}:$page:$query:${if(accountCatalog()) cloudAccount.historyScope else 0}:${if(tab==1) discovery.category.route+"/"+discovery.topic else ""}:$reservationOnline:${if(tab==3) librarySources.accountFavorites else if(tab==4) librarySources.accountHistory else false}"
+        if(tab==1 && collection==null) {
+            renderContinuousDiscovery(body,focusNav,focusType)
+            return
+        }
         val preview=SeriesPreview(this); selectionPreview=preview; body.addView(preview)
         val scroll=ScrollView(this).apply { isFillViewport=false; isVerticalScrollBarEnabled=false; clipToPadding=false }; catalogScroll=scroll
         val list=column(); scroll.addView(list); body.addView(scroll,lp(-1,0).apply { weight=1f })
@@ -778,6 +791,53 @@ class MainActivity: Activity() {
                 restoringScroll=false
             }
         }
+    }
+    private fun renderContinuousDiscovery(body: LinearLayout,focusNav: Boolean,focusType: Boolean) {
+        val requestQuery=query;val category=discovery.category;val topic=discovery.topic
+        // Category/topic already appear in the filters; the footer owns loaded-count feedback.
+        discoveryStatus?.visibility=View.GONE
+        continuousKey="$requestQuery:${category.route}:$topic"
+        val upper=discoveryFilters.getOrNull(category.ordinal) ?: searchInput ?: nav[tab]
+        lateinit var browser: ContinuousCatalogView
+        browser=ContinuousCatalogView(this,6,upper,{ item,recycled ->
+            val card=recycled as? CatalogPosterCard ?: CatalogPosterCard(this)
+            card.show(item);loadCover(card.image,item.cover);card
+        },{ item -> catalogFocus=item.id },
+        { item -> catalogFocus=item.id;openDetail(item,false) },
+        { item,anchor -> catalogFocus=item.id;quickActions(item,anchor) },{
+            val nextPage=page+1
+            if(nextPage>100) { hasMore=false;browser.append(emptyList(),false) }
+            else work({ if(requestQuery.isBlank()) repository.discover(category,topic,nextPage) else repository.searchAll(requestQuery,nextPage) },{ result ->
+                if(continuousCatalog===browser) {
+                    val seen=catalog.mapTo(HashSet()) { it.id }
+                    catalog=catalog+result.items.filter { seen.add(it.id) }
+                    page=nextPage;hasMore=result.hasMore && page<100
+                    if(requestQuery.isBlank()) {
+                        discovery.info=result.discovery ?: discovery.info
+                        discovery.browse=DiscoveryMemory(page,catalog,hasMore,catalogFocus,discovery.info)
+                        discoveryStatus?.text=discoveryDescription()
+                    }
+                    browser.append(result.items,hasMore)
+                }
+            },{ problem ->
+                if(continuousCatalog===browser) {
+                    browser.fail()
+                    if(problem is SearchSessionExpiredException) tvTools.confirm("搜索结果已过期","当前列表已保留，是否重新搜索？",browser.next) { runSearch(requestQuery) }
+                }
+            })
+        })
+        continuousCatalog=browser
+        body.addView(browser,lp(-1,0).apply { weight=1f })
+        val position=catalogFocus.takeIf { it.isNotBlank() }?.let { id -> continuousPositions[continuousKey]?.takeIf { it.id==id } ?: ContinuousCatalogView.Position(id,0) }
+        browser.show(catalog,hasMore && page<100,position)
+        nav.forEach { it.nextFocusDownId=searchInput?.id ?: upper.id }
+        searchInput?.nextFocusDownId=if(discoveryFilters.isNotEmpty()) upper.id else browser.grid.id
+        searchButton?.nextFocusDownId=if(discoveryFilters.isNotEmpty()) upper.id else browser.grid.id
+        searchActions.forEach { it.nextFocusDownId=if(discoveryFilters.isNotEmpty()) upper.id else browser.grid.id }
+        discoveryFilters.forEach { it.nextFocusDownId=browser.grid.id }
+        if(focusNav) nav[tab].requestFocus()
+        else if(focusType) upper.requestFocus()
+        else browser.enter()
     }
     private fun reservationNotice(series: Series,anchor: View): Boolean {
         if(tab!=5) return false
@@ -980,7 +1040,7 @@ class MainActivity: Activity() {
     }
     private fun runSearch(value: String) {
         val clean=value.trim().take(80); if(clean.isEmpty()) { returnToDiscovery();return }
-        if(tab==1 && query.isBlank() && catalog.isNotEmpty()) discovery.browse=DiscoveryMemory(page,catalog,hasMore,catalogFocus,discovery.info)
+        if(tab==1 && query.isBlank() && catalog.isNotEmpty()) discovery.browse=DiscoveryMemory(page,catalog,hasMore,continuousCatalog?.capture()?.id ?: catalogFocus,discovery.info)
         (searchInput as? EditText)?.let { (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(it.windowToken,0) }
         library.rememberSearch(clean,ContentType.SHORT);searchDraft=clean;query=clean;tab=1;page=1;catalogFocus="";showCatalog(true)
     }

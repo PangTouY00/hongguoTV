@@ -25,7 +25,7 @@ internal class RankingScreen(
     private var filterButton: TextView
     private var refreshButton: TextView
     private var loading=false
-    private val pageSize=20
+    private var browser: ContinuousCatalogView?=null
     private fun dp(value: Int)=(value*resources.displayMetrics.density).toInt()
     private fun label(value: String,size: Float=16f,color: Int=TvStyle.text)=TextView(activity).apply {
         text=value; textSize=size; setTextColor(color); includeFontPadding=false
@@ -78,7 +78,7 @@ internal class RankingScreen(
         if(focusNav) nav[2].requestFocus()
         else controls[state.board.ordinal].requestFocus()
         if(force || state.snapshots[state.board]==null) refresh()
-        else if(!focusNav && state.selectedId.isNotEmpty()) body.findViewWithTag<View>(state.selectedId)?.requestFocus()
+        else if(!focusNav && state.selectedId.isNotEmpty()) browser?.enter()
     }
     private fun refresh() {
         loading=true; refreshButton.text="读取中…"
@@ -107,65 +107,61 @@ internal class RankingScreen(
         val labels=values.map { if(it.isEmpty()) "全部题材 · ${snapshot.items.size} 部" else "$it · ${snapshot.filtered(it).size} 部" }
         tools.chooseGrid("${state.board.label}热播榜 · 选择题材",labels,values.indexOf(state.topic),filterButton) { i -> state.filter(values[i]); render() }
     }
-    private fun render(enterRows: Boolean=false) {
-        val previous=body.findFocus()?.tag as? String
-        body.removeAllViews()
+    private fun render() {
+        val enterRows=browser?.grid?.hasFocus()==true
+        browser?.close();body.removeAllViews()
         val snapshot=state.snapshots[state.board]
         filterButton.text=if(state.topic.isBlank()) "筛选题材" else "题材：${state.topic}"
         filterButton.isEnabled=snapshot!=null && !loading
         val all=snapshot?.filtered(state.topic).orEmpty()
-        state.page=state.page.coerceIn(1,maxOf(1,(all.size+pageSize-1)/pageSize))
         subtitle.text=snapshot?.let {
             "${it.ranking.updatedText.ifBlank { "来源：红果官网热播榜" }}  ·  ${it.items.size} 部${if(state.topic.isNotEmpty()) "  ·  ${state.topic} ${all.size} 部（保留原榜名次）" else "  ·  筛选覆盖本榜全部作品"}"
         } ?: "选择榜单，发现下一部好剧"
-        val scroll=ScrollView(activity).apply { isVerticalScrollBarEnabled=false }
-        val list=LinearLayout(activity).apply { orientation=VERTICAL }
-        scroll.addView(list);body.addView(scroll,params(-1,0).apply { weight=1f })
-        val rows=mutableListOf<View>()
-        all.drop((state.page-1)*pageSize).take(pageSize).forEach { item ->
-            val position=snapshot?.ranking?.positions?.get(item.id)
-            val card=row().apply {
-                id=View.generateViewId();tag=item.id;isFocusable=true;isClickable=true
-                setPadding(dp(12),dp(10),dp(16),dp(10));background=TvStyle.card(activity,false)
-                contentDescription="第${position?.rank ?: "未知"}名，${item.title}，${item.tags}，${position?.heat.orEmpty()}"
-            }
-            val number=label(position?.rank?.toString() ?: "—",26f,if((position?.rank ?: 100)>3) TvStyle.muted else TvStyle.accent).apply { gravity=Gravity.CENTER;typeface=Typeface.DEFAULT_BOLD }
-            card.addView(number,params(dp(42),-1))
-            val image=ImageView(activity).apply { scaleType=ImageView.ScaleType.CENTER_CROP; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }
-            card.addView(image,params(dp(64),dp(90)).apply { rightMargin=dp(16) });cover(image,item.cover)
-            val info=LinearLayout(activity).apply { orientation=VERTICAL }
-            info.addView(label(item.title,19f).apply { typeface=Typeface.DEFAULT_BOLD;maxLines=1;ellipsize=TextUtils.TruncateAt.END })
-            info.addView(label(listOf(item.badge,item.tags).filter(String::isNotBlank).joinToString("  ·  "),12f,TvStyle.muted).apply { maxLines=1;ellipsize=TextUtils.TruncateAt.END;setPadding(0,dp(6),0,dp(5)) })
-            info.addView(label(item.description.ifBlank { "暂无剧情简介，按确定查看剧集" },13f,TvStyle.muted).apply { maxLines=2;ellipsize=TextUtils.TruncateAt.END })
-            card.addView(info,params(0,-2).apply { weight=1f;rightMargin=dp(16) })
-            val metrics=LinearLayout(activity).apply { orientation=VERTICAL;gravity=Gravity.END }
-            metrics.addView(label(position?.heat?.ifBlank { "热度暂无" } ?: "热度暂无",17f,TvStyle.accent))
-            metrics.addView(label(position?.metrics.orEmpty().replace(" · ","\n"),11f,TvStyle.muted).apply { gravity=Gravity.END;maxLines=3;setPadding(0,dp(6),0,0) })
-            card.addView(metrics,params(dp(135),-2))
-            card.setOnClickListener { state.selectedId=item.id;open(item) }
-            card.setOnLongClickListener { state.selectedId=item.id;more(item,card);true }
-            card.setOnKeyListener { _,key,event -> if(key==KeyEvent.KEYCODE_MENU) { if(event.action==KeyEvent.ACTION_UP) more(item,card);true } else false }
-            card.setOnFocusChangeListener { _,focused ->
-                card.background=TvStyle.card(activity,focused)
-                if(focused) { state.selectedId=item.id;cover(image,item.cover);scroll.post {
-                    val y=when { card.top<scroll.scrollY -> card.top; card.bottom>scroll.scrollY+scroll.height -> card.bottom-scroll.height;else -> scroll.scrollY }
-                    scroll.smoothScrollTo(0,y.coerceAtLeast(0))
-                } }
-            }
-            list.addView(card,params(-1,dp(112)).apply { bottomMargin=dp(8) });rows+=card
+        if(all.isEmpty()) {
+            browser=null
+            body.addView(label(if(snapshot==null) "正在准备榜单，请稍候…" else "本榜暂无符合条件的作品，可切换题材",17f,TvStyle.muted))
+            controls.forEach { it.nextFocusDownId=it.id }
+            return
         }
-        if(all.isEmpty()) list.addView(label(if(snapshot==null) "正在准备榜单，请稍候…" else "本榜暂无符合条件的作品，可切换题材",17f,TvStyle.muted).apply { setPadding(dp(16),dp(30),0,0) })
-        val paging=row().apply { gravity=Gravity.CENTER }
-        val prev=button("‹ 上一页") { state.page--;state.selectedId="";render(true) }.apply { isEnabled=state.page>1 }
-        val next=button("下一页 ›") { state.page++;state.selectedId="";render(true) }.apply { isEnabled=state.page*pageSize<all.size }
-        paging.addView(prev,params(-2));paging.addView(label("第 ${state.page} / ${maxOf(1,(all.size+pageSize-1)/pageSize)} 页",13f,TvStyle.muted).apply { gravity=Gravity.CENTER },params(dp(125)));paging.addView(next,params(-2))
-        body.addView(paging)
-        rows.forEachIndexed { i,v -> v.nextFocusUpId=rows.getOrNull(i-1)?.id ?: controls[state.board.ordinal].id;v.nextFocusDownId=rows.getOrNull(i+1)?.id ?: if(next.isEnabled) next.id else if(prev.isEnabled) prev.id else v.id;v.nextFocusLeftId=v.id;v.nextFocusRightId=v.id }
-        controls.forEach { it.nextFocusDownId=rows.firstOrNull()?.id ?: it.id }
-        listOf(prev,next).forEach { it.nextFocusUpId=rows.lastOrNull()?.id ?: filterButton.id;it.nextFocusDownId=it.id }
-        if(enterRows) rows.firstOrNull()?.requestFocus()
-        else if(previous!=null) (rows.firstOrNull { it.tag==previous } ?: rows.firstOrNull())?.requestFocus()
-        // A fresh page should enter its first card, while refresh/filter preserve their controls.
-        if(state.selectedId.isBlank() && hasFocus() && controls.none { it.hasFocus() }) rows.firstOrNull()?.requestFocus()
+        val saved=state.selectedId
+        val list=ContinuousCatalogView(activity,1,controls[state.board.ordinal],{ item,recycled ->
+            val card=recycled as? RankCard ?: RankCard(activity)
+            card.show(item,snapshot?.ranking?.positions?.get(item.id));cover(card.image,item.cover);card
+        },{ state.selectedId=it.id },{ state.selectedId=it.id;open(it) },{ item,anchor ->state.selectedId=item.id;more(item,anchor) },{})
+        browser=list;body.addView(list,params(-1,0).apply { weight=1f })
+        list.show(all,false,saved.takeIf { it.isNotBlank() }?.let { ContinuousCatalogView.Position(it,0) })
+        controls.forEach { it.nextFocusDownId=list.grid.id }
+        if(enterRows) list.enter()
+    }
+}
+
+/** One recycled row keeps ranks and heat from the unfiltered source snapshot. */
+private class RankCard(private val activity: Activity): LinearLayout(activity) {
+    private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
+    private fun label(size: Float,color: Int=TvStyle.text)=TextView(activity).apply { textSize=size;setTextColor(color);includeFontPadding=false }
+    private val number=label(26f,TvStyle.accent).apply { gravity=Gravity.CENTER;typeface=Typeface.DEFAULT_BOLD }
+    val image=ImageView(activity).apply { scaleType=ImageView.ScaleType.CENTER_CROP;importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO }
+    private val title=label(19f).apply { maxLines=1;ellipsize=TextUtils.TruncateAt.END;typeface=Typeface.DEFAULT_BOLD }
+    private val tags=label(12f,TvStyle.muted).apply { maxLines=1;ellipsize=TextUtils.TruncateAt.END;setPadding(0,dp(6),0,dp(5)) }
+    private val description=label(13f,TvStyle.muted).apply { maxLines=2;ellipsize=TextUtils.TruncateAt.END }
+    private val heat=label(17f,TvStyle.accent)
+    private val metrics=label(11f,TvStyle.muted).apply { gravity=Gravity.END;maxLines=3 }
+    init {
+        gravity=Gravity.CENTER_VERTICAL;setPadding(dp(12),dp(10),dp(16),dp(10))
+        layoutParams=AbsListView.LayoutParams(-1,dp(112))
+        addView(number,LayoutParams(dp(42),-1));addView(image,LayoutParams(dp(64),dp(90)).apply { rightMargin=dp(16) })
+        val info=LinearLayout(activity).apply { orientation=VERTICAL;addView(title);addView(tags);addView(description) }
+        addView(info,LayoutParams(0,-2,1f).apply { rightMargin=dp(16) })
+        val values=LinearLayout(activity).apply { orientation=VERTICAL;gravity=Gravity.END;addView(heat);addView(metrics) }
+        addView(values,LayoutParams(dp(135),-2))
+    }
+    fun show(item: Series,position: RankPosition?) {
+        number.text=position?.rank?.toString() ?: "—"
+        number.setTextColor(if((position?.rank ?: 100)>3) TvStyle.muted else TvStyle.accent)
+        title.text=item.title;tags.text=listOf(item.badge,item.tags).filter(String::isNotBlank).joinToString("  ·  ")
+        description.text=item.description.ifBlank { "暂无剧情简介，按确定查看剧集" }
+        heat.text=position?.heat?.ifBlank { "热度暂无" } ?: "热度暂无"
+        metrics.text=position?.metrics.orEmpty().replace(" · ","\n")
+        contentDescription="第${position?.rank ?: "未知"}名，${item.title}，${item.tags}，${position?.heat.orEmpty()}"
     }
 }
