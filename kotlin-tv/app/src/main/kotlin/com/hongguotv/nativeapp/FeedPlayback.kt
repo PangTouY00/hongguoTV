@@ -56,16 +56,18 @@ internal class PublicFeedBackend(
     override fun categoryRecommendations(category: DramaCategory,page: Int,cursor: RecommendationCursor)=rememberHints(RecommendationFeed(http,recommendationAccount,cursor,category).page(page))
     override fun catalog(category: DramaCategory,page: Int)=repository.discover(category,page=page)
     override fun detail(series: Series)=repository.detail(series.id)
+    private fun open(id: String): RemoteVideo {
+        val opened=openStream(http,repository,id,quality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) }
+            ?: throw java.io.IOException("该作品暂时没有可试播的剧集")
+        return opened.video
+    }
     override fun prepare(detail: Detail): TrialClip {
         val id=detail.episodes.firstOrNull() ?: throw java.io.IOException("该作品暂时没有可试播的剧集")
-        val video=RemoteVideo(http,repository.stream(id,quality))
-        try { return TrialClip(detail,video.prepare()) } catch(error: Exception) { video.close();throw error }
+        return TrialClip(detail,open(id))
     }
     override fun trial(series: Series): TrialClip {
         val hint=synchronized(trialHints) { trialHints[series.id] } ?: return prepare(detail(series))
-        val video=RemoteVideo(http,timed("play-address") { repository.stream(hint.episodeId,quality) })
-        try { return TrialClip(Detail(series,listOf(hint.episodeId)),timed("media-index") { video.prepare() },hint.episodeCount) }
-        catch(error: Exception) { video.close();throw error }
+        return TrialClip(Detail(series,listOf(hint.episodeId)),timed("play-address") { open(hint.episodeId) },hint.episodeCount)
     }
     override fun preload(series: Series): TrialClip {
         val clip=trial(series)

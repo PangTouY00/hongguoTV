@@ -20,6 +20,7 @@ import android.text.TextUtils
 import androidx.media3.common.*
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
 import com.hongguotv.core.*
@@ -181,6 +182,11 @@ class MainActivity: Activity() {
     private var playError=false
     private var lastSaved=0L
     private var quality=""
+    private var attemptedQuality=0
+    private var currentTrack: VideoTracks.Track?=null
+    private var currentRendition: Rendition?=null
+    private var currentTiers: List<Rendition> = emptyList()
+    private var autoDowngrades=0
     private val tick=object: Runnable {
         override fun run() {
             if(!foreground || isDestroyed) return
@@ -219,6 +225,8 @@ class MainActivity: Activity() {
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         librarySources=LibrarySources(this)
         library=Library(this); artwork=ArtworkLoader(this); tvTools=TvTools(this); root=FrameLayout(this).apply { setBackgroundColor(bg) }; setContentView(root)
+        CodecCapabilities.init(this)
+        CodecCapabilities.logDeviceCapabilities()
         cloudAccount=AccountController(this) { remote ->
             openDetail(remote.series,true,cloudProgress=remote)
         }
@@ -1105,7 +1113,7 @@ class MainActivity: Activity() {
         if(cloudAccount.signedIn && !cloudAccount.favoriteState().loaded && !cloudAccount.favoriteState().loading) cloudAccount.refreshFavorites()
         if(focusEpisode) episodes.getOrNull((episodeIndex-group*20).coerceIn(0,episodes.lastIndex))?.requestFocus() else play.requestFocus()
     }
-    private fun playEpisode(index: Int,position: Long=0,autoplay: Boolean=true,recovering: Boolean=false) {
+    private fun playEpisode(index: Int,position: Long=0,autoplay: Boolean=true,recovering: Boolean=false,autoDowngrade: Boolean=false) {
         updater.interrupt()
         social.reset()
         val data=detail ?: return
@@ -1137,7 +1145,9 @@ class MainActivity: Activity() {
         autoRecovery=false; readySince=0; startPosition=position.coerceAtLeast(0); requestedAutoplay=autoplay
         if(autoplay) sleepStopped=false
         screen="player"; episodeIndex=selectedIndex; group=episodeIndex/20
-        panel=false; playError=false; playbackReady=false; episodeDuration=0; quality=""; pausedForLifecycle=!autoplay
+        panel=false; playError=false; playbackReady=false; episodeDuration=0; quality=""; attemptedQuality=0
+        currentTrack=null; currentRendition=null; currentTiers=emptyList()
+        if(!autoDowngrade) autoDowngrades=0; pausedForLifecycle=!autoplay
         player?.playWhenReady=requestedAutoplay
         prefetchAttempts=0; prefetchAttemptAt=0
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1162,8 +1172,11 @@ class MainActivity: Activity() {
         controls.removeAllViews(); controls.visibility=View.GONE; transportPlay=null; sleepButton=null
         syncMediaSession()
         val requestedId=data.episodes[episodeIndex]; val maxQuality=library.maxQuality; val ticket=generation
-        work({ prefetched ?: RemoteVideo(repository.http,repository.stream(requestedId,maxQuality)).prepare() }, { remote ->
-            video=remote; quality=remote.info.quality
+        work({ prefetched?.let { OpenedStream(it,null,emptyList(),it.trackInfo()) }
+            ?: openStream(repository.http,repository,requestedId,maxQuality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) }
+            ?: throw java.io.IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集") }, { opened ->
+            val remote=opened.video; video=remote; quality=playedQualityLabel(opened,maxQuality); attemptedQuality=opened.rendition?.quality ?: 0
+            currentTrack=opened.track; currentRendition=opened.rendition; currentTiers=opened.tiers
             val p=player ?: run {
                 val load=DefaultLoadControl.Builder().setBufferDurationsMs(15000,30000,1000,2000).setTargetBufferBytes(12*1024*1024).build()
                 val renderers=androidx.media3.exoplayer.DefaultRenderersFactory(this).setEnableDecoderFallback(true)
@@ -1171,6 +1184,7 @@ class MainActivity: Activity() {
                     player=it; playerView?.player=it
                     it.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),true)
                     it.setHandleAudioBecomingNoisy(true)
+                    it.addAnalyticsListener(playbackDriftListener(it))
                 }
             }
             p.setPlaybackSpeed(library.playbackSpeed)
@@ -1250,7 +1264,9 @@ class MainActivity: Activity() {
             var remote: RemoteVideo?=null
             try {
                 val prepared=scope.run {
-                    RemoteVideo(http,source.stream(id,quality)).also { remote=it; it.warm(PrefetchPolicy.WARM_BYTES) }
+                    val opened=openStream(http,source,id,quality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) }
+                        ?: throw java.io.IOException("没有电视可播放的清晰度")
+                    opened.video.also { remote=it; it.warm(PrefetchPolicy.WARM_BYTES) }
                 }
                 if(preparedNext.complete(ticket,key,prepared)) {
                     android.util.Log.i("HongguoTV","Next episode opening buffered bytes=${PrefetchPolicy.WARM_BYTES}")
@@ -1319,16 +1335,58 @@ class MainActivity: Activity() {
         playbackText.text="${if(retryAutoplay) "准备恢复播放" else "准备恢复暂停位置"} · ${delay/1000f} 秒后重试 ${recovery.attempts+1}/3 · ${formatTime(retryPosition)}"
         retryPending=true; main.postDelayed(retryRunnable,delay)
     }
+    /** Detects growing audio/video drift (video frame processing offset stays signed) and
+     *  re-seeks to the current position once per cooldown window: a seek flushes the audio
+     *  processors and clock basis, which users confirmed restores sync; a pause does not. */
+    private fun playbackDriftListener(p: ExoPlayer): AnalyticsListener {
+        val guard=PlaybackSyncGuard()
+        return object: AnalyticsListener {
+            override fun onVideoFrameProcessingOffset(eventTime: AnalyticsListener.EventTime,totalProcessingOffsetUs: Long,frameCount: Int) {
+                val window=guard.offer(totalProcessingOffsetUs,frameCount,p.isPlaying) ?: return
+                android.util.Log.i("HongguoTV","Video frame offset ${window.averageUs/1000}ms")
+                if(window.resync) main.post {
+                    if(player===p && playbackReady && p.isPlaying && pendingSeek==null && !playError) {
+                        android.util.Log.w("HongguoTV","Resync after audio/video drift ${window.averageUs/1000}ms at ${formatTime(p.currentPosition)}")
+                        p.seekTo(p.currentPosition)
+                    }
+                }
+            }
+        }
+    }
+    private fun playedQualityLabel(opened: OpenedStream,maxQuality: Int): String {
+        val rendition=opened.rendition ?: return opened.video.info.quality
+        val label=if(rendition.quality>0) "${rendition.quality}P" else "自动"
+        if(rendition.quality>maxQuality) return label+"（兼容资源）"
+        val ideal=opened.tiers.filter { it.quality in 1..maxQuality }.maxOfOrNull { it.quality }
+        return if(ideal!=null && rendition.quality<ideal) label+"（自动降清）" else label
+    }
     private fun playerFailure(problem: Throwable) {
         retryPosition=currentPosition().coerceAtLeast(0); retryAutoplay=requestedAutoplay && !sleepStopped
         saveProgress(); cancelRecovery(); cancelPrefetch()
+        // The device claimed support it doesn't have (MediaCodecList over-reporting): learn the
+        // runtime verdict and retry one tier lower automatically instead of surfacing the panel.
+        if(problem is PlaybackException && problem.errorCode in PlaybackException.ERROR_CODE_DECODER_INIT_FAILED..PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED) {
+            val track=currentTrack; val rendition=currentRendition
+            when {
+                track!=null -> CodecCapabilities.learnFailure(track.fourcc,track.width,track.height)
+                rendition!=null -> CodecCapabilities.learnFailure(rendition.codec,rendition.width,rendition.height)
+            }
+            if(shouldAutoDowngrade(autoDowngrades,2,currentTiers,attemptedQuality)) {
+                autoDowngrades++
+                android.util.Log.w("HongguoTV","Auto downgrading after decoder failure (attempt $autoDowngrades, was ${attemptedQuality}P)")
+                playEpisode(episodeIndex,retryPosition,retryAutoplay,autoDowngrade=true)
+                return
+            }
+        }
         playError=true; player?.pause(); progressBar.visibility=View.GONE; hud.visibility=View.VISIBLE; controls.removeAllViews(); controls.visibility=View.VISIBLE; panel=true
         val decoding=problem is PlaybackException && problem.errorCode in 3000..4999
         val retryable=if(problem is PlaybackException) problem.errorCode in 2000..2999 || problem.errorCode==PlaybackException.ERROR_CODE_TIMEOUT else problem is java.io.IOException
         playbackText.text=if(decoding) "电视无法解码当前视频，可尝试更低清晰度。" else "播放失败，可重试或切换清晰度。"
         val actions=row(); controls.addView(actions)
         addButton(actions,"立即重试") { playEpisode(episodeIndex,retryPosition,retryAutoplay) }.requestFocus()
-        addButton(actions,"尝试 720P") { library.maxQuality=720; playEpisode(episodeIndex,retryPosition,retryAutoplay) }
+        nextLowerQuality(if(attemptedQuality>0) attemptedQuality else library.maxQuality)?.let { lower ->
+            addButton(actions,"尝试 ${lower}P") { library.maxQuality=lower; playEpisode(episodeIndex,retryPosition,retryAutoplay) }
+        }
         addButton(actions,"返回选集") { returnToDetail(true) }
         if(retryable && !sleepStopped) {
             addButton(controls,"停止自动重试") { cancelRecovery(); playbackText.text="自动重试已停止，观看位置已保留。" }
@@ -1442,7 +1500,7 @@ class MainActivity: Activity() {
         danmakuButton=addButton(options,"弹幕设置") { social.settings(danmakuButton) }
         lateinit var more: TextView
         more=addButton(options,"播放设置") {
-            tvTools.choose("播放设置",listOf("倍速 ${PlaybackSpeed.label(library.playbackSpeed)}","清晰度 ${library.maxQuality}P","画面 ${library.frameMode.label}","定时 ${sleepTimer.label()}","从头播放"),more,{ choice ->
+            tvTools.choose("播放设置",listOf("倍速 ${PlaybackSpeed.label(library.playbackSpeed)}","清晰度 ${library.maxQuality}P","画面 ${library.frameMode.label}","定时 ${sleepTimer.label()}","从头播放","重置设备能力记录"),more,{ choice ->
                 main.post {
                     if(screen=="player" && more.isAttachedToWindow) when(choice) {
                         0 -> showSpeedPicker(more)
@@ -1450,6 +1508,12 @@ class MainActivity: Activity() {
                         2 -> showFramePicker(more,true)
                         3 -> showSleepPicker(more)
                         4 -> { seekTo(0); hidePanel() }
+                        5 -> {
+                            val count=CodecCapabilities.learnedCount()
+                            CodecCapabilities.resetLearned()
+                            android.util.Log.i("HongguoTV","Decoder capability lessons reset ($count entries)")
+                            playbackText.text=if(count>0) "已清除 $count 条设备能力记录，重新按解码器实际能力选流" else "暂无设备能力记录"
+                        }
                     }
                 }
             })

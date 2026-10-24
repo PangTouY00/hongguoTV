@@ -65,5 +65,7 @@ class RemoteVideo(private val http: OkHttpClient, val info: StreamInfo): Closeab
         val raw=if(start+available<end) first+range(start+available,end-1).bytes else first
         return MediaCrypto.decrypt(raw,start,info.key,prepared)
     }
+    /** Coded video dimensions after prepare(); null before prepare or when the header has no readable video track. */
+    fun trackInfo(): VideoTracks.Track? { if(!::prepared.isInitialized) return null; return VideoTracks.videoTrack(prepared.header) }
     override fun close() { synchronized(calls) { closed=true; calls.toList().forEach { it.cancel() }; calls.clear() } }
 }
