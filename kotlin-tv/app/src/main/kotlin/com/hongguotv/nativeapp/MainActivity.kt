@@ -181,6 +181,7 @@ class MainActivity: Activity() {
     private var playError=false
     private var lastSaved=0L
     private var quality=""
+    private var attemptedQuality=0
     private val tick=object: Runnable {
         override fun run() {
             if(!foreground || isDestroyed) return
@@ -219,6 +220,7 @@ class MainActivity: Activity() {
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         librarySources=LibrarySources(this)
         library=Library(this); artwork=ArtworkLoader(this); tvTools=TvTools(this); root=FrameLayout(this).apply { setBackgroundColor(bg) }; setContentView(root)
+        CodecCapabilities.logDeviceCapabilities()
         cloudAccount=AccountController(this) { remote ->
             openDetail(remote.series,true,cloudProgress=remote)
         }
@@ -1137,7 +1139,7 @@ class MainActivity: Activity() {
         autoRecovery=false; readySince=0; startPosition=position.coerceAtLeast(0); requestedAutoplay=autoplay
         if(autoplay) sleepStopped=false
         screen="player"; episodeIndex=selectedIndex; group=episodeIndex/20
-        panel=false; playError=false; playbackReady=false; episodeDuration=0; quality=""; pausedForLifecycle=!autoplay
+        panel=false; playError=false; playbackReady=false; episodeDuration=0; quality=""; attemptedQuality=0; pausedForLifecycle=!autoplay
         player?.playWhenReady=requestedAutoplay
         prefetchAttempts=0; prefetchAttemptAt=0
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1162,8 +1164,10 @@ class MainActivity: Activity() {
         controls.removeAllViews(); controls.visibility=View.GONE; transportPlay=null; sleepButton=null
         syncMediaSession()
         val requestedId=data.episodes[episodeIndex]; val maxQuality=library.maxQuality; val ticket=generation
-        work({ prefetched ?: RemoteVideo(repository.http,repository.stream(requestedId,maxQuality)).prepare() }, { remote ->
-            video=remote; quality=remote.info.quality
+        work({ prefetched?.let { OpenedStream(it,null,emptyList()) }
+            ?: openStream(repository.http,repository,requestedId,maxQuality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) }
+            ?: throw java.io.IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集") }, { opened ->
+            val remote=opened.video; video=remote; quality=playedQualityLabel(opened,maxQuality); attemptedQuality=opened.rendition?.quality ?: 0
             val p=player ?: run {
                 val load=DefaultLoadControl.Builder().setBufferDurationsMs(15000,30000,1000,2000).setTargetBufferBytes(12*1024*1024).build()
                 val renderers=androidx.media3.exoplayer.DefaultRenderersFactory(this).setEnableDecoderFallback(true)
@@ -1250,7 +1254,9 @@ class MainActivity: Activity() {
             var remote: RemoteVideo?=null
             try {
                 val prepared=scope.run {
-                    RemoteVideo(http,source.stream(id,quality)).also { remote=it; it.warm(PrefetchPolicy.WARM_BYTES) }
+                    val opened=openStream(http,source,id,quality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) }
+                        ?: throw java.io.IOException("没有电视可播放的清晰度")
+                    opened.video.also { remote=it; it.warm(PrefetchPolicy.WARM_BYTES) }
                 }
                 if(preparedNext.complete(ticket,key,prepared)) {
                     android.util.Log.i("HongguoTV","Next episode opening buffered bytes=${PrefetchPolicy.WARM_BYTES}")
@@ -1319,6 +1325,13 @@ class MainActivity: Activity() {
         playbackText.text="${if(retryAutoplay) "准备恢复播放" else "准备恢复暂停位置"} · ${delay/1000f} 秒后重试 ${recovery.attempts+1}/3 · ${formatTime(retryPosition)}"
         retryPending=true; main.postDelayed(retryRunnable,delay)
     }
+    private fun playedQualityLabel(opened: OpenedStream,maxQuality: Int): String {
+        val rendition=opened.rendition ?: return opened.video.info.quality
+        val label=if(rendition.quality>0) "${rendition.quality}P" else "自动"
+        if(rendition.quality>maxQuality) return label+"（兼容资源）"
+        val ideal=opened.tiers.filter { it.quality in 1..maxQuality }.maxOfOrNull { it.quality }
+        return if(ideal!=null && rendition.quality<ideal) label+"（自动降清）" else label
+    }
     private fun playerFailure(problem: Throwable) {
         retryPosition=currentPosition().coerceAtLeast(0); retryAutoplay=requestedAutoplay && !sleepStopped
         saveProgress(); cancelRecovery(); cancelPrefetch()
@@ -1328,7 +1341,9 @@ class MainActivity: Activity() {
         playbackText.text=if(decoding) "电视无法解码当前视频，可尝试更低清晰度。" else "播放失败，可重试或切换清晰度。"
         val actions=row(); controls.addView(actions)
         addButton(actions,"立即重试") { playEpisode(episodeIndex,retryPosition,retryAutoplay) }.requestFocus()
-        addButton(actions,"尝试 720P") { library.maxQuality=720; playEpisode(episodeIndex,retryPosition,retryAutoplay) }
+        nextLowerQuality(if(attemptedQuality>0) attemptedQuality else library.maxQuality)?.let { lower ->
+            addButton(actions,"尝试 ${lower}P") { library.maxQuality=lower; playEpisode(episodeIndex,retryPosition,retryAutoplay) }
+        }
         addButton(actions,"返回选集") { returnToDetail(true) }
         if(retryable && !sleepStopped) {
             addButton(controls,"停止自动重试") { cancelRecovery(); playbackText.text="自动重试已停止，观看位置已保留。" }

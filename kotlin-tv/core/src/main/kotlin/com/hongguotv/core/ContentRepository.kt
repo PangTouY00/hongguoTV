@@ -24,6 +24,30 @@ data class ComicRanking(val positions: Map<String,RankPosition>, val totalPages:
 data class TrialHint(val episodeId: String,val episodeCount: Int)
 data class CatalogPage(val items: List<Series>, val hasMore: Boolean, val ranking: ComicRanking? = null, val discovery: DiscoveryInfo? = null,val trialHints: Map<String,TrialHint> = emptyMap())
 data class StreamInfo(val url: String, val key: ByteArray?, val quality: String)
+/** One playable rendition; width/height are the coded dimensions when the API reports them. */
+data class Rendition(val quality: Int, val codec: String, val width: Int?, val height: Int?, val url: String, val key: ByteArray?) {
+    fun toStreamInfo() = StreamInfo(url, key, if(quality > 0) "${quality}P" else "自动")
+}
+/** All playable renditions of one episode. Capability-first selection: TV boxes commonly cap
+ *  AVC decoders at 1920x1088 with width/height checked independently, rejecting portrait sizes. */
+class StreamLadder(val renditions: List<Rendition>) {
+    // Ascending order: a greater element is the better tier (higher quality, h264 over others).
+    // maxWithOrNull picks the best tier; minWithOrNull yields the closest-below fallback.
+    private val better = compareBy<Rendition> { it.quality }.thenBy { if(it.codec in AVC_LABELS) 1 else 0 }
+    fun select(maxQuality: Int, supported: (Rendition) -> Boolean = { true }): Rendition? {
+        val pool = renditions.filter(supported).ifEmpty { renditions }
+        return pool.filter { it.quality in 1..maxQuality }.maxWithOrNull(better)
+            ?: pool.filter { it.quality <= 0 }.maxWithOrNull(better)
+            ?: pool.minWithOrNull(better)
+    }
+    /** select() first, then every lower or equal tier best-first for verified downgrade. */
+    fun playbackOrder(maxQuality: Int, supported: (Rendition) -> Boolean = { true }): List<Rendition> {
+        val pick = select(maxQuality, supported) ?: return emptyList()
+        val alternates = renditions.filter { it !== pick && it.quality <= pick.quality }.sortedWith(better.reversed())
+        return listOf(pick) + alternates
+    }
+    companion object { private val AVC_LABELS = setOf("h264", "avc", "avc1", "avc3") }
+}
 class SearchSessionExpiredException: IOException("搜索结果已过期，请从第 1 页重新搜索")
 
 class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).callTimeout(45,TimeUnit.SECONDS).build(), private val clock: () -> Long = System::currentTimeMillis) {
@@ -208,7 +232,13 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         if(episodes.isEmpty() || episodes.any { !it.matches(Regex("[0-9]{1,30}")) } || episodes.distinct().size!=episodes.size) throw IOException("分集数据异常")
         return Detail(card(o).copy(id=id),episodes)
     }
-    fun stream(id: String, maxQuality: Int = 1080): StreamInfo {
+    fun stream(id: String, maxQuality: Int = 1080, supported: (Rendition) -> Boolean = { true }): StreamInfo {
+        val selected=streamLadder(id).select(maxQuality,supported) ?: throw IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集")
+        val info=selected.toStreamInfo()
+        return if(selected.quality>maxQuality) info.copy(quality=info.quality+"（兼容资源）") else info
+    }
+    /** Every playable rendition of one episode, best tier first; one player-API round trip. */
+    fun streamLadder(id: String): StreamLadder {
         require(id.matches(Regex("[0-9]{1,30}")))
         val payload="""{"biz_param":{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}""".toByteArray()
         val query=Signer.encode(playerDevice + ("_rticket" to clock().toString()))
@@ -235,13 +265,21 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         val rows=videoList.keys().asSequence().mapNotNull { k -> videoList.optJSONObject(k)?.let { k to it } }.filter {
             it.second.str("main_url").isNotEmpty() && it.second.str("codec_type").lowercase() !in setOf("bytevc2","bvc2")
         }.map { (k,o) -> Triple(qualityNumber(o.str("quality_desc").ifEmpty { o.str("height").ifEmpty { o.str("vheight").ifEmpty { o.str("quality").ifEmpty { k } } } }),k,o) }.sortedByDescending { it.first }.toList()
-        val selected=rows.firstOrNull { it.first<=maxQuality } ?: rows.lastOrNull() ?: throw IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集")
-        val item=selected.third; var url=cleanUrl(item.str("main_url")); val seed=info.str("key_seed")
-        if(seed.isNotEmpty()) url=MediaCrypto.decryptUrl(url,decode64(seed))
-        if(!url.startsWith("https://") && !url.startsWith("http://")) throw IOException("播放地址无效")
-        val key=item.str("spade_a").takeIf { it.isNotEmpty() }?.let(MediaCrypto::deriveKey)
-        val quality=if(selected.first>0) "${selected.first}P"+(if(selected.first>maxQuality) "（兼容资源）" else "") else "自动"
-        return StreamInfo(url,key,quality)
+        val seed=info.str("key_seed")
+        // A broken rendition entry must not take down otherwise playable siblings.
+        val renditions=rows.mapNotNull { (quality,_,o) -> runCatching {
+            var url=cleanUrl(o.str("main_url"))
+            if(seed.isNotEmpty()) url=MediaCrypto.decryptUrl(url,decode64(seed))
+            if(!url.startsWith("https://") && !url.startsWith("http://")) return@runCatching null
+            Rendition(quality,o.str("codec_type").lowercase(),dimension(o,"vwidth","width"),dimension(o,"vheight","height"),url,
+                o.str("spade_a").takeIf { it.isNotEmpty() }?.let(MediaCrypto::deriveKey))
+        }.getOrNull() }
+        if(renditions.isEmpty()) throw IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集")
+        return StreamLadder(renditions)
+    }
+    private fun dimension(o: JSONObject,vararg keys: String): Int? {
+        for(key in keys) { val value=o.optInt(key,0); if(value>0) return value }
+        return null
     }
     companion object {
         fun extractRouter(html: String): JSONObject {

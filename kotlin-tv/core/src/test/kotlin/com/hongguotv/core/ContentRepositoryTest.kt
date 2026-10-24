@@ -107,6 +107,28 @@ class ContentRepositoryTest {
         assertEquals("720P",repo.stream("123",720).quality)
     }
 
+    @Test fun capabilityPredicateDropsUndecodableTiers() {
+        val repo=streamRepository(Triple(1080,"bytevc1","https://example.com/hevc"),Triple(480,"h264","https://example.com/avc"))
+        val info=repo.stream("123",1080) { it.codec=="h264" }
+        assertEquals("480P",info.quality); assertEquals("https://example.com/avc",info.url)
+    }
+
+    @Test fun streamLadderCarriesCodedDimensionsAndCodecs() {
+        val repo=repository { request ->
+            if(request.url.host=="example.com") {
+                val rows=JSONObject()
+                    .put("video_0",JSONObject().put("quality_desc","1080p").put("codec_type","h264").put("vwidth",1080).put("vheight",1920).put("main_url","https://example.com/portrait"))
+                    .put("video_1",JSONObject().put("quality_desc","540p").put("codec_type","h264").put("vwidth",540).put("vheight",960).put("main_url","https://example.com/small"))
+                JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",rows))).toString()
+            } else """{"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
+        }
+        val ladder=repo.streamLadder("123")
+        val portrait=ladder.renditions.first { it.url.endsWith("/portrait") }
+        assertEquals("h264",portrait.codec); assertEquals(1080,portrait.width); assertEquals(1920,portrait.height)
+        // A portrait 1080 tier is rejected by size while the smaller tier stays playable.
+        assertEquals(540,ladder.select(1080) { !(it.width==1080 && it.height==1920) }!!.quality)
+    }
+
     private fun repository(clock: () -> Long = System::currentTimeMillis, respond: (Request) -> String) = ContentRepository(
         OkHttpClient.Builder().addInterceptor { chain ->
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
