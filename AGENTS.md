@@ -6,9 +6,10 @@
 - For subsequent features and fixes, branch from the latest `main` using `feature-<short-description>` or `fix-<short-description>`. Implement and validate there, then use a pull request to merge into `main`; do not directly push new feature work to `main` unless the user explicitly authorizes it.
 - The initial migration of the existing working features into this repository's `main` is authorized directly by the user.
 - The active Android client is `kotlin-tv/`. Keep historical React Native sources unless the task specifically concerns their removal.
+- Keep README.md in sync whenever adding, changing, or removing user-facing features. Update platform-specific README and usage/limitations documents when relevant; describe only implemented behavior and distinguish unverified or unavailable capabilities. Include documentation updates in the same change.
 - Run relevant checks. Native changes normally require `:core:test :app:testDebugUnitTest :app:assembleDebug :app:lintDebug`; documentation-only changes do not need Android builds.
 - APKs, build output, account sessions, phone numbers, verification codes, passwords, and signing keys must not be committed. Credentials must not appear in logs or documentation.
-- Preserve package identity and signing continuity for updates. Increase `versionCode` for each formal release; keep versionName/versionCode unchanged during debugging and distinguish debug APKs by filename. Current TV release is 0.1.2; next formal release is 0.1.3.
+- Preserve package identity and signing continuity for updates. Increase `versionCode` for each formal release; keep versionName/versionCode unchanged during debugging and distinguish debug APKs by filename. Current TV release is 0.1.3 (versionCode 44); increase versions only for the next formal release.
 - App updates use only `tsukiyo-zero/hongguoTV` Releases. A source push or CI artifact is not a release. Follow `kotlin-tv/AUTO_UPDATES.md`; do not reintroduce the upstream cross-repository publishing workflow.
 
 - The user prefers to install APKs and perform manual emulator/TV tests themselves, then send screenshots. Run automated checks and package locally; do not operate the emulator or install test builds unless explicitly requested again.
