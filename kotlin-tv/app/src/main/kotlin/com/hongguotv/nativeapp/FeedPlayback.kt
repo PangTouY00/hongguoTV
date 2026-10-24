@@ -32,7 +32,8 @@ internal interface FeedBackend: Closeable {
 internal class PublicFeedBackend(
     private val quality: Int,
     private val http: OkHttpClient=OkHttpClient.Builder().connectionPool(feedPool).connectTimeout(12,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).callTimeout(35,TimeUnit.SECONDS).build(),
-    account: AccountCredentials?=null
+    account: AccountCredentials?=null,
+    private val startupCache: FeedStartupCache?=null
 ): FeedBackend {
     companion object {
         // Reuse idle public TLS connections across homepage visits. Dispatchers remain per backend,
@@ -42,7 +43,11 @@ internal class PublicFeedBackend(
     private val closed=java.util.concurrent.atomic.AtomicBoolean(false)
     private val repository=ContentRepository(http)
     private val recommendationAccount=account
+    private val cacheIdentity=account?.let {
+        java.security.MessageDigest.getInstance("SHA-256").digest(it.cookie.toByteArray(Charsets.UTF_8)).joinToString("") { b -> "%02x".format(b.toInt() and 255) }
+    } ?: "guest"
     private val trialHints=linkedMapOf<String,TrialHint>()
+    private val startupPages=mutableMapOf<String,CatalogPage>()
     private fun rememberHints(page: CatalogPage): CatalogPage {
         synchronized(trialHints) {
             trialHints.putAll(page.trialHints)
@@ -54,12 +59,27 @@ internal class PublicFeedBackend(
         val start=android.os.SystemClock.elapsedRealtime()
         try { return action() } finally { android.util.Log.i("HongguoTV","Home $stage elapsedMs=${android.os.SystemClock.elapsedRealtime()-start}") }
     }
-    override fun recommendations(page: Int,cursor: RecommendationCursor)=timed("recommendations") { rememberHints(RecommendationFeed(http,recommendationAccount,cursor).page(page)) }
-    override fun categoryRecommendations(category: DramaCategory,page: Int,cursor: RecommendationCursor)=rememberHints(RecommendationFeed(http,recommendationAccount,cursor,category).page(page))
+    private fun page(source: String,page: Int,cursor: RecommendationCursor,fetch: ()->CatalogPage): CatalogPage {
+        if(page==1) startupCache?.load(cacheIdentity,source)?.let { cached ->
+            if(cursor.restoreStarter(cached)) {
+                synchronized(trialHints) { startupPages[source]=cached }
+                android.util.Log.i("HongguoTV","Home starter-cache hit")
+                return rememberHints(cached)
+            }
+        }
+        val result=rememberHints(fetch())
+        if(page==1) {
+            synchronized(trialHints) { startupPages[source]=result }
+            startupCache?.save(cacheIdentity,source,result)
+        }
+        return result
+    }
+    override fun recommendations(page: Int,cursor: RecommendationCursor)=timed("recommendations") { page("recommend",page,cursor) { RecommendationFeed(http,recommendationAccount,cursor).page(page) } }
+    override fun categoryRecommendations(category: DramaCategory,page: Int,cursor: RecommendationCursor)=timed("category") { page(category.route,page,cursor) { RecommendationFeed(http,recommendationAccount,cursor,category).page(page) } }
     override fun catalog(category: DramaCategory,page: Int)=repository.discover(category,page=page)
-    override fun detail(series: Series)=repository.detail(series.id)
+    override fun detail(series: Series)=timed("detail") { repository.detail(series.id) }
     private fun open(id: String): RemoteVideo {
-        val opened=openStream(http,repository,id,quality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) }
+        val opened=openStream(http,repository,id,quality,CodecCapabilities::supports,initialBytes=32*1024) { it==null || CodecCapabilities.supports(it) }
             ?: throw java.io.IOException("该作品暂时没有可试播的剧集")
         return opened.video
     }
@@ -68,7 +88,20 @@ internal class PublicFeedBackend(
         return TrialClip(detail,open(id))
     }
     override fun trial(series: Series): TrialClip {
-        val hint=synchronized(trialHints) { trialHints[series.id] } ?: return prepare(detail(series))
+        val hint=synchronized(trialHints) { trialHints[series.id] } ?: run {
+            val detail=detail(series)
+            val first=detail.episodes.firstOrNull() ?: throw java.io.IOException("该作品暂时没有可试播的剧集")
+            val verified=TrialHint(first,detail.episodes.size)
+            val updates=synchronized(trialHints) {
+                trialHints[series.id]=verified
+                startupPages.filterValues { page -> page.items.any { it.id==series.id } }.map { (key,page) ->
+                    val updated=page.copy(trialHints=page.trialHints+(series.id to verified))
+                    startupPages[key]=updated;key to updated
+                }
+            }
+            updates.forEach { (source,page) -> startupCache?.save(cacheIdentity,source,page) }
+            verified
+        }
         return TrialClip(Detail(series,listOf(hint.episodeId)),timed("play-address") { open(hint.episodeId) },hint.episodeCount)
     }
     // Publish the prepared header immediately. Media3 preloads samples according to duration;

@@ -4,6 +4,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DramaFeedTest {
+    @Test fun returningToSourceRestoresCardsSelectionAndPagingButAccountResetClearsAllSources() {
+        val state=DramaFeedState();state.append(page(100),1);state.move(2)
+        val cursor=state.recommendationCursor
+        state.select(DramaCategory.COMIC);state.append(page(200),1);state.move(3)
+        state.recommend();assertEquals("102",state.current?.id);assertEquals(1,state.page);assertSame(cursor,state.recommendationCursor)
+        state.select(DramaCategory.COMIC);assertEquals("203",state.current?.id)
+        state.refresh();assertNull(state.current)
+        state.recommend();assertEquals("102",state.current?.id)
+        state.refresh(resetRecommendations=true)
+        state.select(DramaCategory.COMIC);assertNull(state.current);assertEquals(0,state.page)
+    }
     private fun page(start: Int)=CatalogPage((start until start+24).map { Series("$it","作品$it") },true)
     @Test fun switchingWorksResetsOnlyTrialPositionAndTypeClearsQueue() {
         val state=DramaFeedState();state.append(page(0),1)

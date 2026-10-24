@@ -173,10 +173,10 @@ class HomeFeedScreenTest {
             texts(screen).first { it.text=="真人剧" }.performClick();pump(screen)
             assertFalse(state.recommendation);assertEquals(1,backend.recommendationReads)
             texts(screen).first { it.text=="推荐" }.performClick();pump(screen)
-            assertTrue(state.recommendation);assertEquals(2,backend.recommendationReads)
+            assertTrue(state.recommendation);assertEquals(1,backend.recommendationReads)
             player.saved=1200
             texts(screen).first { it.text=="换一批" }.performClick();pump(screen)
-            assertEquals(3,backend.recommendationReads);assertEquals(0L,player.saved)
+            assertEquals(2,backend.recommendationReads);assertEquals(0L,player.saved)
         } finally { screen.close();controller.pause().stop().destroy() }
     }
     @Test fun openingFullSeriesAndReturningRestoresTrialPosition() {

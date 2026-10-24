@@ -45,6 +45,21 @@ class RemoteVideo(private val http: OkHttpClient, val info: StreamInfo): Closeab
             }
         } finally { synchronized(calls) { calls-=call } }
     }
+    /** Consume the index progressively within one request. Avoid a second round trip when
+     *  moov ends after the initial probe but inside the existing 256 KiB range. */
+    private fun indexPrefix(initialBytes: Int): Range {
+        val call=newCall(0,256*1024-1)
+        try {
+            return RequestScope.execute(call) { response ->
+                val (size,full)=rangeSize(response,0,256*1024-1)
+                val source=(response.body ?: throw IOException("视频分段为空")).source()
+                val first=source.readByteArray(minOf(initialBytes,size).toLong())
+                val needed=minOf(MediaCrypto.headerEnd(first,full),size)
+                val bytes=if(needed>first.size) first+source.readByteArray((needed-first.size).toLong()) else first
+                Range(bytes,full)
+            }
+        } finally { synchronized(calls) { calls-=call } }
+    }
     /** One bounded HTTP range, delivered as bytes arrive instead of waiting for the whole body.
      *  The playback data source owns this reader; close() interrupts an outstanding body read. */
     fun openRead(start: Long,length: Int): InputStream {
@@ -87,9 +102,11 @@ class RemoteVideo(private val http: OkHttpClient, val info: StreamInfo): Closeab
             call.cancel();response?.close();synchronized(calls) { calls-=call };throw error
         }
     }
-    @Synchronized fun prepare(): RemoteVideo {
+    @JvmOverloads @Synchronized fun prepare(initialBytes: Int=256*1024): RemoteVideo {
+        require(initialBytes in 16*1024..256*1024)
         if(::prepared.isInitialized) return this
-        val first=range(0,256*1024-1); total=first.total
+        val first=if(initialBytes<256*1024) indexPrefix(initialBytes) else range(0,256*1024-1)
+        total=first.total
         prefix=first.bytes
         val end=MediaCrypto.headerEnd(first.bytes,total)
         val header=if(end>first.bytes.size) first.bytes+range(first.bytes.size.toLong(),end-1L).bytes else first.bytes.copyOf(end)

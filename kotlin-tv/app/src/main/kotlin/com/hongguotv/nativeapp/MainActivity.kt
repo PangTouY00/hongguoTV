@@ -233,8 +233,9 @@ class MainActivity: Activity() {
             openDetail(remote.series,true,cloudProgress=remote)
         }
         cloudAccount.onHistoryChanged={
-            if(homeFeed!=null && homeFeedIdentity!=cloudAccount.recommendationIdentity) {
-                homeFeedState.refresh(resetRecommendations=true);showCatalog()
+            if(homeFeedIdentity!=cloudAccount.recommendationIdentity) {
+                homeFeedState.refresh(resetRecommendations=true);homeFeedIdentity=cloudAccount.recommendationIdentity
+                if(homeFeed!=null) showCatalog()
             }
             homeFeed?.refreshAccountLabel()
             relatedSection?.refreshLabels()
@@ -462,7 +463,7 @@ class MainActivity: Activity() {
             homeFeedIdentity=cloudAccount.recommendationIdentity
             val feed=HomeFeedScreen(this,homeFeedState,nav.toList(),
                 { openDetail(it,false) },::accountFavoriteAction,cloudAccount::favoriteActionLabel,
-                PublicFeedBackend(library.maxQuality,account=cloudAccount.recommendationCredentials()),Media3TrialPlayback(this))
+                PublicFeedBackend(library.maxQuality,account=cloudAccount.recommendationCredentials(),startupCache=FeedStartupCache(this)),Media3TrialPlayback(this))
             homeFeed=feed
             container.addView(feed,lp(-1,0).apply { weight=1f })
             feed.start(foreground,focusNav)

@@ -75,7 +75,7 @@ internal class HomeFeedScreen(
         orientation=VERTICAL
         stage.id=View.generateViewId()
         val types=LinearLayout(activity)
-        recommendButton=button("推荐") { if(!state.recommendation) { clearCurrent();clearCache();state.recommend();describe();loadPage(false) } }
+        recommendButton=button("推荐") { if(!state.recommendation) { clearCurrent();clearCache();state.recommend();describe();if(state.current!=null) loadCurrent() else loadPage(false) } }
         comicButton=button("漫剧") { changeType(DramaCategory.COMIC) }
         realButton=button("真人剧") { changeType(DramaCategory.REAL) }
         val refresh=button("换一批") { clearCurrent();clearCache();state.refresh();describe();loadPage(false) }
@@ -353,7 +353,7 @@ internal class HomeFeedScreen(
     private fun changeType(category: DramaCategory) {
         if(!state.recommendation && state.category==category) return
         clearCurrent();state.select(category)
-        clearCache();actions.visibility=View.GONE;stage.requestFocus();describe();loadPage(false)
+        clearCache();actions.visibility=View.GONE;stage.requestFocus();describe();if(state.current!=null) loadCurrent() else loadPage(false)
     }
     override fun close() {
         if(closed) return

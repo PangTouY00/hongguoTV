@@ -3,11 +3,39 @@ package com.hongguotv.core
 
 import okhttp3.*
 import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.buffer
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.IOException
 
 class RemoteVideoStreamingTest {
+    @Test fun smallStartupProbeFetchesOnlyTheCompleteIndexBeforeHandOff() {
+        val file=fixture(48*1024);val ranges=mutableListOf<String>();var delivered=0L
+        val http=OkHttpClient.Builder().addInterceptor { chain ->
+            val range=chain.request().header("Range")!!;ranges+=range
+            val limits=range.removePrefix("bytes=").split('-').map(String::toInt)
+            val end=minOf(file.lastIndex,limits[1])
+            val raw=okio.Buffer().write(file,limits[0],end-limits[0]+1)
+            val monitored=object: okio.ForwardingSource(raw) {
+                override fun read(sink: okio.Buffer,byteCount: Long): Long=super.read(sink,byteCount).also { if(it>0) delivered+=it }
+            }.buffer()
+            val body=object: ResponseBody() {
+                override fun contentType(): MediaType?=null
+                override fun contentLength()=(end-limits[0]+1).toLong()
+                override fun source()=monitored
+            }
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(206).message("partial")
+                .header("Content-Range","bytes ${limits[0]}-$end/${file.size}").body(body).build()
+        }.build()
+        RemoteVideo(http,StreamInfo("https://example.test/video",null,"测试")).use { video ->
+            video.prepare(32*1024)
+            assertEquals(listOf("bytes=0-262143"),ranges)
+            assertEquals(48*1024,video.cachedBytes(0))
+            assertEquals(48*1024L,delivered)
+            assertArrayEquals(file.copyOfRange(40*1024,44*1024),video.read(40*1024L,4096))
+            assertEquals(1,ranges.size)
+        }
+    }
     private fun fixture(headerSize: Int=16): ByteArray = ByteArray(1024*1024) { (it%239).toByte() }.also {
         java.nio.ByteBuffer.wrap(it).putInt(8).put("ftyp".toByteArray()).putInt(headerSize-8).put("moov".toByteArray())
     }

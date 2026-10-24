@@ -13,12 +13,12 @@ internal class OpenedStream(val video: RemoteVideo,val rendition: Rendition?,val
 /** Opens the first rendition the device can actually decode: select by API metadata, then
  *  verify the coded size read from the MP4 header and step down the ladder on mismatch. */
 internal fun openStream(http: OkHttpClient,repository: ContentRepository,id: String,maxQuality: Int,
-    supportsRendition: (Rendition)->Boolean,supportsTrack: (VideoTracks.Track?)->Boolean): OpenedStream? {
+    supportsRendition: (Rendition)->Boolean,initialBytes: Int=256*1024,supportsTrack: (VideoTracks.Track?)->Boolean): OpenedStream? {
     val ladder=repository.streamLadder(id)
     for(rendition in ladder.playbackOrder(maxQuality,supportsRendition)) {
         val video=RemoteVideo(http,rendition.toStreamInfo())
         try {
-            video.prepare()
+            video.prepare(initialBytes)
             val track=video.trackInfo()
             if(supportsTrack(track)) return OpenedStream(video,rendition,ladder.renditions,track)
             Log.i("HongguoTV","Skipped ${rendition.quality}P ${rendition.codec}: coded ${track?.width}x${track?.height} beyond decoder capability")

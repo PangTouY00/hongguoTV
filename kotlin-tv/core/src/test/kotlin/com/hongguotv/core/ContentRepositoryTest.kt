@@ -12,6 +12,39 @@ import org.junit.Test
 import java.io.IOException
 
 class ContentRepositoryTest {
+    @Test fun inlinePlaybackModelUsesItsOwnMetadataAndKeyWithoutFallbackRequest() {
+        val requests=mutableListOf<Request>()
+        // Synthetic obfuscation fixture for 000102030405060708090a0b0c0d0e0f.
+        val spade="08AThlTBE4hbwRyKVMYciFXFEopa2hKjW9oToVrdE6NZ3yRftNQ5Xkc="
+        val meta=JSONObject().put("definition","720p").put("codec_type","h264").put("vwidth",720).put("vheight",1280)
+        val row=JSONObject().put("main_url","https://example.com/inline").put("video_meta",meta)
+            .put("encrypt_info",JSONObject().put("encrypt",true).put("spade_a",spade))
+        val repo=repository { request ->
+            requests+=request
+            check(request.url.host!="example.com")
+            JSONObject().put("data",JSONObject().put("123",JSONObject().put("video_model",
+                JSONObject().put("video_list",JSONArray().put(row)).put("fallback_api","https://example.com/fallback")))).toString()
+        }
+        val tier=repo.streamLadder("123").renditions.single()
+        assertEquals(1,requests.size);assertEquals("https://example.com/inline",tier.url)
+        assertEquals(720,tier.quality);assertEquals(1280,tier.height)
+        assertArrayEquals(ByteArray(16) { it.toByte() },tier.key)
+    }
+    @Test fun unusableInlineEncryptedOrUnsupportedEntriesKeepLegacyFallback() {
+        for(encryption in listOf(JSONObject().put("encrypt",true),JSONObject().put("encrypt",true).put("spade_a","broken"))) {
+            var calls=0
+            val repo=repository { request ->
+                calls++
+                if(request.url.host=="example.com") """{"video_info":{"data":{"video_list":{"v":{"quality_desc":"480p","codec_type":"h264","main_url":"https://example.com/valid"}}}}}"""
+                else JSONObject().put("data",JSONObject().put("123",JSONObject().put("video_model",JSONObject()
+                    .put("video_list",JSONArray().put(JSONObject().put("main_url","https://example.com/encrypted")
+                        .put("video_meta",JSONObject().put("definition","720p").put("codec_type","h264").put("vwidth",720).put("vheight",1280)).put("encrypt_info",encryption)))
+                    .put("fallback_api","https://example.com/fallback")))).toString()
+            }
+            assertEquals("https://example.com/valid",repo.streamLadder("123").renditions.single().url)
+            assertEquals(2,calls)
+        }
+    }
     @Test fun allSearchUsesPublicJsonEndpointAndKeepsBothContentTypes() {
         var calls=0
         val repo=repository { request ->
