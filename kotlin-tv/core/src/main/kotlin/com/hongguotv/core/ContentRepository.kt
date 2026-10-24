@@ -132,6 +132,14 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         val lastPage=section.optJSONObject("pagination")?.optInt("totalPages",100) ?: 100
         return CatalogPage(items,items.isNotEmpty() && page<minOf(lastPage,100))
     }
+    fun filteredDiscovery(selection: DiscoverySelection,cursor: DiscoveryCursor?=null): FilteredDiscoveryPage {
+        val values=VendorConstants.device.toMutableMap()
+        for(key in listOf("version_code","manifest_version_code","update_version_code","pv_player")) values[key]="73532"
+        values["version_name"]="7.3.5.32"
+        val signed=signer.sign("https://api5-normal-sinfonlineb.fqnovel.com/reading/distribution/category/landpage/v/",
+            values,selection.request(cursor).toString().toByteArray(Charsets.UTF_8))
+        return FilteredDiscoveryParser.parse(text(signed.url,signed,retryTransient=true),cursor)
+    }
     fun discover(category: DramaCategory,topic: String="",page: Int=1): CatalogPage {
         require(page in 1..100 && (topic.isEmpty() || topic.matches(Regex("[a-z0-9]+(?:-[a-z0-9]+)*"))))
         val path="/category/${category.route}"+if(topic.isBlank()) "" else "/$topic"

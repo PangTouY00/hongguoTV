@@ -34,6 +34,7 @@ internal class ContinuousCatalogView(
     private var enterAdded=false
     private var restorePosition: Position?=null
     private var itemHeightLimit=0
+    var onGridFocus: ((Boolean)->Unit)?=null
     val grid=object: GridView(context) {
         override fun onMeasure(widthMeasureSpec: Int,heightMeasureSpec: Int) {
             itemHeightLimit=View.MeasureSpec.getSize(heightMeasureSpec)-dp(6)
@@ -57,7 +58,7 @@ internal class ContinuousCatalogView(
     private val cards=object: BaseAdapter() {
         override fun getCount()=entries.size
         override fun getItem(position: Int)=entries[position]
-        override fun getItemId(position: Int)=ids.getOrPut(entries[position].id) { nextId++ }
+        override fun getItemId(position: Int)=entries.getOrNull(position)?.let { ids.getOrPut(it.id) { nextId++ } } ?: AdapterView.INVALID_ROW_ID
         override fun hasStableIds()=true
         override fun getView(position: Int,convertView: View?,parent: ViewGroup): View {
             val item=entries[position]
@@ -82,7 +83,7 @@ internal class ContinuousCatalogView(
                 if(navigating && grid.hasFocus() && position>=maxOf(columns,entries.size-columns*2)) requestMore(false)
             }
         }
-        grid.setOnFocusChangeListener { _,_->paintFocus() }
+        grid.setOnFocusChangeListener { _,focus->paintFocus();onGridFocus?.invoke(focus) }
         grid.setOnKeyListener { _,key,event ->
             if(key==KeyEvent.KEYCODE_MENU) {
                 if(event.action==KeyEvent.ACTION_UP) entries.getOrNull(grid.selectedItemPosition)?.let { item -> grid.selectedView?.let { more(item,it) } }
@@ -136,7 +137,7 @@ internal class ContinuousCatalogView(
         entries.clear();entries.addAll(items.distinctBy { it.id });available=hasMore;busy=false;failed=false
         restorePosition=position;cards.notifyDataSetChanged();paintStatus()
         val index=entries.indexOfFirst { it.id==position?.id }.coerceAtLeast(0)
-        grid.setSelection(index)
+        grid.setSelection(if(entries.isEmpty()) AdapterView.INVALID_POSITION else index)
         entries.getOrNull(index)?.let(selected)
         post {
             if(closed) return@post
