@@ -76,7 +76,7 @@ def bundle(directory):
     name = manifest['apk']['name']
     if Path(name).name != name or not name.endswith('.apk'):
         raise Failure('Invalid APK filename')
-    files = [directory / name, directory / '更新说明.md', directory / 'update.json']
+    files = [directory / name, directory / 'release-notes.md', directory / 'update.json']
     if manifest['packageName'] != 'com.hongguotv.nativeapp' or manifest['minSdk'] != 23:
         raise Failure('Unexpected package or minSdk')
     apk = files[0].read_bytes()
@@ -113,7 +113,20 @@ class Publisher:
             raise Failure(f"{self.platform}: {method} {path.split(chr(63))[0]}: {error}") from None
 
     def get(self):
-        return self.api('/releases/tags/' + self.tag, missing=True)
+        release = self.api('/releases/tags/' + self.tag, missing=True)
+        if release is not None or self.platform != 'github':
+            return release
+        # GitHub's tag endpoint may omit drafts; find the matching authenticated draft.
+        for page in range(1, 101):
+            releases = self.api(f'/releases?per_page=100&page={page}')
+            if not isinstance(releases, list):
+                raise Failure('github: invalid release-list response')
+            for candidate in releases:
+                if candidate.get('tag_name') == self.tag:
+                    return candidate
+            if len(releases) < 100:
+                break
+        return None
 
     def preflight(self):
         release = self.get()
@@ -170,6 +183,8 @@ class Publisher:
 
     def verify(self, files):
         release = self.get()
+        if release is None:
+            raise Failure(f'{self.platform}: staged release not readable; retry later')
         for file in files:
             asset = next((a for a in release.get('assets', []) if a.get('name') == file.name), None)
             if asset is None:
@@ -194,7 +209,7 @@ class Publisher:
 
 def verify_asset(asset, file):
     expected = hashlib.sha256(file.read_bytes()).hexdigest()
-    digest = asset.get('digest', '').removeprefix('sha256:')
+    digest = (asset.get('digest') or '').removeprefix('sha256:')
     if digest:
         if digest != expected or asset.get('size', file.stat().st_size) != file.stat().st_size:
             raise Failure(f'Existing attachment differs: {file.name}; no files were deleted')
