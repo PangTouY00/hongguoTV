@@ -4,8 +4,10 @@ package com.hongguotv.core
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.io.Closeable
 import java.io.IOException
+import java.io.InputStream
 
 /** One playback stream. No listening socket or local HTTP service. */
 class RemoteVideo(private val http: OkHttpClient, val info: StreamInfo): Closeable {
@@ -15,32 +17,100 @@ class RemoteVideo(private val http: OkHttpClient, val info: StreamInfo): Closeab
     var total: Long=0; private set
     private lateinit var prepared: MediaCrypto.Prepared
     @Volatile private var prefix=byteArrayOf()
-    private fun range(start: Long,end: Long): Range {
+    private fun newCall(start: Long,end: Long): Call {
         if(closed) throw IOException("播放请求已取消")
         require(start>=0 && end>=start && end-start<8*1024*1024)
         val request=Request.Builder().url(info.url).header("User-Agent",VendorConstants.VIDEO_UA).header("Referer","https://novel.snssdk.com/").header("Range","bytes=$start-$end").header("Accept-Encoding","identity").build()
         val call=http.newCall(request)
         synchronized(calls) { if(closed) throw IOException("播放请求已取消"); calls+=call }
+        return call
+    }
+    private fun rangeSize(response: Response,start: Long,end: Long): Pair<Int,Long> {
+        if(response.code!=206) throw IOException("视频服务器不支持分段读取（HTTP ${response.code}）")
+        val match=Regex("bytes (\\d+)-(\\d+)/(\\d+)").matchEntire(response.header("Content-Range").orEmpty()) ?: throw IOException("视频分段响应异常")
+        val (begin,finish,size)=match.destructured
+        val full=size.toLong(); val last=minOf(end,full-1)
+        if(begin.toLong()!=start || finish.toLong()!=last || full<=start) throw IOException("视频分段范围不匹配")
+        if(total!=0L && full!=total) throw IOException("视频资源已变化，请重试")
+        return (last-start+1).toInt() to full
+    }
+    private fun range(start: Long,end: Long): Range {
+        val call=newCall(start,end)
         try {
             return RequestScope.execute(call) { response ->
-                if(response.code!=206) throw IOException("视频服务器不支持分段读取（HTTP ${response.code}）")
-                val match=Regex("bytes (\\d+)-(\\d+)/(\\d+)").matchEntire(response.header("Content-Range").orEmpty()) ?: throw IOException("视频分段响应异常")
-                val (begin,finish,size)=match.destructured
-                val full=size.toLong(); val last=minOf(end,full-1)
-                if(begin.toLong()!=start || finish.toLong()!=last || full<=0) throw IOException("视频分段范围不匹配")
-                if(total!=0L && full!=total) throw IOException("视频资源已变化，请重试")
-                val n=(last-start+1).toInt(); val body=response.body ?: throw IOException("视频分段为空")
+                val (n,full)=rangeSize(response,start,end)
+                val body=response.body ?: throw IOException("视频分段为空")
                 val bytes=body.source().readByteArray(n.toLong())
                 Range(bytes,full)
             }
         } finally { synchronized(calls) { calls-=call } }
     }
-    @Synchronized fun prepare(): RemoteVideo {
+    /** Consume the index progressively within one request. Avoid a second round trip when
+     *  moov ends after the initial probe but inside the existing 256 KiB range. */
+    private fun indexPrefix(initialBytes: Int): Range {
+        val call=newCall(0,256*1024-1)
+        try {
+            return RequestScope.execute(call) { response ->
+                val (size,full)=rangeSize(response,0,256*1024-1)
+                val source=(response.body ?: throw IOException("视频分段为空")).source()
+                val first=source.readByteArray(minOf(initialBytes,size).toLong())
+                val needed=minOf(MediaCrypto.headerEnd(first,full),size)
+                val bytes=if(needed>first.size) first+source.readByteArray((needed-first.size).toLong()) else first
+                Range(bytes,full)
+            }
+        } finally { synchronized(calls) { calls-=call } }
+    }
+    /** One bounded HTTP range, delivered as bytes arrive instead of waiting for the whole body.
+     *  The playback data source owns this reader; close() interrupts an outstanding body read. */
+    fun openRead(start: Long,length: Int): InputStream {
+        check(::prepared.isInitialized)
+        require(start in 0 until total && length in 1..1024*1024)
+        val end=minOf(total-1,start+length-1)
+        val call=newCall(start,end)
+        var response: Response?=null
+        try {
+            val opened=call.execute();response=opened
+            val (size,_)=rangeSize(opened,start,end)
+            val input=(opened.body ?: throw IOException("视频分段为空")).byteStream()
+            return object: InputStream() {
+                private var position=start
+                private var remaining=size
+                private var readerClosed=false
+                private val scratch=ByteArray(32*1024)
+                override fun read(): Int {
+                    val single=ByteArray(1)
+                    return if(read(single,0,1)<0) -1 else single[0].toInt() and 255
+                }
+                override fun read(target: ByteArray,offset: Int,count: Int): Int {
+                    require(offset>=0 && count>=0 && offset<=target.size-count)
+                    if(count==0) return 0
+                    if(readerClosed || closed) throw IOException("播放请求已取消")
+                    if(remaining==0) return -1
+                    val n=input.read(scratch,0,minOf(count,remaining,scratch.size))
+                    if(n<0) throw java.io.EOFException("视频分段意外结束")
+                    MediaCrypto.decrypt(scratch.copyOf(n),position,info.key,prepared).copyInto(target,offset)
+                    position+=n;remaining-=n
+                    return n
+                }
+                override fun close() {
+                    if(readerClosed) return
+                    readerClosed=true;if(remaining>0) call.cancel();opened.close()
+                    synchronized(calls) { calls-=call }
+                }
+            }
+        } catch(error: Exception) {
+            call.cancel();response?.close();synchronized(calls) { calls-=call };throw error
+        }
+    }
+    @JvmOverloads @Synchronized fun prepare(initialBytes: Int=256*1024): RemoteVideo {
+        require(initialBytes in 16*1024..256*1024)
         if(::prepared.isInitialized) return this
-        val first=range(0,256*1024-1); total=first.total
+        val first=if(initialBytes<256*1024) indexPrefix(initialBytes) else range(0,256*1024-1)
+        total=first.total
         prefix=first.bytes
         val end=MediaCrypto.headerEnd(first.bytes,total)
         val header=if(end>first.bytes.size) first.bytes+range(first.bytes.size.toLong(),end-1L).bytes else first.bytes.copyOf(end)
+        if(header.size>prefix.size) prefix=header
         prepared=MediaCrypto.prepare(header,info.key)
         if(prepared.samples.any { it.end>total }) throw IOException("视频样本超出资源大小")
         return this

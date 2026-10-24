@@ -22,15 +22,16 @@ import java.util.concurrent.TimeUnit
 @Config(sdk=[23,26],qualifiers="w960dp-h540dp-land-mdpi")
 @LooperMode(LooperMode.Mode.PAUSED)
 class HomeFeedScreenTest {
-    private class Backend(private val count: Int=2): FeedBackend {
+    private open class Backend(private val count: Int=2): FeedBackend {
         private val prepareCount=java.util.concurrent.atomic.AtomicInteger()
         val prepares get()=prepareCount.get()
+        val preparedIds=java.util.concurrent.ConcurrentLinkedQueue<String>()
         var closed=false
         var recommendationReads=0
         override fun recommendations(page: Int,cursor: RecommendationCursor): CatalogPage { recommendationReads++;return catalog(DramaCategory.COMIC,page) }
         override fun catalog(category: DramaCategory,page: Int)=CatalogPage((1..count).map { Series("$it","作品$it") },false)
         override fun detail(series: Series)=Detail(series,listOf("${series.id}01","${series.id}02"))
-        override fun prepare(detail: Detail): TrialClip { prepareCount.incrementAndGet();return TrialClip(detail,RemoteVideo(OkHttpClient(),StreamInfo("https://example.com/video",null,"test"))) }
+        override fun prepare(detail: Detail): TrialClip { prepareCount.incrementAndGet();preparedIds+=detail.series.id;return TrialClip(detail,RemoteVideo(OkHttpClient(),StreamInfo("https://example.com/video",null,"test"))) }
         override fun close() { closed=true }
     }
     private class Playback(activity: Activity): TrialPlayback {
@@ -39,7 +40,7 @@ class HomeFeedScreenTest {
         val queued=mutableMapOf<String,TrialClip>();var selections=0;var clears=0
         var loads=0;var loaded="";var saved=0L;var playing=false;var released=false
         override fun load(clip: TrialClip,position: Long,autoplay: Boolean) { loads++;queued.clear();queued[clip.detail.series.id]=clip;loaded=clip.detail.series.id;saved=position;playing=autoplay }
-        override fun queue(clip: TrialClip) { queued[clip.detail.series.id]=clip }
+        override fun queue(clip: TrialClip,index: Int) { queued[clip.detail.series.id]=clip }
         override fun remove(seriesId: String) { queued.remove(seriesId) }
         override fun select(clip: TrialClip,position: Long,autoplay: Boolean): Boolean {
             if(clip.detail.series.id !in queued) return false
@@ -119,6 +120,49 @@ class HomeFeedScreenTest {
             screen.close();assertTrue((get(screen,"cachedTrials") as Map<*,*>).isEmpty())
         } finally { screen.close();controller.pause().stop().destroy() }
     }
+    @Test fun switchingToInFlightPreloadDoesNotCancelOrResolveItTwice() {
+        val entered=java.util.concurrent.CountDownLatch(1);val finish=java.util.concurrent.CountDownLatch(1)
+        val backend=object: Backend(5) {
+            override fun preload(series: Series): TrialClip {
+                if(series.id=="2") { entered.countDown();check(finish.await(5,TimeUnit.SECONDS)) }
+                return super.preload(series)
+            }
+        }
+        val controller=Robolectric.buildActivity(Activity::class.java).setup();val activity=controller.get()
+        val player=Playback(activity);val state=DramaFeedState()
+        val screen=HomeFeedScreen(activity,state,listOf(TextView(activity)),{}, { _,_-> },{"账户收藏"},backend,player)
+        try {
+            activity.setContentView(screen);screen.start(true,false);pump(screen)
+            player.status?.invoke(TrialStatus.READY);assertTrue(entered.await(5,TimeUnit.SECONDS))
+            val pending=get(screen,"prefetchJob") as Future<*>
+            (get(screen,"stage") as View).dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_DPAD_DOWN))
+            assertEquals("2",state.current?.id);assertFalse(pending.isCancelled)
+            assertEquals(1,backend.prepares)
+            finish.countDown();finishPrefetch(screen);pump(screen)
+            assertEquals("2",player.loaded);assertEquals(1,backend.preparedIds.count { it=="2" })
+            assertTrue(player.playing)
+        } finally { finish.countDown();screen.close();controller.pause().stop().destroy() }
+    }
+    @Test fun promotedPreloadFailureFallsBackToForegroundRequest() {
+        val entered=java.util.concurrent.CountDownLatch(1);val finish=java.util.concurrent.CountDownLatch(1)
+        val backend=object: Backend(3) {
+            override fun preload(series: Series): TrialClip {
+                if(series.id=="2") { entered.countDown();check(finish.await(5,TimeUnit.SECONDS));throw java.io.IOException("预加载失败") }
+                return super.preload(series)
+            }
+        }
+        val controller=Robolectric.buildActivity(Activity::class.java).setup();val activity=controller.get()
+        val player=Playback(activity)
+        val screen=HomeFeedScreen(activity,DramaFeedState(),listOf(TextView(activity)),{}, { _,_-> },{"账户收藏"},backend,player)
+        try {
+            activity.setContentView(screen);screen.start(true,false);pump(screen)
+            player.status?.invoke(TrialStatus.READY);assertTrue(entered.await(5,TimeUnit.SECONDS))
+            (get(screen,"stage") as View).dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_DPAD_DOWN))
+            finish.countDown();finishPrefetch(screen);pump(screen)
+            assertEquals("2",player.loaded);assertTrue(player.playing)
+            assertEquals(1,backend.preparedIds.count { it=="2" })
+        } finally { finish.countDown();screen.close();controller.pause().stop().destroy() }
+    }
     @Test fun recommendationRefreshRemainsSeparateFromCategoryBrowsing() {
         val controller=Robolectric.buildActivity(Activity::class.java).setup();val activity=controller.get()
         val state=DramaFeedState();val backend=Backend();val player=Playback(activity)
@@ -129,10 +173,10 @@ class HomeFeedScreenTest {
             texts(screen).first { it.text=="真人剧" }.performClick();pump(screen)
             assertFalse(state.recommendation);assertEquals(1,backend.recommendationReads)
             texts(screen).first { it.text=="推荐" }.performClick();pump(screen)
-            assertTrue(state.recommendation);assertEquals(2,backend.recommendationReads)
+            assertTrue(state.recommendation);assertEquals(1,backend.recommendationReads)
             player.saved=1200
             texts(screen).first { it.text=="换一批" }.performClick();pump(screen)
-            assertEquals(3,backend.recommendationReads);assertEquals(0L,player.saved)
+            assertEquals(2,backend.recommendationReads);assertEquals(0L,player.saved)
         } finally { screen.close();controller.pause().stop().destroy() }
     }
     @Test fun openingFullSeriesAndReturningRestoresTrialPosition() {

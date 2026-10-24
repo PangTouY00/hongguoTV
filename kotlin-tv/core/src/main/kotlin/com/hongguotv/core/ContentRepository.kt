@@ -286,6 +286,21 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         val map=data.optJSONObject("data") ?: throw IOException("播放信息为空")
         val entry=map.optJSONObject(id) ?: map.keys().asSequence().mapNotNull { map.optJSONObject(it) }.firstOrNull() ?: throw IOException("播放信息为空")
         val model=entry.optJSONObject("video_model") ?: JSONObject(entry.str("video_model"))
+        // The current model already carries plain media URLs, dimensions and CENC keys.
+        // Only use the legacy fallback endpoint when this shape has no usable rendition.
+        val inline=model.optJSONArray("video_list")?.objects().orEmpty().mapNotNull { row -> runCatching {
+            val meta=row.optJSONObject("video_meta") ?: return@runCatching null
+            val encryption=row.optJSONObject("encrypt_info") ?: return@runCatching null
+            val codec=meta.str("codec_type").lowercase()
+            val url=cleanUrl(row.str("main_url"))
+            if(codec.isBlank() || codec in setOf("bytevc2","bvc2") || (!url.startsWith("https://") && !url.startsWith("http://"))) return@runCatching null
+            val width=dimension(meta,"vwidth","width") ?: return@runCatching null
+            val height=dimension(meta,"vheight","height") ?: return@runCatching null
+            val key=encryption.str("spade_a").takeIf(String::isNotBlank)?.let(MediaCrypto::deriveKey)
+            if(key==null && encryption.opt("encrypt") !in listOf(false,0,"0","false")) return@runCatching null
+            Rendition(qualityNumber(meta.str("definition")),codec,width,height,url,key)
+        }.getOrNull() }
+        if(inline.isNotEmpty()) return StreamLadder(inline)
         val raw=model.opt("fallback_api")
         val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
         if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")
