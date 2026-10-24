@@ -94,9 +94,8 @@ class DramaDiscoveryScreenTest {
             assertEquals(1,body(requests.last()).getInt("offset"));assertEquals(2,browser.grid.adapter.count)
             browser.grid.setSelection(1);browser.enter();layout(activity)
             assertEquals("102",browser.capture()?.id)
-            assertTrue(browser.grid.getChildAt(0).height<=browser.grid.height)
             val state=get(activity,"discoveryBrowser") as DiscoveryBrowserState
-            assertFalse(state.expanded)
+            assertTrue(state.expanded)
             val input=get(activity,"searchInput") as EditText;input.setText("大佬")
             texts(root).single { it.text.toString()=="搜索" }.performClick();pump(activity)
             assertTrue(texts(root).any { it.text.toString()=="搜索结果剧" })

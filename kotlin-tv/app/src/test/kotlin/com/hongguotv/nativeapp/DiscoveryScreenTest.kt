@@ -44,7 +44,7 @@ class DiscoveryScreenTest {
             assertEquals(listOf("3"),state.items.map { it.id })
         } finally { screen.close();controller.pause().stop().destroy() }
     }
-    @Test fun gridEntryCollapsesPanelAndEmptyResultsCanBeReset() {
+    @Test fun gridEntryPreservesPanelAndEmptyResultsCanBeReset() {
         val controller=Robolectric.buildActivity(Activity::class.java).setup();val activity=controller.get()
         val state=DiscoveryBrowserState().apply { loaded=true;items=page("1").items;groups=this@DiscoveryScreenTest.groups }
         val upper=TextView(activity).apply { id=View.generateViewId();isFocusable=true }
@@ -53,8 +53,8 @@ class DiscoveryScreenTest {
             activity.setContentView(screen)
             screen.measure(View.MeasureSpec.makeMeasureSpec(960,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(420,View.MeasureSpec.EXACTLY));screen.layout(0,0,960,420);ShadowLooper.idleMainLooper()
             val browser=views(screen).filterIsInstance<ContinuousCatalogView>().single()
-            browser.enter();assertFalse(state.expanded)
-            views(screen).filterIsInstance<TextView>().single { it.text.toString()=="展开筛选" }.performClick();assertTrue(state.expanded)
+            browser.enter();assertTrue(state.expanded)
+            views(screen).filterIsInstance<TextView>().single { it.text.toString()=="收起筛选" }.performClick();assertFalse(state.expanded)
             views(screen).filterIsInstance<TextView>().single { it.text.toString()=="重置" }.performClick()
             assertEquals(0,browser.grid.adapter.count);assertTrue(state.loaded)
             assertTrue(state.selection.values.isEmpty())

@@ -27,6 +27,7 @@ internal class DiscoveryScreen(
     private val browser: ContinuousCatalogView
     private var loading=false
     private var closed=false
+    private var headerOffset=0
     private var serial=0
     var navigationChanged: (()->Unit)?=null
     private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
@@ -38,14 +39,30 @@ internal class DiscoveryScreen(
         browser=ContinuousCatalogView(context,6,toggle,{ item,recycled ->
             (recycled as? CatalogPosterCard ?: CatalogPosterCard(context)).apply { show(item);cover(image,item.cover) }
         },{ item -> state.position=item.id to 0 },open,more,{ if(!loading) request(state.next) })
-        browser.onGridFocus={ focus -> if(focus) expand(false) }
+        browser.onBrowsePosition={ position ->
+            val header=getChildAt(0).height+scroll.height+summary.height
+            val step=(browser.grid.getChildAt(0)?.height ?: dp(180))+dp(10)
+            val offset=if(state.expanded) minOf(header,(position/6)*step) else 0
+            if(headerOffset!=offset) { headerOffset=offset;requestLayout() }
+        }
         addView(browser,LayoutParams(-1,0,1f))
         renderFilters();showItems();expand(state.expanded)
     }
     override fun onMeasure(widthMeasureSpec: Int,heightMeasureSpec: Int) {
-        val height=minOf(dp(260),(View.MeasureSpec.getSize(heightMeasureSpec)*.48f).toInt()).coerceAtLeast(dp(60))
+        groups.measure(widthMeasureSpec,View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED))
+        val height=minOf(groups.measuredHeight,minOf(dp(260),(View.MeasureSpec.getSize(heightMeasureSpec)*.48f).toInt()))
         if(scroll.layoutParams.height!=height) scroll.layoutParams=scroll.layoutParams.apply { this.height=height }
-        super.onMeasure(widthMeasureSpec,heightMeasureSpec)
+        val viewport=View.MeasureSpec.getSize(heightMeasureSpec)
+        super.onMeasure(widthMeasureSpec,View.MeasureSpec.makeMeasureSpec(viewport+headerOffset,View.MeasureSpec.EXACTLY))
+        setMeasuredDimension(measuredWidth,viewport)
+    }
+    override fun onLayout(changed: Boolean,l: Int,t: Int,r: Int,b: Int) {
+        super.onLayout(changed,l,t,r,b+headerOffset)
+        scrollTo(0,headerOffset)
+    }
+    override fun requestChildFocus(child: View,focused: View) {
+        if(child!==browser && headerOffset!=0) { headerOffset=0;scrollTo(0,0);requestLayout() }
+        super.requestChildFocus(child,focused)
     }
     private fun button(label: String,action: ()->Unit)=TextView(context).apply {
         id=View.generateViewId();text=label;textSize=12f;includeFontPadding=false;maxLines=1
@@ -58,6 +75,7 @@ internal class DiscoveryScreen(
     }
     private fun toggleFocus() { toggle.requestFocus() }
     private fun expand(value: Boolean) {
+        headerOffset=0;scrollTo(0,0);requestLayout()
         state.expanded=value;scroll.visibility=if(value) VISIBLE else GONE
         toggle.text=if(value) "收起筛选" else "展开筛选"
         val target=if(value) controls.entries.firstOrNull { it.key.first!="genre" }?.value?.id ?: browser.grid.id else browser.grid.id
