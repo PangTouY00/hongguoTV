@@ -46,6 +46,8 @@
 
 默认产物：`kotlin-tv/app/build/outputs/apk/debug/app-debug.apk`。
 
+推送到 `main`、`feature-*` 或 `fix-*` 分支时，GitHub Actions 会执行同一组检查并生成可安装的调试 APK，文件名带分支名和提交短哈希，在仓库的 Actions 运行页下载。Actions 产物只用于本机安装验证，不是发布版本。
+
 ## 版本与签名
 
 修改 `app/build.gradle.kts` 中 `versionCode`、`versionName` 后重新构建。环境变量 `HONGGUOTV_VERSION_CODE`、`HONGGUOTV_VERSION_NAME` 会覆盖文件中的默认值。正式上线时递增版本号与 versionCode，编译调试期间保持不变，测试包通过文件名区分；当前正式版为 0.1.6（versionCode 47），后续正式发布再递增。分支名、APK 文件名或 Git 标签不会自动改变 APK 内部版本。
