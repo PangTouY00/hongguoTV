@@ -88,8 +88,11 @@ class MainActivity: Activity() {
     private var homeContentLogged=false
     private lateinit var library: Library
     private var searchDraft: String?=null
+    private var searchSuggestions: SearchSuggestionsView?=null
     private val discovery=DramaDiscoveryState()
     private val discoveryFilters=mutableListOf<View>()
+    private var discoveryTopicRow: LinearLayout?=null
+    private val discoveryTopicChips=linkedMapOf<String,TextView>()
     private var discoveryStatus: TextView?=null
     private var discoveryTopic: TextView?=null
     private lateinit var tvTools: TvTools
@@ -309,6 +312,8 @@ class MainActivity: Activity() {
         generation++; cancelWork(); artwork.cancelPage()
     }
     private fun releaseCatalogViews() {
+        searchSuggestions?.close();searchSuggestions=null
+        discoveryTopicRow=null;discoveryTopicChips.clear()
         continuousCatalog?.let { view ->
             view.capture()?.let { continuousPositions[continuousKey]=it }
             view.close()
@@ -493,8 +498,7 @@ class MainActivity: Activity() {
             nav.forEach { it.nextFocusDownId=typeButtons.getValue(library.contentType).id }
         }
         if(tab==1) {
-            container.addView(text(if(query.isBlank()) "分类找剧" else "搜索结果 · 全部剧集",20f).apply { setPadding(0,dp(10),0,dp(8)) })
-            val searchRow=row(); val input=EditText(this).apply { id=View.generateViewId(); hint="输入剧名或关键词（短剧、漫剧）"; setText(searchDraft ?: query); textSize=16f; setTextColor(white); setHintTextColor(muted); isSingleLine=true; maxLines=1; filters=arrayOf(android.text.InputFilter.LengthFilter(80)); imeOptions=android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
+            val searchRow=row(); val input=EditText(this).apply { id=View.generateViewId(); hint="输入剧名、关键词或拼音"; setText(searchDraft ?: query); textSize=16f; setTextColor(white); setHintTextColor(muted); isSingleLine=true; maxLines=1; filters=arrayOf(android.text.InputFilter.LengthFilter(80)); imeOptions=android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
             searchRow.addView(input,lp(0,dp(45)).apply { weight=1f; rightMargin=dp(10) })
             fun search() { val next=input.text.toString().trim(); if(next.isBlank()) { returnToDiscovery();return }; runSearch(next) }
             searchInput=input; searchButton=addButton(searchRow,"搜索") { search() }; input.nextFocusUpId=nav[tab].id; searchButton?.nextFocusUpId=input.nextFocusUpId
@@ -507,6 +511,10 @@ class MainActivity: Activity() {
 
             nav.forEach { it.nextFocusDownId=input.id }
             input.setOnEditorActionListener { _,_,_-> search(); true }; container.addView(searchRow)
+            searchSuggestions=SearchSuggestionsView(this,input,listOfNotNull(searchButton)+searchActions,
+                { if(query.isBlank()) discoveryFilters.getOrNull(discovery.category.ordinal)
+                  else continuousCatalog?.grid ?: catalogBody?.getFocusables(View.FOCUS_DOWN)?.firstOrNull() },
+                repository::searchSuggestions,::runSearch).also { container.addView(it) }
             if(query.isBlank()) {
                 val filters=row().apply { setPadding(0,dp(8),0,dp(5)) }
                 DramaCategory.entries.forEach { category ->
@@ -520,6 +528,12 @@ class MainActivity: Activity() {
                 discoveryFilters+=addButton(filters,"重置") { changeDiscovery(discovery.category,"") }.apply { nextFocusUpId=input.id }
                 discoveryFilters+=addButton(filters,"刷新") { saveDiscoveryDraft();showCatalog(true,focusType=true) }.apply { nextFocusUpId=input.id }
                 container.addView(filters)
+                val topics=row().apply { setPadding(0,0,0,dp(5)) }
+                topics.addView(text("题材",12f,muted),lp(dp(40),-2))
+                val topicScroll=HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false;isFocusable=false }
+                discoveryTopicRow=row();topicScroll.addView(discoveryTopicRow)
+                topics.addView(topicScroll,lp(0,-2).apply { weight=1f });container.addView(topics)
+                renderDiscoveryTopics()
                 discoveryStatus=text(discoveryDescription(),12f,muted).apply { maxLines=1;ellipsize=TextUtils.TruncateAt.END;setPadding(0,0,0,dp(5)) }
                 container.addView(discoveryStatus)
                 val selected=discoveryFilters[discovery.category.ordinal]
@@ -609,15 +623,20 @@ class MainActivity: Activity() {
                     catalog=result.items; hasMore=result.hasMore; ranking=result.ranking
                     val keepNav=nav.any { it.hasFocus() }; val keepType=typeButtons.values.any { it.hasFocus() }
                     val keepDiscovery=discoveryFilters.indexOfFirst { it.hasFocus() };val keepInput=searchInput?.hasFocus()==true
+                    val keepTopic=discoveryTopicChips.entries.firstOrNull { it.value.hasFocus() }?.key
+                    val keepSuggestion=searchSuggestions?.findFocus()
                     if(requestTab==1 && requestQuery.isBlank()) {
                         discovery.info=result.discovery
                         discovery.browse=DiscoveryMemory(page,catalog,hasMore,catalogFocus,result.discovery)
                         discoveryStatus?.text=discoveryDescription()
                         discoveryTopic?.text="题材：${discovery.topicLabel()}";discoveryTopic?.isEnabled=true
+                        renderDiscoveryTopics()
                     }
                     rankSubtitle?.text=ranking?.updatedText?.ifBlank { "来源：红果漫剧热播榜" } ?: "来源：红果漫剧热播榜"
                     body.removeAllViews(); catalogGrid(body,keepNav || focusNav,keepType || focusType)
                     if(keepInput) searchInput?.requestFocus()
+                    else if(keepSuggestion!=null) keepSuggestion.requestFocus()
+                    else if(keepTopic!=null) discoveryTopicChips[keepTopic]?.requestFocus()
                     else if(keepDiscovery>=0) discoveryFilters.getOrNull(keepDiscovery)?.requestFocus()
                 }
             }, { problem ->
@@ -634,6 +653,7 @@ class MainActivity: Activity() {
                 } else {
                     body.removeAllViews()
                     error(body,problem) { showCatalog(true) }
+                    searchSuggestions?.updateNavigation()
                     if(resumeCards.isNotEmpty()) resumeCards.first().requestFocus()
                 }
             })
@@ -797,7 +817,7 @@ class MainActivity: Activity() {
         // Category/topic already appear in the filters; the footer owns loaded-count feedback.
         discoveryStatus?.visibility=View.GONE
         continuousKey="$requestQuery:${category.route}:$topic"
-        val upper=discoveryFilters.getOrNull(category.ordinal) ?: searchInput ?: nav[tab]
+        val upper=discoveryTopicChips[topic] ?: discoveryFilters.getOrNull(category.ordinal) ?: searchInput ?: nav[tab]
         lateinit var browser: ContinuousCatalogView
         browser=ContinuousCatalogView(this,6,upper,{ item,recycled ->
             val card=recycled as? CatalogPosterCard ?: CatalogPosterCard(this)
@@ -834,9 +854,12 @@ class MainActivity: Activity() {
         searchInput?.nextFocusDownId=if(discoveryFilters.isNotEmpty()) upper.id else browser.grid.id
         searchButton?.nextFocusDownId=if(discoveryFilters.isNotEmpty()) upper.id else browser.grid.id
         searchActions.forEach { it.nextFocusDownId=if(discoveryFilters.isNotEmpty()) upper.id else browser.grid.id }
-        discoveryFilters.forEach { it.nextFocusDownId=browser.grid.id }
+        val selectedCategory=discoveryFilters.getOrNull(category.ordinal)
+        discoveryFilters.forEach { it.nextFocusDownId=discoveryTopicChips[topic]?.id ?: browser.grid.id }
+        discoveryTopicChips.values.forEach { it.nextFocusUpId=selectedCategory?.id ?: searchInput!!.id;it.nextFocusDownId=browser.grid.id }
+        searchSuggestions?.updateNavigation()
         if(focusNav) nav[tab].requestFocus()
-        else if(focusType) upper.requestFocus()
+        else if(focusType) (selectedCategory ?: upper).requestFocus()
         else browser.enter()
     }
     private fun reservationNotice(series: Series,anchor: View): Boolean {
@@ -1022,8 +1045,31 @@ class MainActivity: Activity() {
     private fun discoveryDescription(): String = "${discovery.category.label} · ${discovery.topicLabel()}"+
         (discovery.info?.let { " · ${it.total} 部 · 按分类浏览，输入关键词可搜索全部剧集" } ?: " · 正在读取分类…")
     private fun changeDiscovery(category: DramaCategory,topic: String) {
-        saveDiscoveryDraft();discovery.select(category,topic)
+        val info=discovery.info.takeIf { discovery.category==category }
+        saveDiscoveryDraft();discovery.select(category,topic);discovery.info=info
         page=1;catalog=emptyList();hasMore=false;catalogFocus="";showCatalog(true,focusType=true)
+    }
+    private fun renderDiscoveryTopics() {
+        val row=discoveryTopicRow ?: return
+        row.removeAllViews();discoveryTopicChips.clear()
+        val topics=listOf(DramaTopic("","全部题材"))+discovery.info?.topics.orEmpty()
+        topics.forEach { topic ->
+            discoveryTopicChips[topic.id]=addButton(row,topic.label,discovery.topic==topic.id) {
+                if(discovery.topic!=topic.id) {
+                    changeDiscovery(discovery.category,topic.id)
+                    discoveryTopicChips[topic.id]?.requestFocus()
+                }
+            }.apply {
+                textSize=12f;minHeight=dp(34);setPadding(dp(11),dp(7),dp(11),dp(7))
+                nextFocusUpId=discoveryFilters.getOrNull(discovery.category.ordinal)?.id ?: searchInput!!.id
+                nextFocusDownId=continuousCatalog?.grid?.id ?: id
+            }
+        }
+        val chips=discoveryTopicChips.values.toList()
+        chips.forEachIndexed { i,view ->
+            view.nextFocusLeftId=chips.getOrNull(i-1)?.id ?: view.id
+            view.nextFocusRightId=chips.getOrNull(i+1)?.id ?: view.id
+        }
     }
     private fun chooseDiscoveryTopic() {
         val info=discovery.info ?: return
@@ -1738,6 +1784,7 @@ class MainActivity: Activity() {
         } else libraryLoadError?.let(::showLibraryError)
     }
     override fun onPause() {
+        searchSuggestions?.cancel()
         social.foreground(false)
         updater.pause();homeFeed?.pause()
         foreground=false; main.removeCallbacks(tick); cancelRecovery(); cancelPrefetch(); mediaSession.deactivate()

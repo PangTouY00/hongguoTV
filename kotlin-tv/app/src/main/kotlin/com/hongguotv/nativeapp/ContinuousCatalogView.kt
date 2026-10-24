@@ -8,6 +8,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.*
 import com.hongguotv.core.Series
+import com.hongguotv.core.RankPosition
 
 /** Framework GridView recycles offscreen cards; pagination never replaces the grid or its focus. */
 internal class ContinuousCatalogView(
@@ -177,8 +178,14 @@ internal class ContinuousCatalogView(
 
 internal class CatalogPosterCard(context: Context): LinearLayout(context) {
     val image=ImageView(context).apply { scaleType=ImageView.ScaleType.FIT_CENTER;importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO }
-    private val title=TextView(context).apply { textSize=14f;setTextColor(TvStyle.text);minLines=2;maxLines=2;ellipsize=android.text.TextUtils.TruncateAt.END }
-    private val badge=TextView(context).apply { textSize=12f;setTextColor(TvStyle.muted);maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END }
+    private val poster=FrameLayout(context)
+    private val rank=TextView(context).apply {
+        textSize=13f;setTextColor(TvStyle.text);typeface=android.graphics.Typeface.DEFAULT_BOLD
+        val density=resources.displayMetrics.density
+        setPadding((6*density).toInt(),(3*density).toInt(),(6*density).toInt(),(3*density).toInt());setBackgroundColor(Color.argb(200,15,18,24));visibility=GONE
+    }
+    private val title=TextView(context).apply { textSize=14f;setTextColor(TvStyle.text);includeFontPadding=false;minLines=2;maxLines=2;ellipsize=android.text.TextUtils.TruncateAt.END }
+    private val badge=TextView(context).apply { textSize=12f;setTextColor(TvStyle.muted);includeFontPadding=false;maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END }
     private var preferredHeight=0
     init {
         orientation=VERTICAL
@@ -186,13 +193,29 @@ internal class CatalogPosterCard(context: Context): LinearLayout(context) {
         setPadding((4*density).toInt(),(4*density).toInt(),(4*density).toInt(),(9*density).toInt())
         val width=(resources.displayMetrics.widthPixels*.9f-14*density*5)/6
         preferredHeight=(width/TvStyle.POSTER_ASPECT).toInt()
-        addView(image,LayoutParams(-1,preferredHeight));addView(title);addView(badge)
+        poster.addView(image,FrameLayout.LayoutParams(-1,-1))
+        poster.addView(rank,FrameLayout.LayoutParams(-2,-2,android.view.Gravity.TOP or android.view.Gravity.START))
+        addView(poster,LayoutParams(-1,preferredHeight));addView(title);addView(badge)
     }
-    fun show(item: Series) { title.text=item.title;badge.text=item.badge;contentDescription=item.title+"，"+item.badge }
+    fun show(item: Series,position: RankPosition?=null) {
+        title.text=item.title
+        badge.text=position?.heat?.takeIf { it.isNotBlank() } ?: item.badge
+        rank.text=position?.rank?.let { "第 $it 名" }.orEmpty()
+        rank.visibility=if(position?.rank!=null) VISIBLE else GONE
+        rank.setTextColor(if((position?.rank ?: Int.MAX_VALUE)<=3) TvStyle.accent else TvStyle.text)
+        contentDescription=listOf(rank.text.toString(),item.title,item.badge,item.tags,position?.heat.orEmpty(),position?.metrics.orEmpty()).filter { it.isNotBlank() }.joinToString("，")
+    }
     fun fitHeight(available: Int) {
         if(available<=0) return
-        val reserve=paddingTop+paddingBottom+title.lineHeight*2+badge.lineHeight+(8*resources.displayMetrics.density).toInt()
+        val density=resources.displayMetrics.density
+        val minimumPoster=(32*density).toInt()
+        val padding=paddingTop+paddingBottom+(8*density).toInt()
+        val lines=if(available>=padding+title.lineHeight*2+badge.lineHeight+minimumPoster) 2 else 1
+        if(title.minLines!=lines) title.minLines=lines
+        if(title.maxLines!=lines) title.maxLines=lines
+        badge.visibility=if(available>=padding+title.lineHeight*lines+badge.lineHeight+minimumPoster) VISIBLE else GONE
+        val reserve=padding+title.lineHeight*lines+if(badge.visibility==VISIBLE) badge.lineHeight else 0
         val height=minOf(preferredHeight,(available-reserve).coerceAtLeast((32*resources.displayMetrics.density).toInt()))
-        if(image.layoutParams.height!=height) image.layoutParams=image.layoutParams.apply { this.height=height }
+        if(poster.layoutParams.height!=height) poster.layoutParams=poster.layoutParams.apply { this.height=height }
     }
 }

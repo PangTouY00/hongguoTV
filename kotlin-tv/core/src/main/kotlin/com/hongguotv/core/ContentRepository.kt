@@ -54,6 +54,7 @@ class SearchSessionExpiredException: IOException("搜索结果已过期，请从
 class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).callTimeout(45,TimeUnit.SECONDS).build(), private val clock: () -> Long = System::currentTimeMillis) {
     private val signer = Signer()
     private val site = "https://hongguoduanju.com"
+    private val suggestionWebId = UUID.randomUUID().toString()
     // Compatibility approach from upstream PR #22. Keep search signing separate.
     // Identifiers remain stable for this repository's lifetime, including episode changes.
     private val playerDevice = VendorConstants.device + mapOf(
@@ -148,6 +149,17 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         if(type==ContentType.COMIC) return appSearch(keyword,page,type)
         try { val result=appSearch(keyword,page,type); if(result.items.isNotEmpty() || !result.hasMore) return result } catch (e: Exception) { if(e is SearchSessionExpiredException) throw e; /* Website fallback for short dramas only. */ }
         return searchAll(keyword,page)
+    }
+    /** Anonymous first-party website suggestions; pinyin matching is provided by the server. */
+    fun searchSuggestions(keyword: String): List<String> {
+        val clean=keyword.trim()
+        if(clean.isEmpty()) return emptyList()
+        require(clean.length<=80)
+        val raw=text("$site/incent_resource/suggestion?app_id=8662&web_id=$suggestionWebId&query=${Signer.encode(clean)}&count=8")
+        val rows=JSONObject(raw).optJSONArray("suggest_list") ?: throw IOException("搜索联想暂不可用")
+        return rows.objects().map {
+            it.str("name").ifBlank { it.optJSONArray("display_words")?.optString(0).orEmpty().trim() }
+        }.filter { it.isNotBlank() && it.length<=80 }.distinct().take(8)
     }
     /** The public website now loads cross-category results through its JSON endpoint. */
     fun searchAll(keyword: String, page: Int = 1): CatalogPage {

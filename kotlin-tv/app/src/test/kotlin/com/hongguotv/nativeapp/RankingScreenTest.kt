@@ -25,7 +25,7 @@ class RankingScreenTest {
         view.measure(View.MeasureSpec.makeMeasureSpec(960,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(540,View.MeasureSpec.EXACTLY));view.layout(0,0,960,540)
         org.robolectric.shadows.ShadowLooper.idleMainLooper()
     }
-    @Test fun continuousRowsKeepSourceRanksAndRestoreDetailSelection() {
+    @Test fun posterGridKeepsSourceRanksAndRestoresDetailSelection() {
         val controller=Robolectric.buildActivity(Activity::class.java).setup()
         val activity=controller.get();val tools=TvTools(activity)
         try {
@@ -38,12 +38,13 @@ class RankingScreenTest {
             activity.setContentView(FrameLayout(activity).apply { addView(screen) })
             screen.start(false,false);layout(screen)
             val browser=views(screen).filterIsInstance<ContinuousCatalogView>().single()
+            assertEquals(6,browser.grid.numColumns)
             browser.enter();layout(screen)
             val first=browser.grid.getChildAt(0)
             browser.grid.performItemClick(first,0,browser.grid.adapter.getItemId(0));assertEquals("1",opened);assertEquals("1",state.selectedId)
             browser.grid.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP,android.view.KeyEvent.KEYCODE_MENU));assertEquals("1",longPressed)
             val allViews=views(screen)
-            assertTrue(allViews.filterIsInstance<TextView>().any { it.text.toString()=="11" })
+            assertTrue(allViews.filterIsInstance<TextView>().any { it.text.toString()=="第 11 名" })
             assertNotEquals(View.NO_ID,browser.grid.nextFocusUpId)
             assertEquals(25,browser.grid.adapter.count)
             browser.grid.setSelection(20);layout(screen)
@@ -62,7 +63,7 @@ class RankingScreenTest {
             val filtered=RankingScreen(activity,state,nav,tools,{ _,_-> },{}, { _,_-> }, { _,_->fail("unexpected fetch") })
             activity.setContentView(filtered);filtered.start(false,false);layout(filtered)
             assertNotNull(filtered.findViewWithTag<View>("25"));assertNull(filtered.findViewWithTag<View>("1"))
-            assertTrue(views(filtered).filterIsInstance<TextView>().any { it.text.toString()=="35" })
+            assertTrue(views(filtered).filterIsInstance<TextView>().any { it.text.toString()=="第 35 名" })
         } finally { tools.destroy();controller.pause().stop().destroy() }
     }
     @Test fun failedRefreshRetainsLastSuccessfulBoard() {

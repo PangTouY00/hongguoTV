@@ -3,14 +3,12 @@ package com.hongguotv.nativeapp
 
 import android.app.Activity
 import android.graphics.Typeface
-import android.text.TextUtils
 import android.view.Gravity
-import android.view.KeyEvent
 import android.view.View
 import android.widget.*
 import com.hongguotv.core.*
 
-/** D-pad-first list: one focus target per work, stable source ranks after filtering. */
+/** Recycled poster grid: one focus target per work, stable source ranks after filtering. */
 internal class RankingScreen(
     private val activity: Activity, private val state: RankBrowserState,
     private val nav: List<View>, private val tools: TvTools,
@@ -43,7 +41,7 @@ internal class RankingScreen(
         val title=row().apply { setPadding(0,dp(8),0,dp(8)) }
         heading.typeface=Typeface.DEFAULT_BOLD
         title.addView(heading,params(0).apply { weight=1f })
-        title.addView(label("上下选剧  ·  确定看详情  ·  长按更多",12f,TvStyle.muted))
+        title.addView(label("方向键选剧  ·  确定看详情  ·  长按更多",12f,TvStyle.muted))
         addView(title)
         val bar=row()
         RankBoard.entries.forEach { board ->
@@ -124,44 +122,13 @@ internal class RankingScreen(
             return
         }
         val saved=state.selectedId
-        val list=ContinuousCatalogView(activity,1,controls[state.board.ordinal],{ item,recycled ->
-            val card=recycled as? RankCard ?: RankCard(activity)
+        val list=ContinuousCatalogView(activity,6,controls[state.board.ordinal],{ item,recycled ->
+            val card=recycled as? CatalogPosterCard ?: CatalogPosterCard(activity)
             card.show(item,snapshot?.ranking?.positions?.get(item.id));cover(card.image,item.cover);card
         },{ state.selectedId=it.id },{ state.selectedId=it.id;open(it) },{ item,anchor ->state.selectedId=item.id;more(item,anchor) },{})
         browser=list;body.addView(list,params(-1,0).apply { weight=1f })
         list.show(all,false,saved.takeIf { it.isNotBlank() }?.let { ContinuousCatalogView.Position(it,0) })
         controls.forEach { it.nextFocusDownId=list.grid.id }
         if(enterRows) list.enter()
-    }
-}
-
-/** One recycled row keeps ranks and heat from the unfiltered source snapshot. */
-private class RankCard(private val activity: Activity): LinearLayout(activity) {
-    private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
-    private fun label(size: Float,color: Int=TvStyle.text)=TextView(activity).apply { textSize=size;setTextColor(color);includeFontPadding=false }
-    private val number=label(26f,TvStyle.accent).apply { gravity=Gravity.CENTER;typeface=Typeface.DEFAULT_BOLD }
-    val image=ImageView(activity).apply { scaleType=ImageView.ScaleType.CENTER_CROP;importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO }
-    private val title=label(19f).apply { maxLines=1;ellipsize=TextUtils.TruncateAt.END;typeface=Typeface.DEFAULT_BOLD }
-    private val tags=label(12f,TvStyle.muted).apply { maxLines=1;ellipsize=TextUtils.TruncateAt.END;setPadding(0,dp(6),0,dp(5)) }
-    private val description=label(13f,TvStyle.muted).apply { maxLines=2;ellipsize=TextUtils.TruncateAt.END }
-    private val heat=label(17f,TvStyle.accent)
-    private val metrics=label(11f,TvStyle.muted).apply { gravity=Gravity.END;maxLines=3 }
-    init {
-        gravity=Gravity.CENTER_VERTICAL;setPadding(dp(12),dp(10),dp(16),dp(10))
-        layoutParams=AbsListView.LayoutParams(-1,dp(112))
-        addView(number,LayoutParams(dp(42),-1));addView(image,LayoutParams(dp(64),dp(90)).apply { rightMargin=dp(16) })
-        val info=LinearLayout(activity).apply { orientation=VERTICAL;addView(title);addView(tags);addView(description) }
-        addView(info,LayoutParams(0,-2,1f).apply { rightMargin=dp(16) })
-        val values=LinearLayout(activity).apply { orientation=VERTICAL;gravity=Gravity.END;addView(heat);addView(metrics) }
-        addView(values,LayoutParams(dp(135),-2))
-    }
-    fun show(item: Series,position: RankPosition?) {
-        number.text=position?.rank?.toString() ?: "—"
-        number.setTextColor(if((position?.rank ?: 100)>3) TvStyle.muted else TvStyle.accent)
-        title.text=item.title;tags.text=listOf(item.badge,item.tags).filter(String::isNotBlank).joinToString("  ·  ")
-        description.text=item.description.ifBlank { "暂无剧情简介，按确定查看剧集" }
-        heat.text=position?.heat?.ifBlank { "热度暂无" } ?: "热度暂无"
-        metrics.text=position?.metrics.orEmpty().replace(" · ","\n")
-        contentDescription="第${position?.rank ?: "未知"}名，${item.title}，${item.tags}，${position?.heat.orEmpty()}"
     }
 }
