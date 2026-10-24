@@ -225,7 +225,7 @@ internal class HomeFeedScreen(
                     if(closed || token!=generation || !active) return@post
                     loading=false;failed=true;status.visibility=View.VISIBLE
                     val message=error.message.orEmpty().replace(Regex("https?://\\S+"),"[地址]").take(90)
-                    status.text="暂时无法试播 · ${message.ifBlank { "请重试或换一部" }}";paintActions()
+                    status.text="暂时无法加载 · ${message.ifBlank { "请重试或换一部" }}";paintActions()
                 }
             }
         }

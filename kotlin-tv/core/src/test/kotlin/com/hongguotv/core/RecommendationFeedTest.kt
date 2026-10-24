@@ -1,6 +1,7 @@
 package com.hongguotv.core
 
 import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -143,5 +144,16 @@ class RecommendationFeedTest {
         state.recommend();assertTrue(state.recommendation)
         state.refresh(resetRecommendations=true)
         assertEquals(0,state.recommendationCursor.offset);assertEquals("",state.recommendationCursor.session)
+    }
+    @Test fun oversizedPersonalizedFeedResponseIsAccepted() {
+        // The signed-in mall tab returns multi-megabyte payloads; the old 2 MiB account
+        // reader rejected them with "账号接口响应过大".
+        val payload=response()+" ".repeat(3*1024*1024)
+        val http=OkHttpClient.Builder().addInterceptor { chain ->
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                .body(payload.toResponseBody("application/json".toMediaType())).build()
+        }.build()
+        val page=RecommendationFeed(http).page(1)
+        assertEquals(listOf("101"),page.items.map { it.id })
     }
 }

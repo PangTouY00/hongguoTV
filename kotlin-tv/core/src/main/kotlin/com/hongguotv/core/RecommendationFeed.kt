@@ -67,7 +67,7 @@ class RecommendationFeed(private val http: OkHttpClient,private val account: Acc
         request.header("User-Agent","com.dragon.read/73532 (Linux; U; Android 16; zh_CN; 25053RT47C)")
             .header("Accept","application/json").header("X-XS-From-Web","0").header("Sdk-Version","2")
         account?.cookie?.takeIf { it.isNotBlank() }?.let { request.header("Cookie",it) }
-        val result=RequestScope.execute(accountHttp.newCall(request.build())) { response -> JSONObject(cloudResponse(response)) }
+        val result=RequestScope.execute(accountHttp.newCall(request.build())) { response -> JSONObject(feedResponse(response)) }
         val parsed=if(category==null) parse(result) else parseCategory(result)
         cursor.session=parsed.second.ifBlank { cursor.session }
         cursor.offset=if(category==null) cursor.offset+1 else result.getJSONObject("data").optInt("next_offset",cursor.offset+parsed.first.items.size)
@@ -81,6 +81,21 @@ class RecommendationFeed(private val http: OkHttpClient,private val account: Acc
         throw IOException("暂时没有新的推荐，请稍后换一批")
     }
     companion object {
+        /** The signed-in mall tab is personalized and far larger than account payloads;
+         *  the strict 2 MiB account reader must not gate this feed. */
+        private const val FEED_RESPONSE_LIMIT=16*1024*1024L
+        internal fun feedResponse(response: okhttp3.Response): String {
+            if(!response.isSuccessful) throw IOException("推荐请求失败（HTTP ${response.code}）")
+            val body=response.body ?: throw IOException("推荐接口响应为空")
+            if(body.contentLength()>FEED_RESPONSE_LIMIT) throw IOException("推荐接口响应过大")
+            val out=java.io.ByteArrayOutputStream(); val buffer=ByteArray(8192); val input=body.byteStream()
+            while(out.size()<=FEED_RESPONSE_LIMIT) { val n=input.read(buffer); if(n<0) break; out.write(buffer,0,n) }
+            val bytes=out.toByteArray()
+            if(bytes.size>FEED_RESPONSE_LIMIT) throw IOException("推荐接口响应过大")
+            val text=String(bytes,Charsets.UTF_8)
+            if(text.isBlank()) throw IOException("推荐接口返回空响应，请稍后重试")
+            return text
+        }
         internal fun parseCategory(result: JSONObject): Pair<CatalogPage,String> {
             if(result.optInt("code",-1)!=0) throw IOException("分类推荐暂不可用（错误码 ${result.optInt("code",-1)}）")
             val data=result.optJSONObject("data") ?: throw IOException("分类推荐数据格式已变化")
