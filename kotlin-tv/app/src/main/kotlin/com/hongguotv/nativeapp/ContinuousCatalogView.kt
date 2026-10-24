@@ -26,6 +26,7 @@ internal class ContinuousCatalogView(
     private var nextId=0L
     private var available=false
     private var busy=false
+    private var failureReason=""
     private var failed=false
     private var closed=false
     private var navigating=false
@@ -125,7 +126,7 @@ internal class ContinuousCatalogView(
         for(i in 0 until grid.childCount) grid.getChildAt(i).background=TvStyle.card(context,grid.hasFocus() && grid.firstVisiblePosition+i==grid.selectedItemPosition)
     }
     private fun paintStatus() {
-        status.text=when { entries.isEmpty() && !available->"暂无结果，可切换分类或搜索词";busy->"已加载 ${entries.size} 部 · 正在加载…";failed->"加载失败，已保留列表 · 按加载更多重试";available->"已加载 ${entries.size} 部 · 向下浏览继续加载";else->"共 ${entries.size} 部 · 已加载完毕" }
+        status.text=when { entries.isEmpty() && !available->"暂无结果，可切换分类或搜索词";busy->"已加载 ${entries.size} 部 · 正在加载…";failed->"加载失败$failureReason，已保留列表 · 按「重试加载」重试";available->"已加载 ${entries.size} 部 · 向下浏览继续加载";else->"共 ${entries.size} 部 · 已加载完毕" }
         next.text=when { busy->"加载中…";failed->"重试加载";else->"加载更多" }
         next.visibility=if(available) VISIBLE else GONE
         grid.nextFocusDownId=if(available) next.id else top.id
@@ -158,7 +159,18 @@ internal class ContinuousCatalogView(
         if(focusAdded && entries.size>firstNew) { grid.setSelection(firstNew);grid.requestFocus() }
         else if(!available && next.hasFocus()) top.requestFocus()
     }
-    fun fail() { if(!closed) { busy=false;failed=true;navigating=false;enterAdded=false;paintStatus() } }
+    fun fail(problem: Throwable?=null) {
+        if(closed) return
+        failureReason=when(problem) {
+            is com.hongguotv.core.ContentHttpException -> "（HTTP ${problem.statusCode}）"
+            is java.net.SocketTimeoutException -> "（连接超时）"
+            is java.net.UnknownHostException -> "（无法连接网站）"
+            is java.net.SocketException -> "（网络连接中断）"
+            null -> ""
+            else -> "（响应异常）"
+        }
+        busy=false;failed=true;navigating=false;enterAdded=false;paintStatus()
+    }
     fun enter() { grid.requestFocus() }
     fun close() { closed=true;navigating=false;grid.onItemSelectedListener=null;grid.setOnScrollListener(null) }
 }

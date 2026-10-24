@@ -46,7 +46,10 @@ class ContinuousCatalogViewTest {
             view.grid.performItemClick(view.grid.selectedView,index,view.grid.adapter.getItemId(index));assertEquals(selected,opened)
             view.grid.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP,KeyEvent.KEYCODE_MENU));assertEquals(selected,managed)
             assertEquals(1,calls) // Appending does not recursively fetch every page.
-            view.fail();view.requestMore(false);assertEquals(1,calls)
+            view.fail(com.hongguotv.core.ContentHttpException(502));view.requestMore(false);assertEquals(1,calls)
+            val footer=view.getChildAt(1) as LinearLayout
+            assertTrue((footer.getChildAt(0) as TextView).text.contains("HTTP 502"))
+            assertEquals(90,view.grid.adapter.count)
             view.next.performClick();assertEquals(2,calls)
             view.close();view.append(rows(91,100),false);assertEquals(90,view.grid.adapter.count)
             view.requestMore(true);assertEquals(2,calls)

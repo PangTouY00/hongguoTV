@@ -821,7 +821,7 @@ class MainActivity: Activity() {
                 }
             },{ problem ->
                 if(continuousCatalog===browser) {
-                    browser.fail()
+                    browser.fail(problem)
                     if(problem is SearchSessionExpiredException) tvTools.confirm("搜索结果已过期","当前列表已保留，是否重新搜索？",browser.next) { runSearch(requestQuery) }
                 }
             })

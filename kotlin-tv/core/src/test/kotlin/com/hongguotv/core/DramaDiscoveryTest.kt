@@ -53,4 +53,38 @@ class DramaDiscoveryTest {
         val result=ContentRepository(http).searchAll("测试")
         assertEquals(1,result.items.size);assertFalse(result.hasMore)
     }
+    @Test fun transientSearchFailureRetriesTheSamePageAndThenSucceeds() {
+        var calls=0
+        val http=OkHttpClient.Builder().addInterceptor { chain ->
+            calls++
+            assertEquals("2",chain.request().url.queryParameter("page"))
+            val body=if(calls==1) "Bad Gateway" else """{"pageNum":2,"hasMore":false,"searchList":[{"series_id":"2","series_name":"第二页"}]}"""
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                .code(if(calls==1) 502 else 200).message("test").body(body.toResponseBody()).build()
+        }.build()
+        val result=ContentRepository(http).searchAll("测试",2)
+        assertEquals(2,calls);assertEquals("2",result.items.single().id)
+    }
+    @Test fun searchRetryIsBoundedAndPermanentOrMalformedResponsesAreNotRetried() {
+        for(code in listOf(502,403,200)) {
+            var calls=0
+            val http=OkHttpClient.Builder().addInterceptor { chain ->
+                calls++
+                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                    .code(code).message("test").body("invalid response".toResponseBody()).build()
+            }.build()
+            assertThrows(IOException::class.java) { ContentRepository(http).searchAll("测试",2) }
+            assertEquals(if(code==502) 2 else 1,calls)
+        }
+    }
+    @Test fun cancelledSearchScopeDoesNotSendAnotherRequest() {
+        var calls=0;val scope=RequestScope()
+        val http=OkHttpClient.Builder().addInterceptor { chain ->
+            calls++;scope.cancel()
+            throw java.net.SocketTimeoutException("test timeout")
+        }.build()
+        assertThrows(IOException::class.java) { scope.run { ContentRepository(http).searchAll("测试",2) } }
+        assertEquals(1,calls)
+    }
+
 }
