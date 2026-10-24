@@ -21,7 +21,7 @@ class PublishingTests(unittest.TestCase):
             manifest = dict(tag='kotlin-v0.1.3', packageName='com.hongguotv.nativeapp', minSdk=23,
                             apk=dict(name='app.apk', size=3, sha256=hashlib.sha256(b'apk').hexdigest()), notes='notes')
             (root / 'update.json').write_text(json.dumps(manifest))
-            (root / '更新说明.md').write_text('notes\n')
+            (root / 'release-notes.md').write_text('notes\n')
             self.assertEqual(m.bundle(root)[0], 'kotlin-v0.1.3')
             (root / 'app.apk').write_bytes(b'bad')
             with self.assertRaises(m.Failure):
@@ -73,6 +73,24 @@ class PublishingTests(unittest.TestCase):
                 p.upload({'assets': []}, file)
                 self.assertEqual(upload.call_args.args[3], {'x-obs-acl': 'public-read'})
                 self.assertTrue(upload.call_args.kwargs['raw'])
+
+    def test_github_draft_is_found_when_tag_endpoint_returns_404(self):
+        p = m.Publisher('github', 'test', 'kotlin-v0.1.4', 'notes')
+        draft = dict(id=42, tag_name='kotlin-v0.1.4', draft=True)
+        with patch.object(p, 'api', side_effect=[None, [draft]]) as api:
+            self.assertEqual(p.get(), draft)
+            self.assertEqual(api.call_args.args[0], '/releases?per_page=100&page=1')
+
+    def test_github_unrelated_draft_is_not_reused(self):
+        p = m.Publisher('github', 'test', 'kotlin-v0.1.4', 'notes')
+        with patch.object(p, 'api', side_effect=[None, [dict(tag_name='kotlin-v0.1.3', draft=True)]]):
+            self.assertIsNone(p.get())
+
+    def test_verify_missing_release_reports_retryable_failure(self):
+        p = m.Publisher('github', 'test', 'kotlin-v0.1.4', 'notes')
+        with patch.object(p, 'get', return_value=None):
+            with self.assertRaises(m.Failure):
+                p.verify([])
 
     def test_no_authenticated_redirect(self):
         self.assertIsNone(m.NoRedirect().redirect_request(None, None, 302, '', {}, 'https://other.example'))

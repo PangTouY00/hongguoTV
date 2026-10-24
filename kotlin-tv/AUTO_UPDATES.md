@@ -88,7 +88,7 @@ python3 scripts/publish-tv-release.py --configure
 
 脚本依次隐藏输入 GitHub 与 GitCode Token，保存到 `~/.config/hongguotv/publish.json`，权限为 `0600`，不在仓库内。此文件为本机明文私密配置，不是加密钥匙串；不应同步或分享。也可通过 `GITHUB_TOKEN` / `GITCODE_TOKEN` 环境变量提供，环境变量优先。GitHub 使用仅授权本仓库、具有 Contents 读写权限的 Token；GitCode 使用具有本仓库发行版及附件读写权限的个人 Token。Token 需要由维护者自行在平台创建，脚本不会申请或扩大权限。
 
-生成文件时指定更新说明，prepare 脚本会自动保存 APK、update.json 和更新说明.md 三个文件：
+生成文件时指定更新说明，prepare 脚本会自动保存 APK、update.json 和release-notes.md 三个文件：
 
 ```sh
 python3 scripts/prepare-kotlin-release.py \
@@ -116,3 +116,11 @@ python3 scripts/publish-tv-release.py --directory outputs/releases/kotlin-v0.1.4
 两平台发布不是原子操作，任一步失败时终端会非零退出，已上传文件会保留；可重跑同一命令继续。同名相同内容会跳过，不同内容会报错，脚本不删除或替换已有附件。若本标签已经正式上线，补附件也是可见操作；请勿把不同构建复用为同一个正式标签。签名连续性与 APK 内部版本检查仍按前述发布流程执行，单纯 SHA256 校验不代替这些检查。
 
 接口依据：[GitHub Release API](https://docs.github.com/en/rest/releases/releases)、[GitHub 附件 API](https://docs.github.com/en/rest/releases/assets)、[GitCode 创建发行版](https://docs.gitcode.com/docs/apis/post-api-v-5-repos-owner-repo-releases/)、[GitCode 附件上传地址](https://docs.gitcode.com/docs/apis/get-api-v-5-repos-owner-repo-releases-tag-upload-url/)、[GitCode 更新发行版](https://docs.gitcode.com/docs/apis/patch-api-v-5-repos-owner-repo-releases-tag/)。真实写入需配置凭据后由维护者执行；离线测试不会触碰正式 Release。
+
+发布附件使用英文文件名 `release-notes.md`，正文仍为中文，避免平台将全中文附件名归一化为 `default.md`。GitHub 草稿按标签查询可能不可见，脚本会从认证后的发行版列表按精确标签查找，支持中断续传。
+
+### 已完成的实测
+
+TV 0.1.4（versionCode 45）已完成两平台真实发布：草稿／预发布创建、三个附件上传与校验、转正式 Latest，以及中断后继续上传。GitHub 草稿读取和中文附件名问题已在此次实测中修正。GitCode 镜像仓库不接受直接 Git 推送；发布前需在 GitCode 同步 GitHub 标签，再执行脚本，脚本不会修改镜像设置。
+
+这次平台 API 流程实测通过，不代替每次新版本的构建、签名与附件校验，也不代表电视端检查更新和覆盖安装已实测；电视安装仍由用户完成。

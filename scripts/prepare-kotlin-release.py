@@ -51,7 +51,7 @@ def prepare(apk, aapt, output, tag=None, notes=""):
     temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, destination / "update.json")
     if notes:
-        (destination / "更新说明.md").write_text(notes.strip() + "\n", encoding="utf-8")
+        (destination / "release-notes.md").write_text(notes.strip() + "\n", encoding="utf-8")
     return destination
 
 
