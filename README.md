@@ -146,6 +146,8 @@ Mac 与 TV **分别管理版本号和更新清单**。Mac 固定读取 GitCode �
 
 ## 维护资料
 
+TV 正式发布提供统一入口：`python3 scripts/release-tv.py` 只读预演，明确发布时加 `--publish`。自动规划补丁版本和内部版本号，串联版本 PR、一次构建检查、原签名校验、双平台标签与附件发布；中断任务可继续。功能开发和验收仍通过 PR，具体环境、使用与限制见 [应用内更新与发布](kotlin-tv/AUTO_UPDATES.md)。
+
 - [接口、兼容性与排查经验](docs/DEVELOPMENT_NOTES.md)
 - [相关作品和预约实现](kotlin-tv/RELATED_WORKS.md)
 - [第三方声明](kotlin-tv/NOTICE.md)
