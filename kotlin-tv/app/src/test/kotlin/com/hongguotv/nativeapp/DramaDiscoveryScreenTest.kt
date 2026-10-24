@@ -38,6 +38,8 @@ class DramaDiscoveryScreenTest {
         ShadowLooper.idleMainLooper()
     }
     private fun response(request: Request): String {
+        if(request.url.encodedPath=="/incent_resource/suggestion")
+            return """{"suggest_list":[{"name":"大佬，你该出手了"}]}"""
         val searching=request.url.encodedPath=="/api/search/result"
         val page=request.url.queryParameter("page")?.toInt() ?: 1
         val pieces=request.url.pathSegments
@@ -76,6 +78,17 @@ class DramaDiscoveryScreenTest {
             assertTrue(texts(root).any { it.text.toString()=="分类第1 页" })
             val initial=get(activity,"continuousCatalog") as ContinuousCatalogView
             assertTrue("Poster ${initial.grid.getChildAt(0).height} fits the TV list viewport ${initial.grid.height}",initial.grid.getChildAt(0).height<=initial.grid.height)
+            val typing=get(activity,"searchInput") as EditText
+            typing.setText("dalao")
+            ShadowLooper.idleMainLooper(350,TimeUnit.MILLISECONDS)
+            val suggestions=get(activity,"searchSuggestions") as SearchSuggestionsView
+            (get(suggestions,"job") as Future<*>).get(5,TimeUnit.SECONDS)
+            ShadowLooper.idleMainLooper();layout(activity)
+            val suggestion=texts(root).single { it.text.toString()=="大佬，你该出手了" }
+            assertEquals(suggestion.id,typing.nextFocusDownId)
+            assertTrue(initial.grid.getChildAt(0).height<=initial.grid.height)
+            assertEquals(1,get(activity,"page"));assertEquals(1,initial.grid.adapter.count)
+            typing.setText("");layout(activity)
             texts(root).single { it.text.toString().startsWith("题材：") }.performClick()
             val dialog=ShadowAlertDialog.getLatestAlertDialog()
             texts(dialog.window!!.decorView).single { it.text.toString()=="玄幻" }.performClick();pump(activity)
@@ -106,6 +119,13 @@ class DramaDiscoveryScreenTest {
             val restored=get(activity,"continuousCatalog") as ContinuousCatalogView
             assertTrue(restored.grid.hasFocus());assertEquals("102",restored.capture()?.id)
             assertEquals(2,restored.grid.adapter.count) // Both pages remain in the list after returning.
+            // Inline topics use the same server route as the complete-topic dialog.
+            texts(root).single { it.text.toString()=="全部题材" }.performClick();pump(activity)
+            assertEquals("/category/comic-drama",requests.last().url.encodedPath)
+            assertEquals("",(get(activity,"discovery") as DramaDiscoveryState).topic)
+            texts(root).single { it.text.toString()=="玄幻" }.performClick();pump(activity)
+            assertEquals("/category/comic-drama/fantasy",requests.last().url.encodedPath)
+            assertTrue(texts(root).single { it.text.toString()=="玄幻" }.hasFocus())
             texts(root).single { it.text.toString()=="真人剧" }.performClick();pump(activity)
             assertEquals("/category/real-drama",requests.last().url.encodedPath)
             assertEquals("",(get(activity,"discovery") as DramaDiscoveryState).topic)
