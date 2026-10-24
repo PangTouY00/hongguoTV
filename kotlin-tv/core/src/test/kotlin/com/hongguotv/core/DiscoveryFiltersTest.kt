@@ -10,6 +10,17 @@ import org.junit.Test
 import java.io.IOException
 
 class DiscoveryFiltersTest {
+    @Test fun genreSceneMatchesTaxonomyForInitialAndFollowingRequests() {
+        for(genre in listOf("short_play","comic_series","ai_series")) {
+            val selection=DiscoverySelection(mapOf("genre" to genre))
+            val expected=if(genre=="short_play") "default" else genre
+            for(cursor in listOf(null,DiscoveryCursor(24,"test-cursor",2))) {
+                val request=selection.request(cursor)
+                assertEquals(expected,request.getString("req_scene"))
+                assertEquals(genre,request.getJSONObject("select_items").getJSONArray("genre").getString(0))
+            }
+        }
+    }
     private fun response(offset: Int=24,more: Boolean=true)=JSONObject().put("code",0).put("data",JSONObject()
         .put("selector_rows",JSONArray().put(JSONObject().put("type","genre").put("items",JSONArray()))
             .put(JSONObject().put("type","category_dim_role").put("items",JSONArray().put(JSONObject().put("selector_item_id","cate_36").put("show_name","重生")))))

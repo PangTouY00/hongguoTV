@@ -34,6 +34,7 @@ internal class ContinuousCatalogView(
     private var enterAdded=false
     private var restorePosition: Position?=null
     private var itemHeightLimit=0
+    private var remoteNavigation=false
     var onBrowsePosition: ((Int)->Unit)?=null
     var onGridFocus: ((Boolean)->Unit)?=null
     val grid=object: GridView(context) {
@@ -95,8 +96,13 @@ internal class ContinuousCatalogView(
                 when {
                     key==KeyEvent.KEYCODE_DPAD_UP && grid.selectedItemPosition in 0 until columns -> { upper.requestFocus();true }
                     key==KeyEvent.KEYCODE_DPAD_DOWN && grid.selectedItemPosition>=((entries.size-1)/columns)*columns -> {
-                        (if(available) next else top).requestFocus()
-                        if(available && !failed) requestMore(true)
+                        if(remoteNavigation) {
+                            if(failed) next.requestFocus()
+                            else if(available) requestMore(false)
+                        } else {
+                            (if(available) next else top).requestFocus()
+                            if(available && !failed) requestMore(true)
+                        }
                         true
                     }
                     else -> false
@@ -133,8 +139,19 @@ internal class ContinuousCatalogView(
     private fun paintStatus() {
         status.text=when { entries.isEmpty() && !available->"暂无结果，可切换分类或搜索词";busy->"已加载 ${entries.size} 部 · 正在加载…";failed->"加载失败$failureReason，已保留列表 · 按「重试加载」重试";available->"已加载 ${entries.size} 部 · 向下浏览继续加载";else->"共 ${entries.size} 部 · 已加载完毕" }
         next.text=when { busy->"加载中…";failed->"重试加载";else->"加载更多" }
-        next.visibility=if(available) VISIBLE else GONE
-        grid.nextFocusDownId=if(available) next.id else top.id
+        next.visibility=if(available && (!remoteNavigation || failed)) VISIBLE else GONE
+        top.visibility=if(remoteNavigation) GONE else VISIBLE
+        grid.nextFocusDownId=if(remoteNavigation) { if(failed) next.id else grid.id } else if(available) next.id else top.id
+    }
+    fun useRemoteNavigation() { remoteNavigation=true;paintStatus() }
+    fun resetToTop() {
+        navigating=false;enterAdded=false;restorePosition=null;onBrowsePosition?.invoke(0)
+        grid.setSelection(if(entries.isEmpty()) AdapterView.INVALID_POSITION else 0)
+        post {
+            if(!closed && entries.isNotEmpty()) {
+                grid.setSelection(0);grid.smoothScrollToPositionFromTop(0,0,0)
+            }
+        }
     }
     fun show(items: List<Series>,hasMore: Boolean,position: Position?=null) {
         entries.clear();entries.addAll(items.distinctBy { it.id });available=hasMore;busy=false;failed=false
@@ -162,7 +179,7 @@ internal class ContinuousCatalogView(
         val focusAdded=enterAdded && next.hasFocus();enterAdded=false
         cards.notifyDataSetChanged();paintStatus()
         if(focusAdded && entries.size>firstNew) { grid.setSelection(firstNew);grid.requestFocus() }
-        else if(!available && next.hasFocus()) top.requestFocus()
+        else if(!available && next.hasFocus()) { if(remoteNavigation) grid.requestFocus() else top.requestFocus() }
     }
     fun fail(problem: Throwable?=null) {
         if(closed) return

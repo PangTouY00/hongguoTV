@@ -21,7 +21,8 @@ data class DiscoverySelection(val values: Map<String,String> = emptyMap()) {
         return JSONObject().put("offset",cursor?.offset ?: 0).put("limit",24)
             .put("need_selector_panel",cursor==null).put("select_items",selected)
             .put("session_id",cursor?.session.orEmpty()).put("req_type",if(cursor==null) "default" else "only_content")
-            .put("client_req_type",3).put("filter_ids","").put("req_scene","default")
+            .put("client_req_type",3).put("filter_ids","")
+            .put("req_scene",values["genre"]?.takeIf { it in setOf("comic_series","ai_series") } ?: "default")
     }
     companion object {
         val labels=linkedMapOf("genre" to "类型","category_dim_theme" to "主题","category_dim_role" to "设定",
@@ -41,6 +42,9 @@ class DiscoveryBrowserState {
     var loaded=false
     var position: Pair<String,Int>?=null
     var expanded=true
+    var headerOffset=0
+    var filterVerticalOffset=0
+    val filterOffsets=mutableMapOf<String,Int>()
 }
 internal object FilteredDiscoveryParser {
     fun parse(raw: String,cursor: DiscoveryCursor?): FilteredDiscoveryPage {

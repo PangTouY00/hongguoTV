@@ -21,6 +21,7 @@ internal class DiscoveryScreen(
     private val scroll=ScrollView(context).apply { isFillViewport=false;isVerticalScrollBarEnabled=false;addView(groups) }
     private val summary=TextView(context).apply { textSize=12f;setTextColor(TvStyle.muted);maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END }
     private val controls=linkedMapOf<Pair<String,String>,TextView>()
+    private val strips=linkedMapOf<String,HorizontalScrollView>()
     private val toggle=button("收起筛选") { expand(!state.expanded);toggleFocus() }
     private val reset=button("重置") { change(DiscoverySelection()) }
     private val refresh=button("刷新") { request(null) }
@@ -28,10 +29,13 @@ internal class DiscoveryScreen(
     private var loading=false
     private var closed=false
     private var headerOffset=0
+    private var browseStep=0
+    private var restoring=true
     private var serial=0
     var navigationChanged: (()->Unit)?=null
     private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
     init {
+        val restoredOffset=state.headerOffset
         orientation=VERTICAL
         val bar=LinearLayout(context).apply { gravity=android.view.Gravity.CENTER_VERTICAL }
         bar.addView(types,LayoutParams(0,-2,1f));bar.addView(toggle);bar.addView(reset);bar.addView(refresh)
@@ -40,13 +44,18 @@ internal class DiscoveryScreen(
             (recycled as? CatalogPosterCard ?: CatalogPosterCard(context)).apply { show(item);cover(image,item.cover) }
         },{ item -> state.position=item.id to 0 },open,more,{ if(!loading) request(state.next) })
         browser.onBrowsePosition={ position ->
-            val header=getChildAt(0).height+scroll.height+summary.height
-            val step=(browser.grid.getChildAt(0)?.height ?: dp(180))+dp(10)
-            val offset=if(state.expanded) minOf(header,(position/6)*step) else 0
-            if(headerOffset!=offset) { headerOffset=offset;requestLayout() }
+            if(!restoring) {
+                val header=getChildAt(0).height+scroll.height+summary.height
+                if(browseStep==0) browseStep=(browser.grid.getChildAt(0)?.height ?: dp(180))+dp(10)
+                val offset=if(state.expanded) minOf(header,(position/6)*browseStep) else 0
+                if(headerOffset!=offset) { headerOffset=offset;requestLayout() }
+            }
         }
+        browser.useRemoteNavigation()
         addView(browser,LayoutParams(-1,0,1f))
         renderFilters();showItems();expand(state.expanded)
+        headerOffset=restoredOffset
+        post { if(!closed) { scroll.scrollTo(0,state.filterVerticalOffset);restoring=false;requestLayout() } }
     }
     override fun onMeasure(widthMeasureSpec: Int,heightMeasureSpec: Int) {
         groups.measure(widthMeasureSpec,View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED))
@@ -64,12 +73,14 @@ internal class DiscoveryScreen(
         if(child!==browser && headerOffset!=0) { headerOffset=0;scrollTo(0,0);requestLayout() }
         super.requestChildFocus(child,focused)
     }
-    private fun button(label: String,action: ()->Unit)=TextView(context).apply {
+    private fun button(label: String,chosen: ()->Boolean={false},action: ()->Unit)=TextView(context).apply {
         id=View.generateViewId();text=label;textSize=12f;includeFontPadding=false;maxLines=1
         isFocusable=true;isClickable=true;setPadding(dp(10),dp(7),dp(10),dp(7));minHeight=dp(34)
         fun paint() {
-            setTextColor(if(isSelected) TvStyle.accent else TvStyle.text)
-            background=TvStyle.card(context,hasFocus())
+            val selected=chosen();isSelected=selected
+            setTextColor(if(selected) TvStyle.accent else TvStyle.text)
+            background=TvStyle.shape(context,if(selected) android.graphics.Color.rgb(61,39,34) else if(hasFocus()) TvStyle.raised else TvStyle.surface,
+                if(hasFocus()) TvStyle.accent else android.graphics.Color.TRANSPARENT)
         }
         setOnFocusChangeListener { _,_->paint() };setOnClickListener { action() };paint()
     }
@@ -85,7 +96,7 @@ internal class DiscoveryScreen(
     }
     private fun renderFilters() {
         val focused=controls.entries.firstOrNull { it.value.hasFocus() }?.key
-        controls.clear();types.removeAllViews();groups.removeAllViews()
+        controls.clear();strips.clear();types.removeAllViews();groups.removeAllViews()
         val available=state.groups.ifEmpty { listOf(DiscoveryGroup("genre","类型",emptyList())) }
         available.forEach { group ->
             val row=LinearLayout(context).apply { gravity=android.view.Gravity.CENTER_VERTICAL }
@@ -93,16 +104,25 @@ internal class DiscoveryScreen(
             val choices=LinearLayout(context)
             val all=DiscoveryFilter("","全部")
             (listOf(all)+group.options).forEach { option ->
-                val chip=button(if(group.type=="genre" && option.id.isEmpty()) "全部类型" else option.label) {
+                val chip=button(if(group.type=="genre" && option.id.isEmpty()) "全部类型" else option.label,
+                    { state.selection.values[group.type].orEmpty()==option.id }) {
                     if(state.selection.values[group.type].orEmpty()!=option.id) change(state.selection.choose(group.type,option.id),group.type to option.id)
                 }.apply {
-                    isSelected=state.selection.values[group.type].orEmpty()==option.id;setTextColor(if(isSelected) TvStyle.accent else TvStyle.text)
                     if(group.type!="genre") { minHeight=dp(28);setPadding(dp(10),dp(4),dp(10),dp(4)) }
                 }
                 controls[group.type to option.id]=chip
                 choices.addView(chip,LayoutParams(-2,-2).apply { rightMargin=dp(5) })
             }
             val strip=HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled=false;isFocusable=false;addView(choices) }
+            strips[group.type]=strip
+            strip.post {
+                if(!closed) {
+                    val selected=controls[group.type to state.selection.values[group.type].orEmpty()]
+                    var offset=state.filterOffsets[group.type] ?: 0
+                    if(selected!=null && (selected.left<offset || selected.right>offset+strip.width)) offset=(selected.left-strip.width/3).coerceAtLeast(0)
+                    strip.scrollTo(offset,0)
+                }
+            }
             row.addView(strip,LayoutParams(0,-2,1f))
             if(group.type=="genre") types.addView(row,LayoutParams(-1,-2)) else groups.addView(row,LayoutParams(-1,-2).apply { bottomMargin=dp(3) })
         }
@@ -135,6 +155,9 @@ internal class DiscoveryScreen(
         return selected.ifEmpty { "全部类型 · 全部条件" }
     }
     private fun change(selection: DiscoverySelection,focus: Pair<String,String>?=null) {
+        browseStep=0
+        if(focus?.first=="genre" || selection.values.isEmpty()) { state.filterOffsets.clear();state.filterVerticalOffset=0 }
+        else focus?.let { state.filterOffsets.remove(it.first) }
         state.selection=selection;state.items=emptyList();state.next=null;state.loaded=false;state.position=null;state.expanded=true
         if(focus?.first=="genre" || selection.values.isEmpty()) state.groups=state.groups.filter { it.type=="genre" }
         showItems();renderFilters();focus?.let { controls[it]?.requestFocus() };request(null)
@@ -159,11 +182,18 @@ internal class DiscoveryScreen(
         }
     }
     fun entry(): View=controls["genre" to state.selection.values["genre"].orEmpty()] ?: toggle
+    fun backToTop() {
+        headerOffset=0;state.headerOffset=0;state.filterVerticalOffset=0;scroll.scrollTo(0,0);scrollTo(0,0)
+        browser.resetToTop();state.position=state.items.firstOrNull()?.let { it.id to 0 };requestLayout()
+    }
     fun start(focus: Boolean) {
         if(focus) { if(state.position!=null && state.items.isNotEmpty()) browser.enter() else entry().requestFocus() }
         if(!state.loaded) request(null)
     }
     fun close() {
+        if(closed) return
+        state.headerOffset=headerOffset;state.filterVerticalOffset=scroll.scrollY
+        strips.forEach { (type,strip) -> state.filterOffsets[type]=strip.scrollX }
         closed=true;serial++;browser.capture()?.let { state.position=it.id to it.top };browser.close()
     }
 }
