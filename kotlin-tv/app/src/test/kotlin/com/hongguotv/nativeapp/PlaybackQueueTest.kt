@@ -94,7 +94,7 @@ class PlaybackQueueTest {
     @Test fun manualNextUsesQueuedSourceWithoutConsumingEpisodeSleepCount()=fixture { activity,fake,library,_ ->
         val timer=get(activity,"sleepTimer") as SleepTimer;timer.afterEpisodes(3)
         invoke(activity,"queuePreparedEpisode","102:${library.maxQuality}")
-        invoke(activity,"playEpisode",1,0L,true,false)
+        invoke(activity,"playEpisode",1,0L,true,false,false)
         assertTrue(fake.calls.contains("seekToNextMediaItem"))
         assertEquals(true,invoke(activity,"advanceQueuedEpisode",12000L,false))
         assertEquals(3,timer.episodesLeft)
