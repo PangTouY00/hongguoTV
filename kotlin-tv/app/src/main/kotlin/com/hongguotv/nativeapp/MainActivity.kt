@@ -20,6 +20,7 @@ import android.text.TextUtils
 import androidx.media3.common.*
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
 import com.hongguotv.core.*
@@ -1175,6 +1176,7 @@ class MainActivity: Activity() {
                     player=it; playerView?.player=it
                     it.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),true)
                     it.setHandleAudioBecomingNoisy(true)
+                    it.addAnalyticsListener(playbackDriftListener(it))
                 }
             }
             p.setPlaybackSpeed(library.playbackSpeed)
@@ -1324,6 +1326,24 @@ class MainActivity: Activity() {
         val delay=recovery.delayMillis ?: return
         playbackText.text="${if(retryAutoplay) "准备恢复播放" else "准备恢复暂停位置"} · ${delay/1000f} 秒后重试 ${recovery.attempts+1}/3 · ${formatTime(retryPosition)}"
         retryPending=true; main.postDelayed(retryRunnable,delay)
+    }
+    /** Detects growing audio/video drift (video frame processing offset stays signed) and
+     *  re-seeks to the current position once per cooldown window: a seek flushes the audio
+     *  processors and clock basis, which users confirmed restores sync; a pause does not. */
+    private fun playbackDriftListener(p: ExoPlayer): AnalyticsListener {
+        val guard=PlaybackSyncGuard()
+        return object: AnalyticsListener {
+            override fun onVideoFrameProcessingOffset(eventTime: AnalyticsListener.EventTime,totalProcessingOffsetUs: Long,frameCount: Int) {
+                val window=guard.offer(totalProcessingOffsetUs,frameCount,p.isPlaying) ?: return
+                android.util.Log.i("HongguoTV","Video frame offset ${window.averageUs/1000}ms")
+                if(window.resync) main.post {
+                    if(player===p && playbackReady && p.isPlaying && pendingSeek==null && !playError) {
+                        android.util.Log.w("HongguoTV","Resync after audio/video drift ${window.averageUs/1000}ms at ${formatTime(p.currentPosition)}")
+                        p.seekTo(p.currentPosition)
+                    }
+                }
+            }
+        }
     }
     private fun playedQualityLabel(opened: OpenedStream,maxQuality: Int): String {
         val rendition=opened.rendition ?: return opened.video.info.quality

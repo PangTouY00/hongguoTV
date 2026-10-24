@@ -49,6 +49,8 @@ Release 构建读取 `kotlin-tv/keystore.properties`（已忽略）或对应环�
 
 竖屏与横屏视频都按设备解码能力选流：启动时探测 AVC/HEVC 解码器上限（logcat 搜索 `Decoder capabilities`），选流优先跳过盒子声明解不了的档位，并在播放前用 MP4 头里的实际编码尺寸复核，超出上限时自动沿清晰度阶梯降档（HUD 显示"自动降清"）。因此受硬件上限约束的盒子会以可解的最高档播放竖屏内容（例如仅 480P）；全部档位都超出时保持原"兼容资源"行为交由系统尝试。播放失败面板的"尝试 xP"只在确有更低档位时出现。
 
+播放中持续监测视频帧处理偏移（logcat 搜索 `Video frame offset` / `Resync after audio/video drift`）：平均偏移持续超过 150ms 时自动对当前位置做一次无感重同步（间隔至少 30 秒），用于消除随播放时长累积、倍速下更快的音画不同步。
+
 排查播放、账户或旧系统兼容问题前，先读 [开发排查笔记](../docs/DEVELOPMENT_NOTES.md)。第三方来源与许可见 [NOTICE.md](NOTICE.md)。
 
 评论与弹幕调试入口和验收范围见 [SOCIAL.md](SOCIAL.md)。
