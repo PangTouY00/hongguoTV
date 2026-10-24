@@ -43,6 +43,7 @@ class DiscoveryBrowserState {
     var position: Pair<String,Int>?=null
     var expanded=true
     var headerOffset=0
+    var browseStep=0
     var filterVerticalOffset=0
     val filterOffsets=mutableMapOf<String,Int>()
 }

@@ -30,7 +30,11 @@ class DiscoveryScreenTest {
         val upper=TextView(activity).apply { id=View.generateViewId();isFocusable=true }
         val state=DiscoveryBrowserState().apply {
             loaded=true;selection=DiscoverySelection(mapOf("category_dim_role" to "cate_29"))
-            groups=listOf(this@DiscoveryScreenTest.groups[0],DiscoveryGroup("category_dim_role","设定",(0..29).map { DiscoveryFilter("cate_$it","测试设定$it") }))
+            groups=listOf(this@DiscoveryScreenTest.groups[0],DiscoveryGroup("category_dim_role","设定",(0..29).map { DiscoveryFilter("cate_$it","测试设定$it") }),
+                this@DiscoveryScreenTest.groups[2],DiscoveryGroup("category_dim_theme","主题",listOf(DiscoveryFilter("cate_7","玄幻"))),
+                DiscoveryGroup("sort","推荐",listOf(DiscoveryFilter("hot_score","最高热度"))),
+                DiscoveryGroup("gender","受众",listOf(DiscoveryFilter("0","女频"))),
+                DiscoveryGroup("online_time","时间",listOf(DiscoveryFilter("days_7","7天内上新"))))
             items=(1..60).map { Series("$it","作品$it") }
         }
         fun screen()=DiscoveryScreen(activity,state,upper,{ _,_-> },{}, { _,_-> },{ _,_,_->fail("Restoration fetched network") })
@@ -41,11 +45,13 @@ class DiscoveryScreenTest {
             assertTrue(chosen.isSelected)
             assertTrue(views(first).filterIsInstance<HorizontalScrollView>().any { it.scrollX>0 })
             val grid=views(first).filterIsInstance<ContinuousCatalogView>().single()
-            grid.enter();grid.grid.setSelection(36);layout(first);layout(first)
+            grid.enter();grid.grid.setSelection(6);layout(first);layout(first)
             assertTrue(first.scrollY>0)
             val offset=first.scrollY;repeat(3) { layout(first) };assertEquals(offset,first.scrollY)
             first.close()
+            val savedStep=state.browseStep
             val next=screen();returned=next;activity.setContentView(next);next.start(false);layout(next)
+            assertEquals(savedStep,state.browseStep)
             assertTrue(views(next).filterIsInstance<TextView>().single { it.text.toString()=="测试设定29" }.isSelected)
             assertTrue(views(next).filterIsInstance<HorizontalScrollView>().any { it.scrollX>0 })
             assertEquals(offset,next.scrollY)

@@ -29,7 +29,7 @@ internal class DiscoveryScreen(
     private var loading=false
     private var closed=false
     private var headerOffset=0
-    private var browseStep=0
+    private var browseStep=state.browseStep
     private var restoring=true
     private var serial=0
     var navigationChanged: (()->Unit)?=null
@@ -155,7 +155,7 @@ internal class DiscoveryScreen(
         return selected.ifEmpty { "全部类型 · 全部条件" }
     }
     private fun change(selection: DiscoverySelection,focus: Pair<String,String>?=null) {
-        browseStep=0
+        browseStep=0;state.browseStep=0
         if(focus?.first=="genre" || selection.values.isEmpty()) { state.filterOffsets.clear();state.filterVerticalOffset=0 }
         else focus?.let { state.filterOffsets.remove(it.first) }
         state.selection=selection;state.items=emptyList();state.next=null;state.loaded=false;state.position=null;state.expanded=true
@@ -192,7 +192,7 @@ internal class DiscoveryScreen(
     }
     fun close() {
         if(closed) return
-        state.headerOffset=headerOffset;state.filterVerticalOffset=scroll.scrollY
+        state.headerOffset=headerOffset;state.browseStep=browseStep;state.filterVerticalOffset=scroll.scrollY
         strips.forEach { (type,strip) -> state.filterOffsets[type]=strip.scrollX }
         closed=true;serial++;browser.capture()?.let { state.position=it.id to it.top };browser.close()
     }
