@@ -31,7 +31,12 @@ class DramaDiscoveryScreenTest {
     private fun get(target: Any,name: String)=target.javaClass.getDeclaredField(name).apply { isAccessible=true }.get(target)
     private fun set(target: Any,name: String,value: Any?) { target.javaClass.getDeclaredField(name).apply { isAccessible=true }.set(target,value) }
     private fun texts(view: View): List<TextView> = if(view is ViewGroup) (0 until view.childCount).flatMap { texts(view.getChildAt(it)) } else if(view is TextView) listOf(view) else emptyList()
-    private fun pump(activity: MainActivity) { (get(activity,"workJob") as? Future<*>)?.get(5,TimeUnit.SECONDS);ShadowLooper.idleMainLooper() }
+    private fun pump(activity: MainActivity) { (get(activity,"workJob") as? Future<*>)?.get(5,TimeUnit.SECONDS);ShadowLooper.idleMainLooper();layout(activity) }
+    private fun layout(activity: MainActivity) {
+        val decor=activity.window.decorView
+        decor.measure(View.MeasureSpec.makeMeasureSpec(960,View.MeasureSpec.EXACTLY),View.MeasureSpec.makeMeasureSpec(540,View.MeasureSpec.EXACTLY));decor.layout(0,0,960,540)
+        ShadowLooper.idleMainLooper()
+    }
     private fun response(request: Request): String {
         val searching=request.url.encodedPath=="/api/search/result"
         val page=request.url.queryParameter("page")?.toInt() ?: 1
@@ -57,8 +62,10 @@ class DramaDiscoveryScreenTest {
             (get(account,"worker") as ExecutorService).submit {}.get(5,TimeUnit.SECONDS)
             ShadowLooper.idleMainLooper()
             val requests=java.util.concurrent.CopyOnWriteArrayList<Request>()
+            val failNext=java.util.concurrent.atomic.AtomicBoolean(false)
             set(activity,"repository",ContentRepository(OkHttpClient.Builder().addInterceptor { chain ->
                 val request=chain.request();requests+=request
+                if(failNext.compareAndSet(true,false)) throw java.io.IOException("测试断网")
                 Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK").body(response(request).toResponseBody()).build()
             }.build()))
             set(activity,"foreground",true)
@@ -67,28 +74,38 @@ class DramaDiscoveryScreenTest {
             val root=activity.findViewById<View>(android.R.id.content)
             assertTrue(texts(root).any { it.text.toString()=="找剧" })
             assertTrue(texts(root).any { it.text.toString()=="分类第1 页" })
+            val initial=get(activity,"continuousCatalog") as ContinuousCatalogView
+            assertTrue("Poster ${initial.grid.getChildAt(0).height} fits the TV list viewport ${initial.grid.height}",initial.grid.getChildAt(0).height<=initial.grid.height)
             texts(root).single { it.text.toString().startsWith("题材：") }.performClick()
             val dialog=ShadowAlertDialog.getLatestAlertDialog()
             texts(dialog.window!!.decorView).single { it.text.toString()=="玄幻" }.performClick();pump(activity)
             assertEquals("/category/comic-drama/fantasy",requests.last().url.encodedPath)
-            texts(root).single { it.text.toString()=="下一页" }.performClick();pump(activity)
+            failNext.set(true)
+            texts(root).single { it.text.toString()=="加载更多" }.performClick();pump(activity)
+            assertEquals(1,get(activity,"page"))
+            assertTrue(texts(root).any { it.text.toString()=="分类第1 页" })
+            texts(root).single { it.text.toString()=="重试加载" }.performClick();pump(activity)
             assertEquals(2,get(activity,"page"))
-            @Suppress("UNCHECKED_CAST") val cards=get(activity,"catalogCards") as Map<String,View>
-            cards.getValue("102").requestFocus()
+            val browser=get(activity,"continuousCatalog") as ContinuousCatalogView
+            browser.grid.setSelection(1);browser.enter();layout(activity)
+            assertEquals("before search selection","102",browser.capture()?.id)
             val input=get(activity,"searchInput") as EditText
-            assertNotEquals(cards.getValue("102").id,input.nextFocusDownId)
+            assertNotEquals(browser.grid.id,input.nextFocusDownId)
             input.setText("大佬")
             texts(root).single { it.text.toString()=="搜索" }.performClick();pump(activity)
             assertTrue(texts(root).any { it.text.toString()=="搜索结果剧" })
             assertFalse(texts(root).any { it.text.toString().startsWith("题材：") })
+            assertEquals("saved category selection","102",(get(activity,"discovery") as DramaDiscoveryState).browse?.focus)
             val count=requests.size
             texts(root).single { it.text.toString()=="返回分类" }.performClick()
             assertEquals(count,requests.size)
             assertEquals("",get(activity,"query"));assertEquals(2,get(activity,"page"))
             assertEquals("fantasy",(get(activity,"discovery") as DramaDiscoveryState).topic)
+            layout(activity)
             assertTrue(texts(root).any { it.text.toString()=="分类第2 页" })
-            @Suppress("UNCHECKED_CAST") val restored=get(activity,"catalogCards") as Map<String,View>
-            assertTrue(restored.getValue("102").hasFocus())
+            val restored=get(activity,"continuousCatalog") as ContinuousCatalogView
+            assertTrue(restored.grid.hasFocus());assertEquals("102",restored.capture()?.id)
+            assertEquals(2,restored.grid.adapter.count) // Both pages remain in the list after returning.
             texts(root).single { it.text.toString()=="真人剧" }.performClick();pump(activity)
             assertEquals("/category/real-drama",requests.last().url.encodedPath)
             assertEquals("",(get(activity,"discovery") as DramaDiscoveryState).topic)

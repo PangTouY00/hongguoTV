@@ -48,6 +48,7 @@ class StreamLadder(val renditions: List<Rendition>) {
     }
     companion object { private val AVC_LABELS = setOf("h264", "avc", "avc1", "avc3") }
 }
+class ContentHttpException(val statusCode: Int): IOException("内容请求失败（HTTP $statusCode）")
 class SearchSessionExpiredException: IOException("搜索结果已过期，请从第 1 页重新搜索")
 
 class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).callTimeout(45,TimeUnit.SECONDS).build(), private val clock: () -> Long = System::currentTimeMillis) {
@@ -65,18 +66,28 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     }
     private data class SearchCursor(val searchId: String, val passback: String, val offset: Int?, val updatedAt: Long)
     private val searchCursors=linkedMapOf<Triple<ContentType,String,Int>,SearchCursor>()
-    private fun text(url: String, signed: Signer.Request? = null): String {
+    private fun text(url: String, signed: Signer.Request? = null, retryTransient: Boolean = false): String {
         val request = Request.Builder().url(url).header("User-Agent",VendorConstants.VIDEO_UA).header("Accept-Language","zh-CN,zh;q=0.9")
         signed?.headers?.forEach { (k,v) -> request.header(k,v) }
         signed?.body?.let { request.post(it.toRequestBody("application/json; charset=utf-8".toMediaType())) }
-        return RequestScope.execute(http.newCall(request.build())) { response ->
-            if (!response.isSuccessful) throw IOException("内容请求失败（HTTP ${response.code}）")
+        fun fetch() = RequestScope.execute(http.newCall(request.build())) { response ->
+            if (!response.isSuccessful) throw ContentHttpException(response.code)
             val body = response.body ?: throw IOException("内容响应为空")
             if (body.contentLength() > 16*1024*1024) throw IOException("内容响应过大")
             val input=body.byteStream(); val out=java.io.ByteArrayOutputStream(); val buffer=ByteArray(8192)
             while(out.size()<=16*1024*1024) { val n=input.read(buffer); if(n<0) break; out.write(buffer,0,n) }; val bytes=out.toByteArray()
             if(bytes.size > 16*1024*1024) throw IOException("内容响应过大")
             String(bytes,Charsets.UTF_8)
+        }
+        try { return fetch() } catch (e: IOException) {
+            val temporary=e is java.net.SocketTimeoutException || e is java.net.SocketException ||
+                e is java.net.UnknownHostException || (e is ContentHttpException && e.statusCode in setOf(500,502,503,504))
+            if(!retryTransient || !temporary || Thread.currentThread().isInterrupted) throw e
+            // One bounded retry of the same read-only search page; navigation still cancels its scope.
+            try { Thread.sleep(700) } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt();throw java.io.InterruptedIOException("请求已取消")
+            }
+            return fetch()
         }
     }
     private fun router(url: String) = extractRouter(text(url)).getJSONObject("loaderData")
@@ -141,7 +152,7 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     /** The public website now loads cross-category results through its JSON endpoint. */
     fun searchAll(keyword: String, page: Int = 1): CatalogPage {
         require(keyword.isNotBlank() && keyword.length<=80 && page in 1..100)
-        val raw=text("$site/api/search/result?query=${Signer.encode(keyword)}&page=$page")
+        val raw=text("$site/api/search/result?query=${Signer.encode(keyword)}&page=$page",retryTransient=true)
         val section=try { JSONObject(raw) } catch (_: Exception) { throw IOException("搜索响应格式已变化，请稍后重试") }
         if(section.has("pageNum") && section.optInt("pageNum")!=page) throw IOException("搜索页码不匹配，请重新搜索")
         val rows=section.optJSONArray("searchList") ?: throw IOException("搜索数据结构已变化")
