@@ -140,6 +140,8 @@ class MainActivity: Activity() {
             }
         }
     }
+    // Phones and touch panels need a touch entry point; remote-only TVs keep the existing behaviour untouched.
+    private val touchInput by lazy { packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN) }
     private lateinit var root: FrameLayout
     private var generation=0
     private var screen="catalog"
@@ -1184,9 +1186,20 @@ class MainActivity: Activity() {
             hud=column().apply { setPadding(dp(widthDp()*.05f),dp(20),dp(widthDp()*.05f),(resources.displayMetrics.heightPixels*.05f).toInt()); background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.TRANSPARENT,Color.argb(240,11,15,21))) }
             playbackTitle=text("",23f).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setTypeface(null,Typeface.BOLD) }; hud.addView(playbackTitle)
             playbackText=text("",15f,muted).apply { setPadding(0,dp(10),0,dp(9)) }; hud.addView(playbackText)
-            progressBar=ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal).apply { max=1000; progressTintList=android.content.res.ColorStateList.valueOf(accent); progressBackgroundTintList=android.content.res.ColorStateList.valueOf(surface) }; hud.addView(progressBar,lp(-1,dp(4)))
-            hud.addView(text("确认 暂停/播放    左右 快退/快进    ↓ 选集    ↑ 更多    返回 收起 / 退出",13f,muted).apply { setPadding(0,dp(12),0,0) })
+            progressBar=(if(touchInput) SeekBar(this).apply { max=1000; progressTintList=android.content.res.ColorStateList.valueOf(accent); progressBackgroundTintList=android.content.res.ColorStateList.valueOf(surface); splitTrack=false; isFocusable=false; isFocusableInTouchMode=false; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                // Dragging is the phone equivalent of the remote's left/right seek.
+                setOnSeekBarChangeListener(object: SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(bar: SeekBar,value: Int,fromUser: Boolean) {
+                        val duration=player?.duration ?: 0L
+                        if(fromUser && playbackReady && duration>0) playbackText.text="跳转到 ${formatTime(value.toLong()*duration/1000)} · 松手生效"
+                    }
+                    override fun onStartTrackingTouch(bar: SeekBar) { main.removeCallbacks(hideHud); hud.visibility=View.VISIBLE }
+                    override fun onStopTrackingTouch(bar: SeekBar) { val duration=player?.duration ?: 0L; if(playbackReady && duration>0) seekTo(bar.progress.toLong()*duration/1000) }
+                })
+            } else ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal).apply { max=1000; progressTintList=android.content.res.ColorStateList.valueOf(accent); progressBackgroundTintList=android.content.res.ColorStateList.valueOf(surface) }); hud.addView(progressBar,lp(-1,if(touchInput) dp(22) else dp(4)))
+            hud.addView(text(if(touchInput) "轻点画面 显示/隐藏控制    轻点两侧 快退/快进    拖动进度条 跳转    返回 收起 / 退出" else "确认 暂停/播放    左右 快退/快进    ↓ 选集    ↑ 更多    返回 收起 / 退出",13f,muted).apply { setPadding(0,dp(12),0,0) })
             controls=column().apply { setPadding(0,dp(12),0,0); visibility=View.GONE }; hud.addView(controls)
+            if(touchInput) root.addView(PlaybackTouchLayer(this),FrameLayout.LayoutParams(-1,-1))
             root.addView(ScrollView(this).apply { isVerticalScrollBarEnabled=false; addView(hud) },FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
         }
         playbackTitle.text="${data.series.title}  ·  第 ${episodeIndex+1} 集"
@@ -1415,6 +1428,30 @@ class MainActivity: Activity() {
             autoRecovery=true; scheduleRecovery()
         }
         android.util.Log.w("HongguoTV","Playback failure: ${problem.javaClass.simpleName}"+(if(problem is PlaybackException) " code=${problem.errorCodeName}" else ""))
+    }
+    /** Touch entry point for phones: one tap opens the same control panel the remote opens with ↑ or
+     *  MENU, a second tap within 350ms steps ±10s like the DPAD does, and a tap while the panel is
+     *  open collapses it. The layer sits above the danmaku overlay and below the HUD, so panel buttons
+     *  keep their own click handling and the remote path is untouched. */
+    private inner class PlaybackTouchLayer(context: Context): View(context) {
+        private var lastTapAt=0L
+        private val singleTap=Runnable {
+            if(isAttachedToWindow && screen=="player") {
+                if(playError) showHud() else if(panel) hidePlaybackOverlay() else showPanel()
+            }
+        }
+        override fun onTouchEvent(event: MotionEvent): Boolean = when(event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> true
+            MotionEvent.ACTION_UP -> {
+                if(event.pointerCount==1 && width>0) {
+                    val now=android.os.SystemClock.elapsedRealtime()
+                    if(now-lastTapAt<350) { main.removeCallbacks(singleTap); lastTapAt=0L; seek(if(event.x<width/2f) -1 else 1,0) }
+                    else { lastTapAt=now; main.postDelayed(singleTap,350) }
+                }
+                true
+            }
+            else -> false
+        }
     }
     private fun hidePlaybackOverlay() {
         main.removeCallbacks(hideHud)
