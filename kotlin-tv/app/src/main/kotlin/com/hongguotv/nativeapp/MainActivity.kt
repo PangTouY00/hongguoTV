@@ -622,8 +622,8 @@ class MainActivity: Activity() {
                 nav.forEach { it.nextFocusDownId=historyManage!!.id }
             }
             if(isLocalFavorites()) {
-                favoriteStatus=text(favoriteMonitor.status,13f,muted).apply { setPadding(0,0,0,dp(6)) }
-                headerRows+=favoriteStatus;container.addView(favoriteStatus)
+                val status=text(favoriteMonitor.status,13f,muted).apply { setPadding(0,0,0,dp(6)) }
+                favoriteStatus=status;headerRows+=status;container.addView(status)
             }
             browseHeaderRows=headerRows
         }
