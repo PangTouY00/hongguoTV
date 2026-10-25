@@ -44,7 +44,7 @@ class PhoneLogin(private val http: OkHttpClient) {
         val reply=call("/passport/mobile/send_code/v1/",mapOf("mobile" to mobile,"type" to type),form=false)
         val data=reply.optJSONObject("data") ?: JSONObject()
         // 风控要求滑块验证：电视上没法做，也不去绕它。
-        if(data.has("verify_center_decision_conf")) throw Failure("平台要求先完成滑块验证，当前电视登录流程不支持，尚未完成登录。")
+        if(data.has("verify_center_decision_conf")) throw Failure("红果要求完成滑块验证，请改用扫码登录",1105)
         if(reply.optString("message")!="success") throw Failure(describe(data) ?: "验证码没发出去")
         ticket=data.optString("mobile_ticket")
         return Sent(data.optString("mobile").ifBlank { mobile },data.optInt("retry_time",60))
