@@ -1440,13 +1440,16 @@ class MainActivity: Activity() {
                 if(playError) showHud() else if(panel) hidePlaybackOverlay() else showPanel()
             }
         }
+        private fun scheduleSingleTap() { main.postDelayed(singleTap,350) }
+        /** Accessibility services and lint both expect performClick; it routes to the same single-tap path. */
+        override fun performClick(): Boolean { super.performClick(); scheduleSingleTap(); return true }
         override fun onTouchEvent(event: MotionEvent): Boolean = when(event.actionMasked) {
             MotionEvent.ACTION_DOWN -> true
             MotionEvent.ACTION_UP -> {
                 if(event.pointerCount==1 && width>0) {
                     val now=android.os.SystemClock.elapsedRealtime()
                     if(now-lastTapAt<350) { main.removeCallbacks(singleTap); lastTapAt=0L; seek(if(event.x<width/2f) -1 else 1,0) }
-                    else { lastTapAt=now; main.postDelayed(singleTap,350) }
+                    else { lastTapAt=now; performClick() }
                 }
                 true
             }
