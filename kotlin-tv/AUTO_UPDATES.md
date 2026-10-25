@@ -1,8 +1,8 @@
 # 应用内更新与发布
 
-更新源为 GitCode 本仓库公开 Releases：`tsukiyo-zero/hongguoTV`。
+更新源为 GitHub 上本项目的发布仓库：`PangTouY00/hongguoTV`（用户自己的仓库）。
 
-电视先请求 `https://api.gitcode.com/api/v5/repos/tsukiyo-zero/hongguoTV/releases/latest?type=latest`，获取最新正式发行版标签，再读取该标签附件中的 `update.json`，比较内部版本号，并从 GitCode 根据清单的标签和附件名下载 APK。清单标签必须与接口返回标签一致。仅允许 HTTPS 和 GitCode 官方 API、站点及 file-cdn.gitcode.com 下载域名。此流程由 App 实现；最终覆盖安装由安卓系统执行。
+电视先请求 `https://api.github.com/repos/PangTouY00/hongguoTV/releases/latest`，获取最新正式发行版标签，再读取该标签附件中的 `update.json`，比较内部版本号，并从 GitHub 根据清单的标签和附件名下载 APK。清单标签必须与接口返回标签一致。仅允许 HTTPS 和 GitHub 官方 API、站点及 objects.githubusercontent.com 下载域名。预发布（调试构建）不会进入这条通道。此流程由 App 实现；最终覆盖安装由安卓系统执行。
 
 ## 发布流程
 
@@ -11,7 +11,7 @@
 1. 在 `app/build.gradle.kts` 调整 versionName，增加 versionCode。正式发布内部版本号必须超过上一正式版本；调试过程中不递增，使用文件名区分。允许跳过未公开的版本号，无需补发每个中间版本。环境变量可覆盖默认版本，打包后核对 APK 实际元数据。
 2. 使用同一包名 `com.hongguotv.nativeapp` 和现有签名构建，检查最低系统、版本和签名。不要换用新 Debug 签名或将签名密钥提交到仓库。构建方法见 [README](README.md)。
 3. 执行 `./scripts/build-kotlin.sh`，自动在 `outputs/releases/<tag>/` 生成配套 APK 和 `update.json`。清单从实际 APK 提取版本、包名、最低系统，并计算大小和 SHA256；环境变量覆盖后的版本也会正确读取。直接运行 Gradle 或 IDEA 的普通构建任务仍只生成 APK。
-4. 在 GitCode 创建同仓库 Release。Target 选择实际打包所用的提交或分支；APK 若来自尚未合并的功能分支，不能误选 main。
+4. 在 GitHub 的 `PangTouY00/hongguoTV` 创建 Release（GitCode 的 `tsukiyo-zero/hongguoTV` 同步发布作为镜像）。Target 选择实际打包所用的提交或分支；APK 若来自尚未合并的功能分支，不能误选 main。
 5. 上传配套 APK 和 `update.json`，正式发布并设为 Latest。草稿和 Pre-release 不用于稳定在线更新。
 6. 在较旧版本的设备上检查更新，核对下载与覆盖安装。推送代码、合并 main 或生成 Actions Artifact 不等于发布在线更新。
 

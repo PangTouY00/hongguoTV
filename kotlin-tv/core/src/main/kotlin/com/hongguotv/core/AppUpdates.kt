@@ -16,9 +16,9 @@ data class AppUpdate(val versionCode: Long, val versionName: String, val minSdk:
     fun newerThan(installed: Long, sdk: Int) = versionCode > installed && minSdk <= sdk
     val downloadUrl get() = "$RELEASES/download/$tag/$fileName"
     companion object {
-        const val REPOSITORY = "tsukiyo-zero/hongguoTV"
-        const val RELEASES = "https://gitcode.com/$REPOSITORY/releases"
-        const val LATEST_API = "https://api.gitcode.com/api/v5/repos/$REPOSITORY/releases/latest?type=latest"
+        const val REPOSITORY = "PangTouY00/hongguoTV"
+        const val RELEASES = "https://github.com/$REPOSITORY/releases"
+        const val LATEST_API = "https://api.github.com/repos/$REPOSITORY/releases/latest"
         fun latestTag(json: String): String {
             val release = JSONObject(json)
             require(!release.optBoolean("prerelease", false)) { "不能使用预发布版本" }
@@ -80,8 +80,8 @@ class AppUpdateRepository : java.io.Closeable {
     private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS)
         .callTimeout(5, TimeUnit.MINUTES).addNetworkInterceptor { chain ->
             val url = chain.request().url
-            // Follow GitCode's CDN redirects, never cleartext or arbitrary manifest-provided hosts.
-            if (url.scheme != "https" || url.host !in setOf("api.gitcode.com", "gitcode.com", "file-cdn.gitcode.com"))
+            // Follow GitHub's asset CDN redirects, never cleartext or arbitrary manifest-provided hosts.
+            if (url.scheme != "https" || url.host !in setOf("api.github.com", "github.com", "objects.githubusercontent.com"))
                 throw IOException("更新下载地址不受支持")
             chain.proceed(chain.request())
         }.build()

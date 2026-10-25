@@ -14,6 +14,8 @@ import urllib.parse
 import urllib.request
 
 REPO = 'tsukiyo-zero/hongguoTV'
+# 正式发行版发布到用户自己的 GitHub 仓库，App 内的更新提醒也只读这里（见 AppUpdates.REPOSITORY）。
+GITHUB_REPO = 'PangTouY00/hongguoTV'
 CONFIG = Path.home() / '.config/hongguotv/publish.json'
 
 
@@ -91,8 +93,9 @@ def bundle(directory):
 class Publisher:
     def __init__(self, platform, token, tag, notes):
         self.platform, self.token, self.tag, self.notes = platform, token, tag, notes
+        self.repo = GITHUB_REPO if platform == 'github' else REPO
         self.base = ('https://api.github.com/repos/' if platform == 'github' else
-                     'https://api.gitcode.com/api/v5/repos/') + REPO
+                     'https://api.gitcode.com/api/v5/repos/') + self.repo
         self.title = '红果 TV v' + tag.removeprefix('kotlin-v')
 
     def api(self, path, method='GET', value=None, missing=False):

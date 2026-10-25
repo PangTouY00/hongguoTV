@@ -8,7 +8,7 @@
 
 首次安装请下载 **v0.1.1 或更高版本**，之后可在 App 内更新。更新源已切换至 GitCode，后续安装包仅在 GitCode 发布（如果我不偷懒的话就都发），GitHub 继续维护源码。低于 v0.1.1 的版本需手动覆盖安装一次。
 
-[GitHub TV 0.1.6 下载](https://github.com/tsukiyo-zero/hongguoTV/releases/tag/kotlin-v0.1.6) · [GitCode 最新版与发布记录](https://gitcode.com/tsukiyo-zero/hongguoTV/releases)
+[GitHub 最新版与发布记录（应用内更新读取此仓库）](https://github.com/PangTouY00/hongguoTV/releases) · [GitCode 镜像发布记录](https://gitcode.com/tsukiyo-zero/hongguoTV/releases)
 
 [构建说明](kotlin-tv/README.md) · [在线更新与发布](kotlin-tv/AUTO_UPDATES.md) · [开发流程](CONTRIBUTING.md)
 
