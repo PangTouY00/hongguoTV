@@ -181,6 +181,11 @@ class MainActivity: Activity() {
     private var panel=false
     private var transportPlay: TextView?=null
     private var sleepButton: TextView?=null
+    // 防误触锁：开启后触屏手势与遥控器确认键都不再改变播放状态，只保留面板开关。
+    private var touchLock=false
+    private var boostSpeed=false
+    private var lastRemoteOkAt=0L
+    private var pauseGlyph: PauseGlyph?=null
     private var speedDialog: AlertDialog?=null
     private var pendingSeek: Long?=null
     private var playError=false
@@ -1174,6 +1179,7 @@ class MainActivity: Activity() {
         if(autoplay) sleepStopped=false
         screen="player"; episodeIndex=selectedIndex; group=episodeIndex/20
         panel=false; playError=false; playbackReady=false; episodeDuration=0; quality=""; attemptedQuality=0
+        touchLock=false; boostSpeed=false; lastRemoteOkAt=0L
         currentTrack=null; currentRendition=null; currentTiers=emptyList()
         if(!autoDowngrade) autoDowngrades=0; pausedForLifecycle=!autoplay
         player?.playWhenReady=requestedAutoplay
@@ -1195,19 +1201,23 @@ class MainActivity: Activity() {
                 setOnSeekBarChangeListener(object: SeekBar.OnSeekBarChangeListener {
                     override fun onProgressChanged(bar: SeekBar,value: Int,fromUser: Boolean) {
                         val duration=player?.duration ?: 0L
-                        if(fromUser && playbackReady && duration>0) playbackText.text="跳转到 ${formatTime(value.toLong()*duration/1000)} · 松手生效"
+                        if(fromUser && !touchLock && playbackReady && duration>0) playbackText.text="跳转到 ${formatTime(value.toLong()*duration/1000)} · 松手生效"
                     }
                     override fun onStartTrackingTouch(bar: SeekBar) { main.removeCallbacks(hideHud); hud.visibility=View.VISIBLE }
-                    override fun onStopTrackingTouch(bar: SeekBar) { val duration=player?.duration ?: 0L; if(playbackReady && duration>0) seekTo(bar.progress.toLong()*duration/1000) }
+                    override fun onStopTrackingTouch(bar: SeekBar) {
+                        if(touchLock) { updatePlaybackText(); return }
+                        val duration=player?.duration ?: 0L; if(playbackReady && duration>0) seekTo(bar.progress.toLong()*duration/1000)
+                    }
                 })
             } else ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal).apply { max=1000; progressTintList=android.content.res.ColorStateList.valueOf(accent); progressBackgroundTintList=android.content.res.ColorStateList.valueOf(surface) }); hud.addView(progressBar,lp(-1,if(touchInput) dp(22) else dp(4)))
-            hud.addView(text(if(touchInput) "轻点画面 显示/隐藏控制    轻点两侧 快退/快进    拖动进度条 跳转    返回 收起 / 退出" else "确认 暂停/播放    左右 快退/快进    ↓ 选集    ↑ 更多    返回 收起 / 退出",13f,muted).apply { setPadding(0,dp(12),0,0) })
+            if(!touchInput) hud.addView(text("确认两次 暂停/播放    左右 快退/快进    ↓ 选集    ↑ 更多    返回 收起 / 退出",13f,muted).apply { setPadding(0,dp(12),0,0) })
             controls=column().apply { setPadding(0,dp(12),0,0); visibility=View.GONE }; hud.addView(controls)
             if(touchInput) root.addView(PlaybackTouchLayer(this),FrameLayout.LayoutParams(-1,-1))
+            val glyph=PauseGlyph(this).apply { visibility=View.GONE }; pauseGlyph=glyph; root.addView(glyph,FrameLayout.LayoutParams(dp(96),dp(96),Gravity.CENTER))
             root.addView(ScrollView(this).apply { isVerticalScrollBarEnabled=false; addView(hud) },FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
         }
         playbackTitle.text="${data.series.title}  ·  第 ${episodeIndex+1} 集"
-        playbackText.text="正在获取播放地址…"; progressBar.progress=0; progressBar.visibility=View.VISIBLE; hidePlaybackOverlay()
+        playbackText.text="正在获取播放地址…"; progressBar.progress=0; progressBar.visibility=View.VISIBLE; hidePlaybackOverlay(); pauseGlyph?.visibility=View.GONE
         controls.removeAllViews(); controls.visibility=View.GONE; transportPlay=null; sleepButton=null
         syncMediaSession()
         val requestedId=data.episodes[episodeIndex]; val maxQuality=library.maxQuality; val ticket=generation
@@ -1254,7 +1264,7 @@ class MainActivity: Activity() {
                         android.util.Log.i("HongguoTV","Playback first frame episode=${episodeIndex+1} preloaded=${prefetched!=null} reused=$reuse elapsedMs=${android.os.SystemClock.elapsedRealtime()-playbackStarted}")
                     }
                 }
-                override fun onIsPlayingChanged(playing: Boolean) { if(active()) { if(hud.visibility==View.VISIBLE) showHud(); syncMediaSession() } }
+                override fun onIsPlayingChanged(playing: Boolean) { if(active()) { if(hud.visibility==View.VISIBLE) showHud(); updatePauseGlyph(); syncMediaSession() } }
                 override fun onPlaybackParametersChanged(parameters: PlaybackParameters) { if(active()) syncMediaSession() }
                 override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo,newPosition: Player.PositionInfo,reason: Int) {
                     if(player===p && generation==ticket &&
@@ -1434,30 +1444,99 @@ class MainActivity: Activity() {
         android.util.Log.w("HongguoTV","Playback failure: ${problem.javaClass.simpleName}"+(if(problem is PlaybackException) " code=${problem.errorCodeName}" else ""))
     }
     /** Touch entry point for phones: one tap opens the same control panel the remote opens with ↑ or
-     *  MENU, a second tap within 350ms steps ±10s like the DPAD does, and a tap while the panel is
-     *  open collapses it. The layer sits above the danmaku overlay and below the HUD, so panel buttons
-     *  keep their own click handling and the remote path is untouched. */
+     *  MENU, and a tap while the panel is open collapses it. A double tap in the middle third toggles
+     *  pause, double taps in the left/right thirds step ±10s like the DPAD does, and a long press in
+     *  any third plays at 3× until the finger lifts. The 防误触锁 disables pause/seek/boost/drag while
+     *  keeping the panel open/close path usable, so the lock can always be turned off from its own
+     *  button. The layer sits above the danmaku overlay and below the HUD, so panel buttons keep
+     *  their own click handling and the remote path is untouched. */
     private inner class PlaybackTouchLayer(context: Context): View(context) {
+        private val slop=android.view.ViewConfiguration.get(context).scaledTouchSlop
         private var lastTapAt=0L
+        private var downX=0f
+        private var downY=0f
+        private var moved=false
+        private var longPressActive=false
         private val singleTap=Runnable {
             if(isAttachedToWindow && screen=="player") {
                 if(playError) showHud() else if(panel) hidePlaybackOverlay() else showPanel()
+            }
+        }
+        private val longPress=Runnable {
+            if(isAttachedToWindow && !touchLock && !playError && screen=="player" && playbackReady) {
+                longPressActive=true
+                main.removeCallbacks(singleTap); lastTapAt=0L
+                startBoost()
             }
         }
         private fun scheduleSingleTap() { main.postDelayed(singleTap,350) }
         /** Accessibility services and lint both expect performClick; it routes to the same single-tap path. */
         override fun performClick(): Boolean { super.performClick(); scheduleSingleTap(); return true }
         override fun onTouchEvent(event: MotionEvent): Boolean = when(event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> true
+            MotionEvent.ACTION_DOWN -> {
+                downX=event.x; downY=event.y; moved=false; longPressActive=false
+                main.postDelayed(longPress,450)
+                true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if(event.pointerCount>1 || kotlin.math.abs(event.x-downX)>slop || kotlin.math.abs(event.y-downY)>slop) {
+                    moved=true; main.removeCallbacks(longPress)
+                }
+                true
+            }
             MotionEvent.ACTION_UP -> {
-                if(event.pointerCount==1 && width>0) {
+                main.removeCallbacks(longPress)
+                if(longPressActive) { longPressActive=false; stopBoost(); return true }
+                if(event.pointerCount==1 && width>0 && !moved) {
                     val now=android.os.SystemClock.elapsedRealtime()
-                    if(now-lastTapAt<350) { main.removeCallbacks(singleTap); lastTapAt=0L; seek(if(event.x<width/2f) -1 else 1,0) }
+                    if(now-lastTapAt<350) {
+                        main.removeCallbacks(singleTap); lastTapAt=0L
+                        if(!touchLock) {
+                            val x=event.x
+                            if(x<width/3f) seek(-1,0) else if(x>width*2f/3f) seek(1,0) else togglePlayback()
+                        }
+                    }
                     else { lastTapAt=now; performClick() }
                 }
                 true
             }
+            MotionEvent.ACTION_CANCEL -> {
+                main.removeCallbacks(longPress)
+                if(longPressActive) { longPressActive=false; stopBoost() }
+                true
+            }
             else -> false
+        }
+    }
+    /** Temporary 3× while the finger is held down; the stored default speed is restored on release. */
+    private fun startBoost() {
+        val p=player ?: return
+        if(!playbackReady || playError || boostSpeed || p.playbackState==Player.STATE_ENDED) return
+        boostSpeed=true
+        p.setPlaybackSpeed(3f)
+        showHud(); updatePlaybackText()
+    }
+    private fun stopBoost() {
+        if(!boostSpeed) return
+        boostSpeed=false
+        player?.setPlaybackSpeed(library.playbackSpeed)
+        updatePlaybackText()
+    }
+    /** Center glyph shown while the user has paused playback, on both touch and remote paths. */
+    private fun updatePauseGlyph() {
+        val p=player
+        val show=p!=null && screen=="player" && playbackReady && !playError && !sleepStopped &&
+            episodePanel==null && !p.playWhenReady && p.playbackState!=Player.STATE_ENDED
+        pauseGlyph?.visibility=if(show) View.VISIBLE else View.GONE
+    }
+    private class PauseGlyph(context: Context): View(context) {
+        private val paint=android.graphics.Paint().apply { isAntiAlias=true }
+        override fun onDraw(canvas: android.graphics.Canvas) {
+            val w=width.toFloat(); val h=height.toFloat()
+            val bar=w*0.2f; val gap=w*0.16f; val radius=bar/3f
+            paint.color=Color.argb(210,255,255,255)
+            canvas.drawRoundRect(w/2f-gap/2f-bar,h*0.28f,w/2f-gap/2f,h*0.72f,radius,radius,paint)
+            canvas.drawRoundRect(w/2f+gap/2f,h*0.28f,w/2f+gap/2f+bar,h*0.72f,radius,radius,paint)
         }
     }
     private fun hidePlaybackOverlay() {
@@ -1478,7 +1557,8 @@ class MainActivity: Activity() {
         val p=player ?: return
         val duration=p.duration.coerceAtLeast(0); val position=pendingSeek ?: p.currentPosition
         val state=when { p.playbackState==Player.STATE_BUFFERING -> "缓冲中"; p.playbackState==Player.STATE_ENDED -> "本集已结束"; !p.playWhenReady -> "已暂停"; else -> "正在播放" }
-        playbackText.text="$state  ·  ${formatTime(position)} / ${formatTime(duration)}  ·  $quality  ·  ${PlaybackSpeed.label(p.playbackParameters.speed)}"+(if(sleepTimer.active) "  ·  定时 ${sleepTimer.label()}" else "")
+        val speed=if(boostSpeed) "3x 长按倍速" else PlaybackSpeed.label(p.playbackParameters.speed)
+        playbackText.text="$state  ·  ${formatTime(position)} / ${formatTime(duration)}  ·  $quality  ·  $speed"+(if(touchLock) "  ·  已锁定" else "")+(if(sleepTimer.active) "  ·  定时 ${sleepTimer.label()}" else "")
         progressBar.progress=if(duration>0) (position*1000/duration).toInt().coerceIn(0,1000) else 0
     }
     private fun requestPlayback(play: Boolean) {
@@ -1489,7 +1569,7 @@ class MainActivity: Activity() {
         else if(episodePanel==null) { if(player?.playbackState==Player.STATE_ENDED) player?.seekTo(0); player?.play() }
         if(!play) window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        showHud(); updatePlaybackText(); syncMediaSession(); if(panel && episodePanel==null) showPanel()
+        showHud(); updatePlaybackText(); updatePauseGlyph(); syncMediaSession(); if(panel && episodePanel==null) showPanel()
     }
     private fun togglePlayback()=requestPlayback(!(if(playbackReady) player?.playWhenReady ?: requestedAutoplay else requestedAutoplay))
     private fun seekTo(position: Long) {
@@ -1553,19 +1633,16 @@ class MainActivity: Activity() {
     private fun showPanel() {
         if(playError) return
         panel=true; showHud(); controls.visibility=View.VISIBLE; controls.removeAllViews()
-        val transport=row(); controls.addView(transport)
+        // 全部控制排成一行：暂停、上一集、下一集、选集、防误触锁、播放设置、弹幕设置、评论。
+        val transport=row()
         val play=addButton(transport,if(player?.playWhenReady==true) "暂停" else "播放") { togglePlayback() }.also { transportPlay=it }
         addButton(transport,"上一集") { if(episodeIndex>0) playEpisode(episodeIndex-1) }.apply { isEnabled=episodeIndex>0; isFocusable=episodeIndex>0; alpha=if(episodeIndex>0) 1f else .4f }
         addButton(transport,"下一集") { if(episodeIndex<(detail?.episodes?.lastIndex ?: 0)) playEpisode(episodeIndex+1) }.apply { val enabled=episodeIndex<(detail?.episodes?.lastIndex ?: 0); isEnabled=enabled; isFocusable=enabled; alpha=if(enabled) 1f else .4f }
-        val options=row().apply { setPadding(0,dp(8),0,0) }; controls.addView(options)
         lateinit var episodes: TextView
-        episodes=addButton(options,"选集") { showEpisodePanel(episodes) }
-        lateinit var commentsButton: TextView
-        commentsButton=addButton(options,"评论") { social.showComments(commentsButton) }
-        lateinit var danmakuButton: TextView
-        danmakuButton=addButton(options,"弹幕设置") { social.settings(danmakuButton) }
+        episodes=addButton(transport,"选集") { showEpisodePanel(episodes) }
+        addButton(transport,if(touchLock) "🔒" else "🔓",touchLock) { touchLock=!touchLock; showPanel() }
         lateinit var more: TextView
-        more=addButton(options,"播放设置") {
+        more=addButton(transport,"播放设置") {
             tvTools.choose("播放设置",listOf("倍速 ${PlaybackSpeed.label(library.playbackSpeed)}","清晰度 ${library.maxQuality}P","画面 ${library.frameMode.label}","定时 ${sleepTimer.label()}","从头播放","重置设备能力记录"),more,{ choice ->
                 main.post {
                     if(screen=="player" && more.isAttachedToWindow) when(choice) {
@@ -1584,6 +1661,12 @@ class MainActivity: Activity() {
                 }
             })
         }.apply { tag="playback-settings" }
+        lateinit var danmakuButton: TextView
+        danmakuButton=addButton(transport,"弹幕设置") { social.settings(danmakuButton) }
+        lateinit var commentsButton: TextView
+        commentsButton=addButton(transport,"评论") { social.showComments(commentsButton) }
+        // 窄屏（竖屏手机）时这一行可以横向滑动；横屏手机和电视上一行完整显示。
+        controls.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(transport) })
         play.requestFocus()
     }
     private fun showSpeedPicker(anchor: TextView,inPlayer: Boolean=true) {
@@ -1639,7 +1722,7 @@ class MainActivity: Activity() {
                     if(overlayWasVisible) showHud() else hidePlaybackOverlay()
                 }
             },lastWatched=library.progress(data.series.id)?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } },lastCompleted=library.progress(data.series.id)?.completed==true)
-        episodePanel=next; next.show()
+        episodePanel=next; next.show(); updatePauseGlyph()
     }
     private fun hidePanel() { if(playError) return; panel=false; controls.visibility=View.GONE; controls.clearFocus(); showHud() }
     private fun formatTime(millis: Long): String { val seconds=(millis.coerceAtLeast(0)/1000); return "%02d:%02d".format(seconds/60,seconds%60) }
@@ -1658,6 +1741,7 @@ class MainActivity: Activity() {
         main.removeCallbacks(hideHud); main.removeCallbacks(seekRunnable); pendingSeek=null
         playerListener?.let { player?.removeListener(it) }; playerListener=null
         video?.close(); video=null; playerView?.player=null; playerView=null; player?.release(); player=null; playbackReady=false; transportPlay=null; sleepButton=null
+        pauseGlyph=null; boostSpeed=false
         closeTransport(playbackHttp); playbackHttp=null
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
@@ -1706,7 +1790,12 @@ class MainActivity: Activity() {
                     if(event.action==KeyEvent.ACTION_DOWN) when(key) {
                         KeyEvent.KEYCODE_DPAD_LEFT -> seek(-1,event.repeatCount)
                         KeyEvent.KEYCODE_DPAD_RIGHT -> seek(1,event.repeatCount)
-                        KeyEvent.KEYCODE_DPAD_CENTER,KeyEvent.KEYCODE_ENTER -> if(event.repeatCount==0) togglePlayback()
+                        // 遥控器暂停改为确认两次：第一下只唤出控制层，600ms 内第二下才暂停／继续。
+                        KeyEvent.KEYCODE_DPAD_CENTER,KeyEvent.KEYCODE_ENTER -> if(event.repeatCount==0) {
+                            val now=android.os.SystemClock.elapsedRealtime()
+                            if(now-lastRemoteOkAt<600) { lastRemoteOkAt=0L; if(!touchLock) togglePlayback() }
+                            else { lastRemoteOkAt=now; showHud() }
+                        }
                         KeyEvent.KEYCODE_DPAD_DOWN -> if(event.repeatCount==0) showEpisodePanel(hud)
                         KeyEvent.KEYCODE_DPAD_UP,KeyEvent.KEYCODE_MENU -> if(event.repeatCount==0) showPanel()
                         else -> showHud()
