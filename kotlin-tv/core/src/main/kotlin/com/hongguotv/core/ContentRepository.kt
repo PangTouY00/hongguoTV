@@ -52,6 +52,8 @@ class ContentHttpException(val statusCode: Int): IOException("内容请求失败
 /** HTTP 200 with no body: the website renderer failed transiently; safe to retry. */
 internal class EmptyContentException: IOException("内容响应为空")
 class SearchSessionExpiredException: IOException("搜索结果已过期，请从第 1 页重新搜索")
+/** A board page never recovered; [partial] holds the rows that did load, labelled by pagesRead. */
+class IncompleteRankSnapshotException(message: String,val partial: RankSnapshot): IOException(message)
 
 class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).callTimeout(45,TimeUnit.SECONDS).build(), private val clock: () -> Long = System::currentTimeMillis) {
     private val signer = Signer()
@@ -127,16 +129,19 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         val rows=first.items.toMutableList()
         val positions=meta.positions.toMutableMap()
         var read=1
+        val failed=mutableListOf<Int>()
         for(page in 2..meta.totalPages) {
             if(Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("请求已取消")
             // One flaky page must not discard every other page of the same board.
-            val next=try { rankPage(board,page) } catch(_: IOException) { continue }
-            if(next.ranking?.totalPages!=meta.totalPages) continue
+            val next=try { rankPage(board,page) } catch(_: IOException) { failed+=page; continue }
+            if(next.ranking?.totalPages!=meta.totalPages) { failed+=page; continue }
             rows+=next.items; positions.putAll(next.ranking.positions); read++
         }
-        // A page that never recovers leaves the board incomplete, never empty: the UI labels
-        // how many pages were actually read instead of discarding usable rows.
-        return RankSnapshot(board,rows.distinctBy { it.id },meta.copy(positions=positions),read,meta.totalPages)
+        val snapshot=RankSnapshot(board,rows.distinctBy { it.id },meta.copy(positions=positions),read,meta.totalPages)
+        // A partly read board is still reported as a failure, but it carries the rows that did
+        // arrive so the UI can show them clearly labelled as partial instead of an empty board.
+        if(failed.isNotEmpty()) throw IncompleteRankSnapshotException("第 ${failed.joinToString("、")} 页读取失败",snapshot)
+        return snapshot
     }
     fun home(page: Int = 1, type: ContentType = ContentType.SHORT): CatalogPage {
         require(page in 1..100)

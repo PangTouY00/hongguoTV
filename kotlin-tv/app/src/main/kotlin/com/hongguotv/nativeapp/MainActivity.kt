@@ -474,7 +474,11 @@ class MainActivity: Activity() {
         if(tab==2) {
             val ranks=RankingScreen(this,rankBrowser,nav,tvTools,::loadCover,
                 { item -> openDetail(item,false) },{ item,anchor -> quickActions(item,anchor) },
-                { board,done -> work({ repository.rankSnapshot(board) },{ done(it,null) },{ done(null,it.message ?: "网络暂不可用") }) })
+                { board,done -> work({ repository.rankSnapshot(board) },{ done(it,null) },{ problem ->
+                    // A page that never recovered still carries the rows that did load; hand them
+                    // over so the screen shows a clearly labelled partial board, never an empty one.
+                    done((problem as? IncompleteRankSnapshotException)?.partial,problem.message ?: "网络暂不可用")
+                }) })
             container.addView(ranks,lp(-1,0).apply { weight=1f })
             ranks.start(load && rankBrowser.snapshots[rankBrowser.board]==null,focusNav)
             return

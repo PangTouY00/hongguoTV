@@ -107,6 +107,8 @@ internal class RankingScreen(
                 state.snapshots[board]=snapshot
                 if(state.topic !in snapshot.topics) state.topic=""
                 render()
+                // Keep the failure reason visible whenever only part of the board arrived.
+                if(snapshot.partial && !error.isNullOrBlank()) subtitle.text="${error}  ·  ${subtitle.text}"
             } else {
                 render()
                 if(state.snapshots[board]==null) {
