@@ -104,6 +104,15 @@ python3 scripts/release-tv.py --publish --resume 0.1.7
 
 新版本标签在 GitHub 和 GitCode 指向同一份源码，GitCode main 仅允许快进推送。上传、附件摘要校验和设为 Latest 复用 `publish-tv-release.py`；发布后匿名读取两平台清单并与本地比较。只操作 TV 版本标签，不触碰 Mac `mac-stable`。不会强制推送、重写旧标签、删除或覆盖旧草稿和附件。
 
+### 当前实际执行方式（GitHub Actions）
+
+开发用的这台设备没有 JDK 与 Android SDK，正式包不在本机跑 Gradle。当前按下面的顺序发布：
+
+1. 功能与修复先走 PR 合入 `main`，用户在 CI 自动产生的调试包上实机验收。
+2. 在合并完成的 `main` 上把 `versionName`／`versionCode` 递增到新版本，提交版本与更新说明，再在该提交上打 `kotlin-v<版本>` 标签并推送。
+3. `.github/workflows/release-tv.yml` 自动跑完 `:core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`，用与调试包同一把的 Actions 缓存签名密钥构建 `:app:assembleRelease`，核对包名、版本与 minSdk，再用 `prepare-kotlin-release.py` 生成 `update.json` 与中文更新说明，最后发布为正式 Release（Latest，进入 App 内的自动更新通道）。
+4. 需要镜像同步时，用 `scripts/publish-tv-release.py` 把同一标签与包上传到 GitCode；`scripts/release-tv.py` 保留用于版本规划与两平台同步的预演，不再作为本机构建入口。
+
 任务记录和构建日志保存在 `outputs/release-jobs/<版本>/`，发布文件仍在 `outputs/releases/<标签>/`，均不提交。`--resume` 使用记录中的相同版本、源码及文件摘要；已完成且未改变的构建包复用，不重复构建。改变缓存文件、签名不一致或合并树发生变化均停止。版本文件写入阶段若出现不属于脚本预期内容的修改，会保留并停止，需要先检查。网络上传可沿用下层脚本的同内容跳过机制；双平台发布仍不是原子操作。
 
 ### 一次配置的本机环境

@@ -1,8 +1,8 @@
 name: Verify Kotlin standalone APK
+# 分支推送只出可安装的调试包；正式包与正式 Release 由 release-tv.yml 在 kotlin-v* 标签上构建。
 on:
   push:
     branches: [main, 'android6-support', 'feature-*', 'fix-*']
-    tags: ['kotlin-v*']
   pull_request:
     branches: [main]
     paths: ['kotlin-tv/**', 'scripts/build-kotlin.sh', '.github/workflows/kotlin-native.yml']
