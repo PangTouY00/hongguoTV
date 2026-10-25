@@ -17,6 +17,7 @@ internal class DiscoveryScreen(
     private val fetch: (DiscoverySelection,DiscoveryCursor?,(FilteredDiscoveryPage?,Throwable?)->Unit)->Unit
 ): LinearLayout(context) {
     private val types=LinearLayout(context)
+    private val bar=LinearLayout(context).apply { gravity=android.view.Gravity.CENTER_VERTICAL }
     private val groups=LinearLayout(context).apply { orientation=VERTICAL }
     private val scroll=ScrollView(context).apply { isFillViewport=false;isVerticalScrollBarEnabled=false;addView(groups) }
     private val summary=TextView(context).apply { textSize=12f;setTextColor(TvStyle.muted);maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END }
@@ -33,11 +34,21 @@ internal class DiscoveryScreen(
     private var restoring=true
     private var serial=0
     var navigationChanged: (()->Unit)?=null
+    /** Reports that the search row and the filter row have scrolled out of the page while browsing. */
+    var onHeaderHidden: ((Boolean)->Unit)?=null
+    val catalogGrid: android.widget.GridView get()=browser.grid
     private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
+    /** Keeps the hidden-header flag and the scrolled header in step, so the page above can hide its own row too. */
+    private fun headerTo(value: Int) {
+        if(headerOffset==value) return
+        headerOffset=value
+        val barHeight=bar.height
+        onHeaderHidden?.invoke(barHeight>0 && value>=barHeight)
+        requestLayout()
+    }
     init {
         val restoredOffset=state.headerOffset
         orientation=VERTICAL
-        val bar=LinearLayout(context).apply { gravity=android.view.Gravity.CENTER_VERTICAL }
         bar.addView(types,LayoutParams(0,-2,1f));bar.addView(toggle);bar.addView(reset);bar.addView(refresh)
         addView(bar);addView(scroll,LayoutParams(-1,dp(200)));addView(summary)
         browser=ContinuousCatalogView(context,6,toggle,{ item,recycled ->
@@ -45,17 +56,23 @@ internal class DiscoveryScreen(
         },{ item -> state.position=item.id to 0 },open,more,{ if(!loading) request(state.next) })
         browser.onBrowsePosition={ position ->
             if(!restoring) {
-                val header=getChildAt(0).height+scroll.height+summary.height
+                val header=bar.height+scroll.height+summary.height
                 if(browseStep==0) browseStep=(browser.grid.getChildAt(0)?.height ?: dp(180))+dp(10)
-                val offset=if(state.expanded) minOf(header,(position/6)*browseStep) else 0
-                if(headerOffset!=offset) { headerOffset=offset;requestLayout() }
+                // Browsing a row down hides the filter row as well, whichever way the filters are folded.
+                headerTo(minOf(header,(position/maxOf(1,browser.columnCount()))*browseStep))
             }
         }
         browser.useRemoteNavigation()
         addView(browser,LayoutParams(-1,0,1f))
         renderFilters();showItems();expand(state.expanded)
         headerOffset=restoredOffset
-        post { if(!closed) { scroll.scrollTo(0,state.filterVerticalOffset);restoring=false;requestLayout() } }
+        post {
+            if(closed) return@post
+            scroll.scrollTo(0,state.filterVerticalOffset);restoring=false
+            // A restored page that was already browsing downward stays cleared of the header rows.
+            if(headerOffset>0 && bar.height>0) onHeaderHidden?.invoke(headerOffset>=bar.height)
+            requestLayout()
+        }
     }
     override fun onMeasure(widthMeasureSpec: Int,heightMeasureSpec: Int) {
         groups.measure(widthMeasureSpec,View.MeasureSpec.makeMeasureSpec(0,View.MeasureSpec.UNSPECIFIED))
@@ -70,7 +87,7 @@ internal class DiscoveryScreen(
         scrollTo(0,headerOffset)
     }
     override fun requestChildFocus(child: View,focused: View) {
-        if(child!==browser && headerOffset!=0) { headerOffset=0;scrollTo(0,0);requestLayout() }
+        if(child!==browser && headerOffset!=0) { headerTo(0);scrollTo(0,0) }
         super.requestChildFocus(child,focused)
     }
     private fun button(label: String,chosen: ()->Boolean={false},action: ()->Unit)=TextView(context).apply {
@@ -183,9 +200,11 @@ internal class DiscoveryScreen(
     }
     fun entry(): View=controls["genre" to state.selection.values["genre"].orEmpty()] ?: toggle
     fun backToTop() {
-        headerOffset=0;state.headerOffset=0;state.filterVerticalOffset=0;scroll.scrollTo(0,0);scrollTo(0,0)
+        headerTo(0);state.headerOffset=0;state.filterVerticalOffset=0;scroll.scrollTo(0,0);scrollTo(0,0)
         browser.resetToTop();state.position=state.items.firstOrNull()?.let { it.id to 0 };requestLayout()
     }
+    /** Points the grid's up-key at the row that is actually on screen while the header is hidden. */
+    fun setUpper(view: View) { browser.setUpper(view) }
     fun start(focus: Boolean) {
         if(focus) { if(state.position!=null && state.items.isNotEmpty()) browser.enter() else entry().requestFocus() }
         if(!state.loaded) request(null)

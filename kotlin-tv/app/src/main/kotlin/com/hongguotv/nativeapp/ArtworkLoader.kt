@@ -37,7 +37,7 @@ class ArtworkLoader(context: Context) {
 
     private data class Key(val url: String, val width: Int, val height: Int)
     private class Binding(view: ImageView, val owner: Long, val url: String, var priority: Int,
-                          val width: Int, val height: Int) {
+                          val width: Int, val height: Int, val onApplied: ((ImageView)->Unit)?) {
         val view = WeakReference(view)
         var key: Key? = null
         var applied: Key? = null
@@ -75,10 +75,12 @@ class ArtworkLoader(context: Context) {
     init { repeat(if (lowRam) 1 else 2) { workers.execute(::work) } }
 
     /** Size defaults to the laid-out content bounds, including the detail page's portrait artwork. */
-    fun load(view: ImageView, url: String, priority: Int = PRIORITY_VISIBLE, widthPx: Int = 0, heightPx: Int = 0) {
+    fun load(view: ImageView, url: String, priority: Int = PRIORITY_VISIBLE, widthPx: Int = 0, heightPx: Int = 0,
+             onApplied: ((ImageView)->Unit)? = null) {
         if (closed) return
         val previous = bindings[view]
-        if (previous != null && previous.owner == owner && previous.url == url && previous.width == widthPx && previous.height == heightPx) {
+        if (previous != null && previous.owner == owner && previous.url == url && previous.width == widthPx &&
+            previous.height == heightPx && previous.onApplied === onApplied) {
             previous.priority = priority.coerceIn(PRIORITY_FOCUSED, PRIORITY_PREFETCH)
             previous.failed = null
             request(previous)
@@ -87,7 +89,7 @@ class ArtworkLoader(context: Context) {
         if (previous != null) unbind(previous)
         view.setImageDrawable(null)
         if (url.isBlank()) return
-        val binding = Binding(view, owner, url, priority.coerceIn(PRIORITY_FOCUSED, PRIORITY_PREFETCH), widthPx, heightPx)
+        val binding = Binding(view, owner, url, priority.coerceIn(PRIORITY_FOCUSED, PRIORITY_PREFETCH), widthPx, heightPx, onApplied)
         binding.layout = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> request(binding) }
         binding.attach = object : View.OnAttachStateChangeListener {
             override fun onViewAttachedToWindow(v: View) { request(binding) }
@@ -110,7 +112,7 @@ class ArtworkLoader(context: Context) {
         val key = Key(binding.url, max(1, (width * scale).toInt()), max(1, (height * scale).toInt()))
         if (binding.key != key) { detachJob(binding); binding.key = key; binding.failed = null }
         if (binding.applied == key || binding.failed == key) return
-        cache.get(key)?.let { bitmap -> view.setImageBitmap(bitmap); binding.applied = key; return }
+        cache.get(key)?.let { bitmap -> apply(binding, view, bitmap); return }
         var cancelled: Job? = null
         synchronized(signal) {
             jobs[key]?.let { job ->
@@ -135,6 +137,14 @@ class ArtworkLoader(context: Context) {
             signal.notifyAll()
         }
         cancelled?.call?.cancel()
+    }
+
+    /** Every delivered cover is recorded so poster frames can be sized to the ratio the site really serves. */
+    private fun apply(binding: Binding, view: ImageView, bitmap: Bitmap) {
+        CoverRatio.observe(bitmap)
+        view.setImageBitmap(bitmap)
+        binding.applied = binding.key
+        binding.onApplied?.invoke(view)
     }
 
     private fun cancelLocked(job: Job) {
@@ -222,7 +232,7 @@ class ArtworkLoader(context: Context) {
                     listeners.forEach { binding ->
                         val view = binding.view.get()
                         if (view != null && bindings[view] === binding && binding.key == job.key) {
-                            if (bitmap != null) { view.setImageBitmap(bitmap); binding.applied = job.key }
+                            if (bitmap != null) apply(binding, view, bitmap)
                             else binding.failed = job.key
                         }
                     }

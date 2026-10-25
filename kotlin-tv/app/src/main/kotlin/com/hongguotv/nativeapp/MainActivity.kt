@@ -306,6 +306,21 @@ class MainActivity: Activity() {
         }
         artwork.load(view,url,if(focused) ArtworkLoader.PRIORITY_FOCUSED else ArtworkLoader.PRIORITY_VISIBLE)
     }
+    /** Same read, but the caller is told when the artwork lands so a fixed-height frame can follow the real cover ratio. */
+    private fun loadCover(view: ImageView,url: String,onApplied: (ImageView)->Unit) {
+        var ancestor: View?=view
+        var focused=false
+        while(ancestor!=null && ancestor!==root) {
+            if(ancestor.isFocused) { focused=true; break }
+            ancestor=ancestor.parent as? View
+        }
+        artwork.load(view,url,if(focused) ArtworkLoader.PRIORITY_FOCUSED else ArtworkLoader.PRIORITY_VISIBLE,0,0,onApplied)
+    }
+    /** Sizes one poster frame to the cover ratio the site actually serves, so the artwork fills the card. */
+    private fun fitCoverFrame(frame: View,cardWidth: Int) {
+        val height=((cardWidth-dp(8))/CoverRatio.current).toInt()
+        if(frame.layoutParams.height!=height) frame.layoutParams=frame.layoutParams.apply { this.height=height }
+    }
     private fun cancelWork() {
         deferredWork?.discard?.invoke(); deferredWork=null
         workScope?.cancel(); workScope=null
@@ -528,6 +543,12 @@ class MainActivity: Activity() {
                     { openDetail(it,false) },::quickActions,
                     { selection,cursor,done -> work({ repository.filteredDiscovery(selection,cursor) },{ done(it,null) },{ done(null,it) }) })
                 discoveryScreen=browser;browser.navigationChanged={ searchSuggestions?.updateNavigation() }
+                // Browsing the poster grid downward clears the page of the search and filter rows, on the remote and by dragging.
+                browser.onHeaderHidden={ hidden ->
+                    searchRow.visibility=if(hidden) View.GONE else View.VISIBLE
+                    nav.getOrNull(tab)?.let { it.nextFocusDownId=if(hidden) browser.catalogGrid.id else input.id }
+                    browser.setUpper(if(hidden) nav[tab] else input)
+                }
                 container.addView(browser,lp(-1,0).apply { weight=1f })
                 browser.start(!focusNav);searchSuggestions?.updateNavigation()
                 if(focusNav) nav[tab].requestFocus()
@@ -685,14 +706,14 @@ class MainActivity: Activity() {
             if(focusType) typeButtons[library.contentType]?.requestFocus() else if(collectionBack!=null && !focusNav) collectionBack?.requestFocus() else if(sourceButtons.isNotEmpty() && !focusNav) sourceButtons[if(isAccountHistory() || isAccountFavorites()) 1 else 0].requestFocus() else if(focusNav || resumeCards.isEmpty()) nav[tab].requestFocus() else resumeCards.first().requestFocus()
             return
         }
-        val cards=mutableListOf<View>(); val count=6; val gap=dp(14); val width=((resources.displayMetrics.widthPixels*.9f-gap*(count-1))/count).toInt()
+        val cards=mutableListOf<View>(); val count=6; val gap=dp(14); val width=((resources.displayMetrics.widthPixels*.9f-gap*(count-1))/count).toInt(); val coverAspect= CoverRatio.current
         displayed.chunked(count).forEach { items ->
             val line=row(); line.gravity=Gravity.TOP
             items.forEachIndexed { columnIndex,item ->
                 val card=column(); card.setPadding(dp(4),dp(4),dp(4),dp(9)); focusStyle(card); card.contentDescription=item.title; card.tag=item.id; catalogCards[item.id]=card
                 val position=if(tab==2) ranking?.positions?.get(item.id) else null
-                val artwork=FrameLayout(this); card.addView(artwork,lp(-1,((width-dp(8))/TvStyle.POSTER_ASPECT).toInt()))
-                val image=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }; artwork.addView(image,FrameLayout.LayoutParams(-1,-1)); loadCover(image,item.cover); cardImages[item.id]=image to item.cover
+                val artwork=FrameLayout(this); card.addView(artwork,lp(-1,((width-dp(8))/coverAspect).toInt()))
+                val image=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }; artwork.addView(image,FrameLayout.LayoutParams(-1,-1)); loadCover(image,item.cover){ fitCoverFrame(artwork,width) }; cardImages[item.id]=image to item.cover
                 if(tab==2) {
                     val rankLabel=position?.rank?.let { "第 $it 名" } ?: "名次暂无"
                     artwork.addView(text(rankLabel,15f).apply { setTypeface(null,Typeface.BOLD); setPadding(dp(8),dp(5),dp(8),dp(5)); background=rounded(if((position?.rank ?: Int.MAX_VALUE)<=3) accent else Color.rgb(28,31,39)) },FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START))
@@ -769,7 +790,7 @@ class MainActivity: Activity() {
                 val card=view as LinearLayout
                 val image=card.getChildAt(0)
                 val textHeight=card.paddingTop+card.paddingBottom+(1 until card.childCount).sumOf { card.getChildAt(it).measuredHeight }
-                val target=minOf(((width-dp(8))/TvStyle.POSTER_ASPECT).toInt(),(scroll.height-textHeight-dp(4)).coerceAtLeast(dp(48)))
+                val target=minOf(((width-dp(8))/CoverRatio.current).toInt(),(scroll.height-textHeight-dp(4)).coerceAtLeast(dp(48)))
                 if(image.layoutParams.height!=target) image.layoutParams=image.layoutParams.apply { height=target }
             }
             scroll.post settle@{
