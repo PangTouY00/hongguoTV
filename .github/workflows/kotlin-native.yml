@@ -34,6 +34,11 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('kotlin-tv/gradle/wrapper/gradle-wrapper.properties', 'kotlin-tv/gradle.properties', 'kotlin-tv/**/*.gradle.kts', 'kotlin-tv/**/libs.versions.toml') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
+      - name: Keep the debug signing key across builds
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ~/.android
+          key: hongguotv-debug-keystore-v1
       - name: Installable development APK
         run: ./kotlin-tv/gradlew -p kotlin-tv :app:assembleDebug --console=plain
       - name: Name the development APK after this build
