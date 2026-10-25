@@ -164,26 +164,44 @@ class TvSocial(private val activity: Activity,private val player: ()->Player?,pr
     private inner class BulletView: View(activity) {
         var running=false
         private val paint=Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface=Typeface.DEFAULT_BOLD }
-        private var rows=emptyList<Triple<String,Long,Int>>()
+        private var queued=emptyList<Triple<String,Long,Int>>()
+        private var rows=emptyList<Triple<List<EmojiSegment>,Long,Int>>()
+        private var drawnSize=0
         fun setRows(values: List<JSONObject>) {
             val lanes=prefs.getInt("lanes",2);val travel=prefs.getInt("travel",12000);val free=LongArray(lanes)
             val seen=mutableSetOf<String>()
-            rows=values.sortedBy { it.getLong("timeMS") }.mapNotNull {
+            queued=values.sortedBy { it.getLong("timeMS") }.mapNotNull {
                 val at=it.getLong("timeMS");val lane=free.indexOfFirst { t->t<=at }
                 if(lane<0 || !seen.add(it.getString("id"))) null else { free[lane]=at+travel;Triple(it.getString("text"),at,lane) }
-            };invalidate()
+            }
+            drawnSize=0;invalidate()
         }
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             val p=player() ?: return
             if(!active || !prefs.getBoolean("enabled",true)) return
             val now=p.currentPosition;val travel=prefs.getInt("travel",12000)
-            paint.textSize=dp(prefs.getInt("font",24)).toFloat()
-            for((text,at,lane) in rows) if(now>=at && now<at+travel) {
-                val x=width-(width+paint.measureText(text))*(now-at).toFloat()/travel
+            val size=dp(prefs.getInt("font",24))
+            // Stickers are baked at the drawn font size, so re-split only when the user changes it.
+            if(size!=drawnSize) { drawnSize=size;rows=queued.map { Triple(emoji.segments(it.first,size),it.second,it.third) } }
+            paint.textSize=size.toFloat()
+            for((segments,at,lane) in rows) if(now>=at && now<at+travel) {
+                var total=0f
+                for(segment in segments) total+=if(segment.bitmap!=null) size.toFloat() else paint.measureText(segment.text)
+                var x=width-(width+total)*(now-at).toFloat()/travel
                 val y=dp(65)+lane*(paint.textSize+dp(12))
-                paint.style=Paint.Style.STROKE;paint.strokeWidth=dp(2).toFloat();paint.color=Color.BLACK;canvas.drawText(text,x,y,paint)
-                paint.style=Paint.Style.FILL;paint.color=Color.WHITE;canvas.drawText(text,x,y,paint)
+                for(segment in segments) {
+                    val sticker=segment.bitmap
+                    if(sticker==null) {
+                        paint.style=Paint.Style.STROKE;paint.strokeWidth=dp(2).toFloat();paint.color=Color.BLACK;canvas.drawText(segment.text,x,y,paint)
+                        paint.style=Paint.Style.FILL;paint.color=Color.WHITE;canvas.drawText(segment.text,x,y,paint)
+                        x+=paint.measureText(segment.text)
+                    } else {
+                        // Bottom-aligned with the text baseline so a mixed line reads as one sentence.
+                        canvas.drawBitmap(sticker,null,RectF(x,y-size.toFloat(),x+size.toFloat(),y.toFloat()),null)
+                        x+=size.toFloat()
+                    }
+                }
             }
             if(running && isAttachedToWindow) postInvalidateOnAnimation()
         }
