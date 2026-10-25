@@ -1486,8 +1486,9 @@ class MainActivity: Activity() {
             }
             MotionEvent.ACTION_UP -> {
                 main.removeCallbacks(longPress)
-                if(longPressActive) { longPressActive=false; stopBoost(); return true }
-                if(event.pointerCount==1 && width>0 && !moved) {
+                // 表达式体里不能 return：长按结束与单击判定改成互斥分支，行为与提前返回一致。
+                if(longPressActive) { longPressActive=false; stopBoost() }
+                else if(event.pointerCount==1 && width>0 && !moved) {
                     val now=android.os.SystemClock.elapsedRealtime()
                     if(now-lastTapAt<350) {
                         main.removeCallbacks(singleTap); lastTapAt=0L
