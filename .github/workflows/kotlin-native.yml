@@ -34,11 +34,25 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('kotlin-tv/gradle/wrapper/gradle-wrapper.properties', 'kotlin-tv/gradle.properties', 'kotlin-tv/**/*.gradle.kts', 'kotlin-tv/**/libs.versions.toml') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
-      - name: Keep the debug signing key across builds
+      - name: Cache the shared signing key
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.android
-          key: hongguotv-debug-keystore-v1
+          key: hongguotv-signing-key-v2
+      - name: Prepare the one signing key every build uses
+        run: |
+          set -euo pipefail
+          # 密钥必须写在被缓存的目录里，并让构建工具确实去这个目录取，否则每次构建都换一把签名。
+          export ANDROID_USER_HOME="$HOME/.android"
+          echo "ANDROID_USER_HOME=$ANDROID_USER_HOME" >> "$GITHUB_ENV"
+          mkdir -p "$ANDROID_USER_HOME"
+          if [ ! -f "$ANDROID_USER_HOME/debug.keystore" ]; then
+            echo "No cached signing key was restored; generating one that later builds will reuse."
+            "$JAVA_HOME/bin/keytool" -genkeypair -storetype JKS -keystore "$ANDROID_USER_HOME/debug.keystore" \
+              -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10950 \
+              -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          ls -l "$ANDROID_USER_HOME/debug.keystore"
       - name: Installable development APK
         run: ./kotlin-tv/gradlew -p kotlin-tv :app:assembleDebug --console=plain
       - name: Name the development APK after this build
@@ -89,7 +103,7 @@ jobs:
           自动化检查：${checks}（\`:core:test\`、\`:app:testDebugUnitTest\`、\`:app:assembleDebug\`、\`:app:lintDebug\`）。
 
           ## 安装
-          下载下方 APK 直接安装即可覆盖已安装的调试版（签名一致）。这是预发布构建，未标记 Latest，不会进入 App 内的自动更新通道；正式版本仍只由 \`scripts/release-tv.py --publish\` 发布。
+          下载下方 APK 直接安装即可覆盖已安装的版本（与正式包共用同一把签名密钥）。这是预发布构建，未标记 Latest，不会进入 App 内的自动更新通道；正式版本由 release-tv.yml 在 \`kotlin-v*\` 标签上构建并发布。
           EOF
           )
           if gh release view "$tag" >/dev/null 2>&1; then

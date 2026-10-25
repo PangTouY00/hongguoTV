@@ -37,11 +37,25 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('kotlin-tv/gradle/wrapper/gradle-wrapper.properties', 'kotlin-tv/gradle.properties', 'kotlin-tv/**/*.gradle.kts', 'kotlin-tv/**/libs.versions.toml') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
-      - name: Reuse the signing key the installed app already has
+      - name: Cache the shared signing key
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.android
-          key: hongguotv-debug-keystore-v1
+          key: hongguotv-signing-key-v2
+      - name: Prepare the one signing key every build uses
+        run: |
+          set -euo pipefail
+          # 密钥必须写在被缓存的目录里，并让构建工具确实去这个目录取，否则每次构建都换一把签名。
+          export ANDROID_USER_HOME="$HOME/.android"
+          echo "ANDROID_USER_HOME=$ANDROID_USER_HOME" >> "$GITHUB_ENV"
+          mkdir -p "$ANDROID_USER_HOME"
+          if [ ! -f "$ANDROID_USER_HOME/debug.keystore" ]; then
+            echo "No cached signing key was restored; generating one that later builds will reuse."
+            "$JAVA_HOME/bin/keytool" -genkeypair -storetype JKS -keystore "$ANDROID_USER_HOME/debug.keystore" \
+              -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10950 \
+              -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          ls -l "$ANDROID_USER_HOME/debug.keystore"
       - name: Run the checks and build the debug APK
         id: build
         run: |
@@ -50,15 +64,6 @@ jobs:
           case "$tag" in kotlin-v[0-9]*) ;; *) echo "Unsupported release tag: $tag"; exit 1;; esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           ./kotlin-tv/gradlew -p kotlin-tv :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --console=plain 2>&1 | tee build-checks.log
-      - name: Confirm the shared signing key is available
-        run: |
-          set -euo pipefail
-          if [ ! -f "$HOME/.android/debug.keystore" ]; then
-            echo "The cached signing key is missing, so this build could not be installed over the app already on the device."
-            ls -la "$HOME/.android" 2>&1 || echo "(no ~/.android directory in this runner)"
-            exit 1
-          fi
-          ls -l "$HOME/.android/debug.keystore"
       - name: Build the release APK with that key
         run: |
           set -euo pipefail
