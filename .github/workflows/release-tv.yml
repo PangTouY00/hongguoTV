@@ -121,7 +121,7 @@ jobs:
           GitHub Actions 已运行 \`:core:test\`、\`:app:testDebugUnitTest\`、\`:app:lintDebug\`、\`:app:assembleDebug\`、\`:app:assembleRelease\`，全部通过后才发布本包。
 
           ## 签名与安装
-          本包沿用与调试包相同的签名密钥（SHA-256 指纹 \`${FINGERPRINT}\`），已安装的设备可直接覆盖安装并保留本机收藏、历史与播放位置。下载 \`hongguotv-kotlin-${VERSION}-android6.apk\` 安装即可；App 内的自动更新读取本仓库的最新正式版。
+          本包与后续 CI 构建共用这把签名密钥（SHA-256 指纹 \`${FINGERPRINT}\`），已装版本若来自更早的临时签名构建，首次安装需要先卸载旧应用（可先在 App 内用二维码备份本机记录），之后即可直接覆盖安装并保留数据。下载 \`hongguotv-kotlin-${VERSION}-android6.apk\` 安装即可；App 内的自动更新读取本仓库的最新正式版。
           EOF
           cat notes.md
       - name: Package the APK with the updater manifest
@@ -145,8 +145,8 @@ jobs:
           set -euo pipefail
           gh release create "$RELEASE_TAG" "$DIRECTORY"/*.apk "$DIRECTORY"/update.json "$DIRECTORY"/release-notes.md \
             --title "红果 TV $VERSION" --notes-file notes.md
-          gh release view "$RELEASE_TAG" --json tagName,name,prerelease,draft,assets \
-            --jq '{tag:.tagName,title:.name,prerelease:.prerelease,draft:.draft,assets:[.assets[].name]}'
+          gh release view "$RELEASE_TAG" --json tagName,name,isPrerelease,isDraft,assets \
+            --jq '{tag:.tagName,title:.name,prerelease:.isPrerelease,draft:.isDraft,assets:[.assets[].name]}'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
