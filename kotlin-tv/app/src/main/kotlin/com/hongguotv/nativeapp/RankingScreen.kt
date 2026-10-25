@@ -26,6 +26,16 @@ internal class RankingScreen(
     private var loadToken=0
     private var watchdog: Runnable?=null
     private var browser: ContinuousCatalogView?=null
+    private val headerRows=mutableListOf<View>()
+    private var folded=false
+    /** Browsing a row down folds the title, board switch and subtitle away so the board fills the screen. */
+    private fun fold(value: Boolean) {
+        if(value==folded) return
+        folded=value
+        headerRows.forEach { it.visibility=if(value) View.GONE else View.VISIBLE }
+        browser?.setUpper(if(value) nav[2] else controls[state.board.ordinal])
+        requestLayout()
+    }
     private fun dp(value: Int)=(value*resources.displayMetrics.density).toInt()
     private fun label(value: String,size: Float=16f,color: Int=TvStyle.text)=TextView(activity).apply {
         text=value; textSize=size; setTextColor(color); includeFontPadding=false
@@ -44,7 +54,7 @@ internal class RankingScreen(
         heading.typeface=Typeface.DEFAULT_BOLD
         title.addView(heading,params(0).apply { weight=1f })
         title.addView(label("方向键选剧  ·  确定看详情  ·  长按更多",12f,TvStyle.muted))
-        addView(title)
+        headerRows+=title;addView(title)
         val bar=row()
         RankBoard.entries.forEach { board ->
             val control=button(board.label) {
@@ -60,9 +70,9 @@ internal class RankingScreen(
         controls+=filterButton;controls+=refreshButton
         controls.forEachIndexed { i,v -> v.nextFocusLeftId=controls.getOrNull(i-1)?.id ?: v.id; v.nextFocusRightId=controls.getOrNull(i+1)?.id ?: v.id }
         nav.forEach { it.nextFocusDownId=controls[state.board.ordinal].id }
-        addView(bar)
+        headerRows+=bar;addView(bar)
         subtitle.setPadding(0,dp(9),0,dp(9)); subtitle.maxLines=2
-        addView(subtitle)
+        headerRows+=subtitle;addView(subtitle)
         addView(body,params(-1,0).apply { weight=1f })
         markControls(); render()
     }
@@ -127,6 +137,7 @@ internal class RankingScreen(
         tools.chooseGrid("${state.board.label}热播榜 · 选择题材",labels,values.indexOf(state.topic),filterButton) { i -> state.filter(values[i]); render() }
     }
     private fun render() {
+        fold(false)
         val enterRows=browser?.grid?.hasFocus()==true
         browser?.close();body.removeAllViews()
         val snapshot=state.snapshots[state.board]
@@ -151,6 +162,10 @@ internal class RankingScreen(
             card.show(item,snapshot?.ranking?.positions?.get(item.id));cover(card.image,item.cover);card
         },{ state.selectedId=it.id },{ state.selectedId=it.id;open(it) },{ item,anchor ->state.selectedId=item.id;more(item,anchor) },{})
         browser=list;body.addView(list,params(-1,0).apply { weight=1f })
+        list.onBrowsePosition={ _ ->
+            val columns=list.columnCount()
+            if(columns>0) fold(list.grid.firstVisiblePosition>=columns)
+        }
         list.show(all,false,saved.takeIf { it.isNotBlank() }?.let { ContinuousCatalogView.Position(it,0) })
         controls.forEach { it.nextFocusDownId=list.grid.id }
         if(enterRows) list.enter()

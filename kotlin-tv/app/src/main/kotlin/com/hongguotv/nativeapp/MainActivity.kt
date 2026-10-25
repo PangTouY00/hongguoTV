@@ -69,6 +69,8 @@ class MainActivity: Activity() {
     private var continuousKey=""
     private var catalogScroll: ScrollView?=null
     private var catalogBody: LinearLayout?=null
+    /** Rows above the catalog list that browsing downward folds away; empty on the home and settings pages. */
+    private var browseHeaderRows: List<View> = emptyList()
     private var homePosition: HomeScreen.Position?=null
     private var catalogPageKey=""
     private val scrollPositions=mutableMapOf<String,Int>()
@@ -456,7 +458,7 @@ class MainActivity: Activity() {
             val cached=if(tab==0 && page==1) library.cachedHome(library.contentType) else null
             catalog=cached?.items ?: emptyList(); hasMore=cached?.hasMore ?: false; ranking=null; homeFromCache=cached!=null
         }
-        invalidatePage(); screen="catalog"; releaseCatalogViews(); val container=base()
+        invalidatePage(); screen="catalog"; releaseCatalogViews(); browseHeaderRows=emptyList(); val container=base()
         if(tab!=0 && foreground && library.isLoaded && !favoriteMonitor.running) main.post { if(foreground && screen=="catalog") favoriteMonitor.check() }
         val top=row().apply { setPadding(0,0,0,dp(8)) }
         val brand=row()
@@ -557,7 +559,9 @@ class MainActivity: Activity() {
             container.addView(text("关键词搜索覆盖全部剧集 · 返回分类可组合筛选",12f,muted).apply { setPadding(0,dp(6),0,dp(5)) })
 
         } else if(tab>2) {
+            val headerRows=mutableListOf<View>()
             val heading=row().apply { setPadding(0,dp(12),0,dp(6)) }
+            headerRows+=heading
             heading.addView(text(when(tab) { 3->"我的收藏";4->"观看历史";else->"账户预约" },25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
             if(isLocalFavorites()) favoriteCheck=addButton(heading,"检查更新") { favoriteMonitor.check(force=true) }.apply { nextFocusUpId=nav[tab].id }
             if(isLocalHistory() && library.history().isNotEmpty()) {
@@ -577,6 +581,7 @@ class MainActivity: Activity() {
             container.addView(heading)
             if(tab==3 || tab==4) {
                 val sources=row().apply { setPadding(0,dp(4),0,dp(8)) }
+                headerRows+=sources
                 val account=if(tab==3) librarySources.accountFavorites else librarySources.accountHistory
                 listOf(false,true).forEach { remote ->
                     sourceButtons+=addButton(sources,if(tab==3) if(remote) "账户收藏" else "本机收藏" else if(remote) "账户历史" else "本机历史",account==remote) {
@@ -596,12 +601,15 @@ class MainActivity: Activity() {
                     isLocalHistory() -> "只保存在这台电视，管理和清空不影响账户历史"
                     else -> "只保存在这台电视，不自动上传或合并到账户收藏"
                 }
-                container.addView(text(note,13f,muted).apply { setPadding(0,0,0,dp(6)) })
+                val noteView=text(note,13f,muted).apply { setPadding(0,0,0,dp(6)) }
+                headerRows+=noteView;container.addView(noteView)
             }
             if(tab==5) {
                 val state=cloudAccount.reservationState(reservationOnline)
-                container.addView(text("${cloudAccount.accountLabel} · ${state.message}\n每类读取最近 20 部预约，以下数量为当前已加载数",13f,muted).apply { setPadding(0,0,0,dp(6)) })
+                val noteView=text("${cloudAccount.accountLabel} · ${state.message}\n每类读取最近 20 部预约，以下数量为当前已加载数",13f,muted).apply { setPadding(0,0,0,dp(6)) }
+                headerRows+=noteView;container.addView(noteView)
                 val filters=row()
+                headerRows+=filters
                 for(online in listOf(true,false)) {
                     val category=cloudAccount.reservationState(online)
                     val count=if(category.loaded) category.rows.size.toString() else "—"
@@ -614,8 +622,10 @@ class MainActivity: Activity() {
                 nav.forEach { it.nextFocusDownId=historyManage!!.id }
             }
             if(isLocalFavorites()) {
-                favoriteStatus=text(favoriteMonitor.status,13f,muted).apply { setPadding(0,0,0,dp(6)) };container.addView(favoriteStatus)
+                favoriteStatus=text(favoriteMonitor.status,13f,muted).apply { setPadding(0,0,0,dp(6)) }
+                headerRows+=favoriteStatus;container.addView(favoriteStatus)
             }
+            browseHeaderRows=headerRows
         }
         val body=column(); catalogBody=body; container.addView(body,lp(-1,0).apply { weight=1f })
         if(localCatalog()) {
@@ -673,6 +683,7 @@ class MainActivity: Activity() {
                 nextFocusDownId=id
             }
             heading.addView(text(when(collection) { "later" -> "稍后看"; "updates" -> "收藏有更新"; "hot" -> "热门发现"; else -> "接着看" },22f))
+            browseHeaderRows=browseHeaderRows+heading
             body.addView(heading)
             typeButtons.values.forEach { it.nextFocusDownId=collectionBack!!.id }
         }
@@ -780,6 +791,26 @@ class MainActivity: Activity() {
         searchInput?.nextFocusDownId=cards.first().id
         searchButton?.nextFocusDownId=cards[minOf(4,cards.lastIndex)].id
         searchActions.forEach { it.nextFocusDownId=cards[minOf(4,cards.lastIndex)].id }
+        // Browsing a row down folds away the title and action rows above the list; the home and settings pages keep theirs.
+        val foldRows=if(tab>2 || collection!=null) browseHeaderRows else emptyList()
+        if(foldRows.isNotEmpty() && cards.isNotEmpty()) {
+            val firstRow=cards.take(count)
+            val restoredUp=firstRow.map { it.nextFocusUpId }
+            val restoredDown=nav.map { it.nextFocusDownId }
+            var rowHeight=0
+            var folded=false
+            fun fold(value: Boolean) {
+                if(value==folded) return
+                folded=value
+                foldRows.forEach { it.visibility=if(value) View.GONE else View.VISIBLE }
+                firstRow.forEachIndexed { index,card -> card.nextFocusUpId=if(value) nav[tab].id else restoredUp[index] }
+                nav.forEachIndexed { index,item -> item.nextFocusDownId=if(value) cards.first().id else restoredDown[index] }
+            }
+            scroll.setOnScrollChangeListener { _,_,scrollY,_,_ ->
+                if(rowHeight==0) rowHeight=list.getChildAt(0)?.height ?: 0
+                if(rowHeight>0) fold(scrollY>=rowHeight)
+            }
+        }
         if(focusType) typeButtons[library.contentType]?.requestFocus() else if(focusNav) nav[tab].requestFocus()
         else if(resumeCards.isNotEmpty() && (catalogFocus.isEmpty() || catalogFocus.startsWith("resume:"))) (resumeCards.firstOrNull { it.tag==catalogFocus } ?: resumeCards.first()).requestFocus()
         else cards[displayed.indexOfFirst { it.id==catalogFocus }.coerceAtLeast(0)].requestFocus()
