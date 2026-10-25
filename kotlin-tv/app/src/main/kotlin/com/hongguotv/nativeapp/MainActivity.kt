@@ -1243,7 +1243,7 @@ class MainActivity: Activity() {
                 useController=false; resizeMode=frameResizeMode(); isFocusable=false
                 setKeepContentOnPlayerReset(true); setShutterBackgroundColor(Color.BLACK); setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
             }
-            playerView=view; root.addView(view,FrameLayout.LayoutParams(-1,-1))
+            playerView=view; root.addView(view,FrameLayout.LayoutParams(-1,-1)); applyFrameScale()
             social.attach(root)
             hud=column().apply { setPadding(dp(widthDp()*.05f),dp(20),dp(widthDp()*.05f),(resources.displayMetrics.heightPixels*.05f).toInt()); background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.TRANSPARENT,Color.argb(240,11,15,21))) }
             playbackTitle=text("",23f).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setTypeface(null,Typeface.BOLD) }; hud.addView(playbackTitle)
@@ -1666,13 +1666,19 @@ class MainActivity: Activity() {
         })
     }
     private fun frameResizeMode()=when(library.frameMode) {
-        VideoFrameMode.FIT -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
-        VideoFrameMode.ZOOM -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+        // 放大模式同样保持视频比例，超出屏幕的部分由放大本身裁掉，不再用 ZOOM 把画面撑满。
+        VideoFrameMode.FIT, VideoFrameMode.ZOOM -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
         VideoFrameMode.FILL -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
+    /** 画面放大只作用在播放器上：弹幕、进度条与面板仍按原尺寸排布，遥控器焦点图也不受影响。 */
+    private fun applyFrameScale() {
+        val view=playerView ?: return
+        val scale=library.frameMode.frameScale
+        view.scaleX=scale; view.scaleY=scale
+    }
     private fun showFramePicker(anchor: TextView,inPlayer: Boolean) {
-        tvTools.choose("全局画面模式",listOf("完整画面 · 保留比例与全部内容","等比铺满 · 会裁掉部分画面与字幕","拉伸铺满 · 画面比例会改变"),anchor,{ index ->
-            library.frameMode=VideoFrameMode.entries[index]; playerView?.resizeMode=frameResizeMode()
+        tvTools.choose("全局画面模式",listOf("完整画面 · 保留比例与全部内容","放大 1.36 倍 · 减少黑边，会裁掉画面边缘","拉伸铺满 · 画面比例会改变"),anchor,{ index ->
+            library.frameMode=VideoFrameMode.entries[index]; playerView?.resizeMode=frameResizeMode(); applyFrameScale()
             if(anchor.tag!="playback-settings") anchor.text=(if(inPlayer) "画面 " else "画面模式  ·  ")+library.frameMode.label
         })
     }
