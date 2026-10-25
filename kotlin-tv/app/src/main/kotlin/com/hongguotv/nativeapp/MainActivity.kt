@@ -492,7 +492,7 @@ class MainActivity: Activity() {
             return
         }
         if(tab==2) {
-            val ranks=RankingScreen(this,rankBrowser,nav,tvTools,::loadCover,
+            val ranks=RankingScreen(this,rankBrowser,nav,tvTools,{ view,url -> loadCover(view,url) },
                 { item -> openDetail(item,false) },{ item,anchor -> quickActions(item,anchor) },
                 { board,done -> work({ repository.rankSnapshot(board) },{ done(it,null) },{ problem ->
                     // A page that never recovered still carries the rows that did load; hand them
@@ -539,7 +539,7 @@ class MainActivity: Activity() {
                   else continuousCatalog?.grid ?: catalogBody?.getFocusables(View.FOCUS_DOWN)?.firstOrNull() },
                 repository::searchSuggestions,::runSearch).also { container.addView(it) }
             if(query.isBlank()) {
-                val browser=DiscoveryScreen(this,discoveryBrowser,input,::loadCover,
+                val browser=DiscoveryScreen(this,discoveryBrowser,input,{ view,url -> loadCover(view,url) },
                     { openDetail(it,false) },::quickActions,
                     { selection,cursor,done -> work({ repository.filteredDiscovery(selection,cursor) },{ done(it,null) },{ done(null,it) }) })
                 discoveryScreen=browser;browser.navigationChanged={ searchSuggestions?.updateNavigation() }
@@ -1145,7 +1145,7 @@ class MainActivity: Activity() {
             section.loading()
             work({ repository.related(data.series.id,force) },{ rows -> section.show(rows) },{ section.failed() })
         }
-        section=RelatedWorksView(this,episodes,::loadCover,cloudAccount::reservationLabel,{ related,anchor ->
+        section=RelatedWorksView(this,episodes,{ view,url -> loadCover(view,url) },cloudAccount::reservationLabel,{ related,anchor ->
             if(related.upcoming) {
                 if(!cloudAccount.signedIn) cloudAccount.show()
                 else tvTools.choose(related.series.title,listOf(cloudAccount.reservationLabel(related)),anchor,{ _ ->
