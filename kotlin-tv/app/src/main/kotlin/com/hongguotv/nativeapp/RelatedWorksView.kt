@@ -45,7 +45,7 @@ internal class RelatedWorksView(context: Context,private val upper: List<View>,p
                 setPadding(dp(5),dp(5),dp(5),dp(9)); background=TvStyle.card(context,false)
             }
             val image=ImageView(context).apply { scaleType=ImageView.ScaleType.FIT_CENTER }
-            card.addView(image,LayoutParams(-1,dp(176))); loadCover(image,work.series.cover)
+            card.addView(image,LayoutParams(-1,((dp(142)-dp(10))/CoverRatio.current).toInt())); loadCover(image,work.series.cover)
             card.addView(label(work.series.title,14f).apply { maxLines=2; minLines=2; ellipsize=android.text.TextUtils.TruncateAt.END },LayoutParams(-1,-2))
             card.addView(label(work.season,12f))
             val status=label(if(work.upcoming) reserveLabel(work) else "已上线 · 查看剧集",12f)

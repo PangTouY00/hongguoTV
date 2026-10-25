@@ -35,7 +35,7 @@ class SeriesPreview(context: Context): LinearLayout(context) {
 class HomeScreen(
     context: Context,
     private val top: View,
-    private val loadCover: (ImageView,String)->Unit,
+    private val loadCover: (ImageView,String,()->Unit)->Unit,
     private val selected: (Series,String)->Unit,
     private val open: (Series,Boolean)->Unit,
     private val actions: (Series,View)->Unit,
@@ -226,7 +226,11 @@ class HomeScreen(
         fun start() {
             card.pending=false
             if(ticket!=revision || !image.isAttachedToWindow || image.width<=0 || image.height<=0) return
-            loadCover(image,card.entry!!.series.cover)
+            loadCover(image,card.entry!!.series.cover){ post refit@{
+                // The first covers to arrive teach the real ratio; re-fit the shelves only when that ratio moved.
+                if(revision!=ticket || !CoverRatio.differsFrom(fittedRatio)) return@refit
+                fitArtwork()
+            } }
         }
         if(image.isLaidOut && !image.isLayoutRequested) start()
         else {
@@ -240,8 +244,10 @@ class HomeScreen(
     }
     override fun onAttachedToWindow() { super.onAttachedToWindow(); post { reloadArtwork() } }
     override fun onSizeChanged(w: Int,h: Int,oldw: Int,oldh: Int) { super.onSizeChanged(w,h,oldw,oldh); if(w!=oldw || h!=oldh) post { fitArtwork(); loadNearbySelection() } }
+    private var fittedRatio= CoverRatio.current
     private fun fitArtwork() {
         if(height<=0) return
+        fittedRatio=CoverRatio.current
         rows.forEach { row ->
             val textHeight=row.cards.maxOf { item -> item.view.paddingTop+item.view.paddingBottom+(1 until item.view.childCount).sumOf { child ->
                 val view=item.view.getChildAt(child); val params=view.layoutParams as LayoutParams

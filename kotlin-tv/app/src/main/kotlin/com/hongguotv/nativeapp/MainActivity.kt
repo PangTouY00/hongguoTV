@@ -872,7 +872,7 @@ class MainActivity: Activity() {
         homeUpdateCount=library.updatedFavorites()
         val preview=SeriesPreview(this); selectionPreview=preview; body.addView(preview)
         val top=if(inlineHomeFilters()) nav[0] else typeButtons.getValue(library.contentType)
-        val home=HomeScreen(this,top,::loadCover,{ item,label -> preview.show(item,if(label.startsWith("第 ")) selectionStatus(item) else listOf(label,selectionStatus(item)).filter { it.isNotBlank() }.joinToString(" · ")) },
+        val home=HomeScreen(this,top,{ view,url,done -> loadCover(view,url,done) },{ item,label -> preview.show(item,if(label.startsWith("第 ")) selectionStatus(item) else listOf(label,selectionStatus(item)).filter { it.isNotBlank() }.joinToString(" · ")) },
             { item,resume -> openDetail(item,resume) },::quickActions,{ catalogFocus=it })
         homeScreen=home; body.addView(home,lp(-1,0).apply { weight=1f })
         val hot=catalog.filterNot { it.id in library.hidden() }
@@ -1079,7 +1079,7 @@ class MainActivity: Activity() {
         val body=base("剧集详情")
         val scroll=ScrollView(this).apply { isVerticalScrollBarEnabled=false }; val content=column(); scroll.addView(content); body.addView(scroll,lp(-1,0).apply { weight=1f })
         val hero=row(); hero.gravity=Gravity.TOP; hero.setPadding(0,dp(12),0,dp(12))
-        val image=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_CENTER }; hero.addView(image,lp(dp(123),dp(174)).apply { rightMargin=dp(24) }); loadCover(image,data.series.cover)
+        val image=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_CENTER }; hero.addView(image,lp(((dp(174)*CoverRatio.current).toInt()).coerceAtLeast(dp(90)),dp(174)).apply { rightMargin=dp(24) }); loadCover(image,data.series.cover)
         val info=column(); hero.addView(info,lp(0,-2).apply { weight=1f })
         info.addView(text(data.series.title,26f).apply { setTypeface(null,Typeface.BOLD); maxLines=2; ellipsize=TextUtils.TruncateAt.END })
         info.addView(text("${data.episodes.size} 集  ·  ${data.series.tags}",13f,muted).apply { maxLines=1; setPadding(0,dp(8),0,dp(8)) })
