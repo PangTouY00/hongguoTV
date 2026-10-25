@@ -23,6 +23,8 @@ internal class RankingScreen(
     private var filterButton: TextView
     private var refreshButton: TextView
     private var loading=false
+    private var loadToken=0
+    private var watchdog: Runnable?=null
     private var browser: ContinuousCatalogView?=null
     private fun dp(value: Int)=(value*resources.displayMetrics.density).toInt()
     private fun label(value: String,size: Float=16f,color: Int=TvStyle.text)=TextView(activity).apply {
@@ -64,6 +66,10 @@ internal class RankingScreen(
         addView(body,params(-1,0).apply { weight=1f })
         markControls(); render()
     }
+    override fun onDetachedFromWindow() {
+        watchdog?.let { removeCallbacks(it) };watchdog=null;loadToken++
+        super.onDetachedFromWindow()
+    }
     private fun markControls() {
         RankBoard.entries.forEachIndexed { i,b ->
             controls[i].isSelected=state.board==b
@@ -79,10 +85,23 @@ internal class RankingScreen(
         else if(!focusNav && state.selectedId.isNotEmpty()) browser?.enter()
     }
     private fun refresh() {
+        if(loading) return
         loading=true; refreshButton.text="读取中…"
         subtitle.text="正在读取完整榜单，题材筛选将覆盖全部已返回作品…"
         val board=state.board
+        val token=++loadToken
+        // The website board pages occasionally stall; never leave 「读取中…」 stuck forever.
+        val guard=Runnable {
+            if(token!=loadToken || !loading) return@Runnable
+            loading=false; refreshButton.text="刷新"
+            render()
+            subtitle.text="读取超时 · 榜单接口暂时没有响应 · 按右上方刷新重试"
+        }
+        watchdog?.let { removeCallbacks(it) }
+        watchdog=guard; postDelayed(guard,80_000L)
         load(board) { snapshot,error ->
+            removeCallbacks(guard)
+            if(token!=loadToken) return@load
             loading=false; refreshButton.text="刷新"
             if(snapshot!=null) {
                 state.snapshots[board]=snapshot
@@ -113,7 +132,10 @@ internal class RankingScreen(
         filterButton.isEnabled=snapshot!=null && !loading
         val all=snapshot?.filtered(state.topic).orEmpty()
         subtitle.text=snapshot?.let {
-            "${it.ranking.updatedText.ifBlank { "来源：红果官网热播榜" }}  ·  ${it.items.size} 部${if(state.topic.isNotEmpty()) "  ·  ${state.topic} ${all.size} 部（保留原榜名次）" else "  ·  筛选覆盖本榜全部作品"}"
+            val parts=mutableListOf(it.ranking.updatedText.ifBlank { "来源：红果官网热播榜" },"${it.items.size} 部")
+            if(it.partial) parts+="已读取 ${it.pagesRead}/${it.pagesTotal} 页（部分）"
+            if(state.topic.isNotEmpty()) parts+="${state.topic} ${all.size} 部（保留原榜名次）" else parts+="筛选覆盖本榜全部作品"
+            parts.joinToString("  ·  ")
         } ?: "选择榜单，发现下一部好剧"
         if(all.isEmpty()) {
             browser=null
