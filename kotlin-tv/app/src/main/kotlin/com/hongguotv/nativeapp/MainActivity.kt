@@ -307,7 +307,7 @@ class MainActivity: Activity() {
         artwork.load(view,url,if(focused) ArtworkLoader.PRIORITY_FOCUSED else ArtworkLoader.PRIORITY_VISIBLE)
     }
     /** Same read, but the caller is told when the artwork lands so a fixed-height frame can follow the real cover ratio. */
-    private fun loadCover(view: ImageView,url: String,onApplied: (ImageView)->Unit) {
+    private fun loadCover(view: ImageView,url: String,onApplied: ()->Unit) {
         var ancestor: View?=view
         var focused=false
         while(ancestor!=null && ancestor!==root) {

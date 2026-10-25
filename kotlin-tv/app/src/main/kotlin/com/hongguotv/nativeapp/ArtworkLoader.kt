@@ -37,7 +37,7 @@ class ArtworkLoader(context: Context) {
 
     private data class Key(val url: String, val width: Int, val height: Int)
     private class Binding(view: ImageView, val owner: Long, val url: String, var priority: Int,
-                          val width: Int, val height: Int, val onApplied: ((ImageView)->Unit)?) {
+                          val width: Int, val height: Int, val onApplied: (()->Unit)?) {
         val view = WeakReference(view)
         var key: Key? = null
         var applied: Key? = null
@@ -76,7 +76,7 @@ class ArtworkLoader(context: Context) {
 
     /** Size defaults to the laid-out content bounds, including the detail page's portrait artwork. */
     fun load(view: ImageView, url: String, priority: Int = PRIORITY_VISIBLE, widthPx: Int = 0, heightPx: Int = 0,
-             onApplied: ((ImageView)->Unit)? = null) {
+             onApplied: (()->Unit)? = null) {
         if (closed) return
         val previous = bindings[view]
         if (previous != null && previous.owner == owner && previous.url == url && previous.width == widthPx &&
@@ -144,7 +144,7 @@ class ArtworkLoader(context: Context) {
         CoverRatio.observe(bitmap)
         view.setImageBitmap(bitmap)
         binding.applied = binding.key
-        binding.onApplied?.invoke(view)
+        binding.onApplied?.invoke()
     }
 
     private fun cancelLocked(job: Job) {

@@ -38,12 +38,19 @@ internal class ContinuousCatalogView(
     private var posterAspect= CoverRatio.current
     var onBrowsePosition: ((Int)->Unit)?=null
     var onGridFocus: ((Boolean)->Unit)?=null
-    val grid=object: GridView(context) {
+    // Declared before the grid so the grid's measure hook can post it; covers arrive asynchronously and the frames then follow the real ratio.
+    private val calibrateAspect: Runnable=object: Runnable {
+        override fun run() {
+            if(closed || !CoverRatio.differsFrom(posterAspect)) return
+            posterAspect=CoverRatio.current
+            for(i in 0 until grid.childCount) (grid.getChildAt(i) as? CatalogPosterCard)?.adoptAspect(posterAspect)
+        }
+    }
+    val grid: GridView=object: GridView(context) {
         override fun onMeasure(widthMeasureSpec: Int,heightMeasureSpec: Int) {
             itemHeightLimit=View.MeasureSpec.getSize(heightMeasureSpec)-dp(6)
             for(i in 0 until childCount) (getChildAt(i) as? CatalogPosterCard)?.let { it.heightLimit=itemHeightLimit; it.adoptAspect(posterAspect); it.fitHeight(itemHeightLimit) }
             super.onMeasure(widthMeasureSpec,heightMeasureSpec)
-            // Covers arrive asynchronously; once real artwork has been seen the frames follow its ratio.
             post(calibrateAspect)
         }
     }.apply {
@@ -53,13 +60,6 @@ internal class ContinuousCatalogView(
         selector=android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
         descendantFocusability=FOCUS_BLOCK_DESCENDANTS
         nextFocusUpId=upper.id
-    }
-    private val calibrateAspect=object: Runnable {
-        override fun run() {
-            if(closed || !CoverRatio.differsFrom(posterAspect)) return
-            posterAspect=CoverRatio.current
-            for(i in 0 until grid.childCount) (grid.getChildAt(i) as? CatalogPosterCard)?.adoptAspect(posterAspect)
-        }
     }
     fun columnCount()=grid.numColumns
     /** The header above the grid can scroll away while browsing; the grid then hands the up-key to whatever is still on screen. */
