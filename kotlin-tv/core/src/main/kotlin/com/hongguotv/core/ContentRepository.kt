@@ -1,15 +1,42 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.core
 
+// 内容数据访问入口：封装搜索、详情与播放信息请求；界面层通过此处获取内容数据。
+
+import java.io.IOException
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import okhttp3.Cookie
+import okhttp3.CookieJar
+import okhttp3.HttpUrl
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.MediaType.Companion.toMediaType
 import org.json.JSONObject
 import org.json.JSONArray
-import java.io.IOException
-import java.util.UUID
-import java.util.concurrent.TimeUnit
+
+/** 站点 CDN 在重定向时下发 ttwid 并拦截无 Cookie 的后续请求，内存 Cookie 罐使其自动流转。 */
+internal class MemoryCookies : CookieJar {
+    private val store = ConcurrentHashMap<String, MutableList<Cookie>>()
+
+    // RFC 语义：同名 + 同域 + 同路径的新 Cookie 替换旧值，而不是叠加。
+    private fun List<Cookie>.replacedBy(cookies: List<Cookie>) =
+        filter { kept -> cookies.none { it.name == kept.name && it.domain == kept.domain && it.path == kept.path } }
+            .toMutableList()
+            .also { it += cookies }
+
+    override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
+        if (cookies.isEmpty()) return
+        store.compute(url.host) { _, kept -> kept.orEmpty().replacedBy(cookies) }
+    }
+
+    override fun loadForRequest(url: HttpUrl): List<Cookie> {
+        val now = System.currentTimeMillis()
+        return store[url.host].orEmpty().filter { it.expiresAt > now }
+    }
+}
 
 internal fun JSONArray.objects() = (0 until length()).mapNotNull { optJSONObject(it) }
 internal fun JSONObject.str(key: String) = if (isNull(key)) "" else optString(key, "").trim()
@@ -55,8 +82,27 @@ class SearchSessionExpiredException: IOException("搜索结果已过期，请从
 /** A board page never recovered; [partial] holds the rows that did load, labelled by pagesRead. */
 class IncompleteRankSnapshotException(message: String,val partial: RankSnapshot): IOException(message)
 
-class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).callTimeout(45,TimeUnit.SECONDS).build(), private val clock: () -> Long = System::currentTimeMillis) {
+class ContentRepository(
+    val http: OkHttpClient =
+        OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .callTimeout(45, TimeUnit.SECONDS)
+            .cookieJar(MemoryCookies())
+            .build(),
+    private val clock: () -> Long = System::currentTimeMillis,
+) {
     private val signer = Signer()
+
+    // 榜单页偶发被 CDN 软拦截（空响应或挂起到超时）：收紧超时并单次重试，
+    // 让整榜失败在最坏约 15 秒内暴露，而不是分钟级的全局超时。
+    private val rankHttp: OkHttpClient by lazy {
+        http.newBuilder()
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(12, TimeUnit.SECONDS)
+            .callTimeout(15, TimeUnit.SECONDS)
+            .build()
+    }
     private val site = "https://hongguoduanju.com"
     private val suggestionWebId = UUID.randomUUID().toString()
     // Compatibility approach from upstream PR #22. Keep search signing separate.
@@ -71,11 +117,12 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     }
     private data class SearchCursor(val searchId: String, val passback: String, val offset: Int?, val updatedAt: Long)
     private val searchCursors=linkedMapOf<Triple<ContentType,String,Int>,SearchCursor>()
-    private fun text(url: String, signed: Signer.Request? = null, retryTransient: Boolean = false, retries: Int = 1): String {
+    private fun text(url: String, signed: Signer.Request? = null, retryTransient: Boolean = false, retries: Int = 1, client: OkHttpClient = http): String {
         val request = Request.Builder().url(url).header("User-Agent",VendorConstants.VIDEO_UA).header("Accept-Language","zh-CN,zh;q=0.9")
         signed?.headers?.forEach { (k,v) -> request.header(k,v) }
         signed?.body?.let { request.post(it.toRequestBody("application/json; charset=utf-8".toMediaType())) }
-        fun fetch() = RequestScope.execute(http.newCall(request.build())) { response ->
+        // 榜单用收紧超时的专用客户端，其余请求沿用默认客户端。
+        fun fetch() = RequestScope.execute(client.newCall(request.build())) { response ->
             if (!response.isSuccessful) throw ContentHttpException(response.code)
             val body = response.body ?: throw EmptyContentException()
             if (body.contentLength() > 16*1024*1024) throw IOException("内容响应过大")
@@ -116,9 +163,9 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     }
     fun rankPage(board: RankBoard,page: Int=1): CatalogPage {
         require(page in 1..100)
-        // A board page intermittently answers HTTP 200 with an empty body while the website
-        // renderer restarts, so every board read retries a few times before giving up.
-        return ComicRank.parse(text("$site/rank/${board.route}?page=$page",retryTransient=true,retries=3),page,board)
+        // 榜单页偶发被 CDN 软拦截（空响应或挂起）：走收紧超时的专用客户端并有限重试，
+        // ttwid 会话 Cookie 由内存 Cookie 罐随重定向自动携带。
+        return ComicRank.parse(text("$site/rank/${board.route}?page=$page",retryTransient=true,retries=1,client=rankHttp),page,board)
     }
     fun rankSnapshot(board: RankBoard): RankSnapshot {
         val first=rankPage(board)

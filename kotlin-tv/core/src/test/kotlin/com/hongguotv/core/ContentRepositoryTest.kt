@@ -227,8 +227,36 @@ class ContentRepositoryTest {
         assertThrows(IllegalArgumentException::class.java) { repo.comicRanking(0) }
     }
 
-    @Test fun renderedLastPageCountsCurrentPageWithoutAnAnchor() {
-        val repo=repository {
+    @Test
+    fun rankPageRetriesTransientFailureInsteadOfFailingTheBoard() {
+        // CDN 软拦截表现为超时或空响应：同页一次有界重试应恢复读取。
+        var calls = 0
+        val repo = repository {
+            _ ->
+            calls += 1
+            if (calls == 1) throw java.net.SocketTimeoutException("stalled stream")
+            else currentRank(rankPayload(1, 2))
+        }
+        val result = repo.rankPage(RankBoard.COMIC)
+        assertEquals(2, calls)
+        assertEquals(listOf("123"), result.items.map { it.id })
+    }
+
+    @Test
+    fun rankPageSurfacesPersistentFailureAfterOneRetry() {
+        var calls = 0
+        val repo = repository {
+            _ ->
+            calls += 1
+            throw java.net.SocketTimeoutException("still stalled")
+        }
+        assertThrows(IOException::class.java) { repo.rankPage(RankBoard.ALL) }
+        assertEquals(2, calls)
+    }
+
+    @Test
+    fun renderedLastPageCountsCurrentPageWithoutAnAnchor() {
+        val repo = repository {
             """<script>_ROUTER_DATA={"loaderData":{"rank_hot-comic-drama/page":{"rankKey":"comic","pageNum":5}}};</script>
                 <article aria-labelledby="rank-title-123"><span class="pc-badge-number-example">81</span><h2 id="rank-title-123">漫剧</h2></article>
                 <nav aria-label="榜单分页"><a href="/rank/hot-comic-drama?page=4">4</a><span aria-current="page">5</span></nav>"""

@@ -33,6 +33,8 @@ class MainActivity: Activity() {
     private val main=Handler(Looper.getMainLooper())
     private val io=Executors.newFixedThreadPool(3)
     private val repository=ContentRepository()
+    // 榜单专用并行加载通道：最多四榜各自在途、互不取消，与全局单飞 work() 隔离。
+    private val rankWorker=Executors.newFixedThreadPool(3)
     private val networkCleanup=Executors.newSingleThreadExecutor()
     private val prefetchWorker=Executors.newSingleThreadExecutor()
     private var prefetchHttp: okhttp3.OkHttpClient?=null
@@ -496,13 +498,26 @@ class MainActivity: Activity() {
         if(tab==2) {
             val ranks=RankingScreen(this,rankBrowser,nav,tvTools,{ view,url -> loadCover(view,url) },
                 { item -> openDetail(item,false) },{ item,anchor -> quickActions(item,anchor) },
-                { board,done -> work({ repository.rankSnapshot(board) },{ done(it,null) },{ problem ->
-                    // A page that never recovered still carries the rows that did load; hand them
-                    // over so the screen shows a clearly labelled partial board, never an empty one.
-                    done((problem as? IncompleteRankSnapshotException)?.partial,problem.message ?: "网络暂不可用")
-                }) })
+                { board,done ->
+                    // 榜单加载走独立并行通道：不与全局 work() 互相取消，快速切换多个榜单时
+                    // 各自的读取都会完成并写入会话缓存。
+                    rankWorker.submit {
+                        val result=runCatching { repository.rankSnapshot(board) }
+                        main.post {
+                            if(isDestroyed) return@post
+                            result.fold(
+                                { done(it,null) },
+                                { problem ->
+                                    // A page that never recovered still carries the rows that did load; hand them
+                                    // over so the screen shows a clearly labelled partial board, never an empty one.
+                                    done((problem as? IncompleteRankSnapshotException)?.partial,problem.message ?: "网络暂不可用")
+                                },
+                            )
+                        }
+                    }
+                })
             container.addView(ranks,lp(-1,0).apply { weight=1f })
-            ranks.start(load && rankBrowser.snapshots[rankBrowser.board]==null,focusNav)
+            ranks.start(load,focusNav)
             return
         }
         if(tab==0) {
@@ -1919,7 +1934,7 @@ class MainActivity: Activity() {
         social.destroy()
         favoriteMonitor.destroy(); tvTools.destroy(); updater.destroy(); saveProgress(); cloudAccount.destroy(); releasePlayer(); library.close()
         artwork.close(); releaseCatalogViews(); mediaSession.release(); main.removeCallbacksAndMessages(null)
-        io.shutdownNow(); prefetchWorker.shutdownNow(); networkCleanup.shutdown()
+        io.shutdownNow(); rankWorker.shutdownNow(); prefetchWorker.shutdownNow(); networkCleanup.shutdown()
         Thread({ repository.http.dispatcher.cancelAll(); repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown() },"hongguotv-network-cleanup").start()
         super.onDestroy()
     }

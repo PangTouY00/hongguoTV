@@ -20,12 +20,64 @@ data class RankSnapshot(val board: RankBoard,val items: List<Series>,val ranking
 }
 
 /** Retained while visiting details or another tab, bounded to four boards. */
-class RankBrowserState {
-    var board=RankBoard.ALL
-    var topic=""
-    var page=1
-    var selectedId=""
-    val snapshots=mutableMapOf<RankBoard,RankSnapshot>()
-    fun select(next: RankBoard) { if(board!=next) { board=next; topic=""; page=1; selectedId="" } }
-    fun filter(next: String) { topic=next; page=1; selectedId="" }
+/**
+ * 每个榜单独立的会话缓存：TTL 内切换零请求，过期后由界面层静默续期；
+ * 在途标记按榜去重，多个榜单可并行加载、互不取消。真正的重新获取只发生在
+ * TTL 过期的后台续期或用户手动刷新。
+ */
+class RankBrowserState(
+    private val clock: () -> Long = System::currentTimeMillis,
+    private val ttlMillis: Long = 10 * 60_000,
+) {
+    var board = RankBoard.ALL
+    var topic = ""
+    var page = 1
+    var selectedId = ""
+    val snapshots = mutableMapOf<RankBoard, RankSnapshot>()
+    private val loadedAt = mutableMapOf<RankBoard, Long>()
+    private val refreshing = mutableSetOf<RankBoard>()
+
+    /** 界面层只读视图：该榜是否正在加载。 */
+    fun isRefreshing(target: RankBoard) = target in refreshing
+
+    /** TTL 内已有缓存则无需任何请求。 */
+    fun isFresh(target: RankBoard = board): Boolean {
+        val at = loadedAt[target] ?: return false
+        return clock() - at < ttlMillis
+    }
+
+    /** 声明开始拉取；该榜已在途时返回 false（同榜去重，跨榜互不影响）。 */
+    fun beginRefresh(target: RankBoard): Boolean {
+        synchronized(refreshing) {
+            if (target in refreshing) return false
+            refreshing += target
+            return true
+        }
+    }
+
+    /** 拉取结束：成功记录时间戳并缓存快照，失败保留旧缓存只清在途标记。 */
+    fun endRefresh(target: RankBoard, snapshot: RankSnapshot?) {
+        synchronized(refreshing) {
+            refreshing -= target
+            if (snapshot != null) {
+                snapshots[target] = snapshot
+                loadedAt[target] = clock()
+            }
+        }
+    }
+
+    fun select(next: RankBoard) {
+        if (board != next) {
+            board = next
+            topic = ""
+            page = 1
+            selectedId = ""
+        }
+    }
+
+    fun filter(next: String) {
+        topic = next
+        page = 1
+        selectedId = ""
+    }
 }
