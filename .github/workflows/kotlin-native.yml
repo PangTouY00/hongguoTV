@@ -64,17 +64,20 @@ jobs:
           safe_ref="$(printf '%s' "$BUILD_REF" | tr -c 'A-Za-z0-9._-' '-')"
           short="$(git rev-parse --short HEAD)"
           tag="build-${safe_ref}-${short}"
-          version="$(sed -n 's/.*versionName *= *System.getenv([^)]*) *?: *"\([^"]*\)".*/\1/p' kotlin-tv/app/build.gradle.kts | head -n1)"
-          code="$(sed -n 's/.*versionCode *= *System.getenv([^)]*) *?: *\([0-9][0-9]*\).*/\1/p' kotlin-tv/app/build.gradle.kts | head -n1)"
+          version="$(sed -n '/versionName/p' kotlin-tv/app/build.gradle.kts | grep -oE '"[^"]*"' | tail -n1 | tr -d '"')"
+          code="$(sed -n '/versionCode/p' kotlin-tv/app/build.gradle.kts | grep -oE '[0-9]+' | tail -n1)"
           from="${{ github.event.before }}"
-          if [ -z "$from" ] || ! git cat-file -e "$from^{commit}" 2>/dev/null; then from="$(git rev-parse HEAD~1 2>/dev/null || git rev-parse HEAD)"; fi
-          changes="$(git log --no-merges --pretty=format:'- %s' "$from..HEAD" || git log --no-merges -n 5 --pretty=format:'- %s')"
+          if [ -z "$from" ] || ! git cat-file -e "$from^{commit}" 2>/dev/null; then from=""; fi
+          heading="本次推送的改动"
+          changes=""
+          if [ -n "$from" ]; then changes="$(git log --no-merges --pretty=format:'- %s' "$from..HEAD" || true)"; fi
+          if [ -z "$changes" ]; then heading="本分支最近提交"; changes="$(git log --no-merges -n 15 --pretty=format:'- %s')"; fi
           checks=passed
           if [ "$JOB_OUTCOME" != "success" ]; then checks=failed; fi
           notes=$(cat <<EOF
           自动构建的调试包：分支 \`${BUILD_REF}\`，提交 \`${short}\`，versionName ${version:-未知} / versionCode ${code:-未知}。
 
-          ## 本次改动
+          ## ${heading}
           ${changes}
 
           ## 检查
