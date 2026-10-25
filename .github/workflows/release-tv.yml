@@ -4,6 +4,12 @@ name: Build and publish TV release APK
 on:
   push:
     tags: ['kotlin-v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要发布的 kotlin-v 标签（用于中断后继续同一版本）
+        required: true
+        default: kotlin-v0.1.7
 permissions:
   contents: write
 jobs:
@@ -36,29 +42,49 @@ jobs:
         with:
           path: ~/.android
           key: hongguotv-debug-keystore-v1
-      - name: Run the checks, then sign the release APK with that key
+      - name: Run the checks and build the debug APK
+        id: build
         run: |
-          set -eu
-          ./kotlin-tv/gradlew -p kotlin-tv :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --console=plain
-          test -f "$HOME/.android/debug.keystore"
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          case "$tag" in kotlin-v[0-9]*) ;; *) echo "Unsupported release tag: $tag"; exit 1;; esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          ./kotlin-tv/gradlew -p kotlin-tv :core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --console=plain 2>&1 | tee build-checks.log
+      - name: Confirm the shared signing key is available
+        run: |
+          set -euo pipefail
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            echo "The cached signing key is missing, so this build could not be installed over the app already on the device."
+            ls -la "$HOME/.android" 2>&1 || echo "(no ~/.android directory in this runner)"
+            exit 1
+          fi
+          ls -l "$HOME/.android/debug.keystore"
+      - name: Build the release APK with that key
+        run: |
+          set -euo pipefail
           export HONGGUOTV_KEYSTORE="$HOME/.android/debug.keystore"
           export HONGGUOTV_KEY_ALIAS=androiddebugkey
           export HONGGUOTV_STORE_PASSWORD=android
           export HONGGUOTV_KEY_PASSWORD=android
-          ./kotlin-tv/gradlew -p kotlin-tv :app:assembleRelease --console=plain
+          # 同一份 lint 报告由上一步的 :app:lintDebug 产出，这里不再重复跑 release 变体。
+          ./kotlin-tv/gradlew -p kotlin-tv :app:assembleRelease -x lintVitalRelease --console=plain 2>&1 | tee build-release.log
       - name: Verify the APK identity and record the signing certificate
         id: apk
+        env:
+          RELEASE_TAG: ${{ steps.build.outputs.tag }}
         run: |
-          set -eu
-          version="${GITHUB_REF_NAME#kotlin-v}"
+          set -euo pipefail
+          version="${RELEASE_TAG#kotlin-v}"
           apk=kotlin-tv/app/build/outputs/apk/release/app-release.apk
           build_tools="$(ls -d "$ANDROID_HOME"/build-tools/* | tail -n1)"
-          badging="$("$build_tools/aapt" dump badging "$apk")"
+          if [ -x "$build_tools/aapt" ]; then aapt_tool="$build_tools/aapt"; else aapt_tool="$build_tools/aapt2"; fi
+          echo "aapt_tool=$aapt_tool" >> "$GITHUB_OUTPUT"
+          badging="$("$aapt_tool" dump badging "$apk")"
           grep -q "package: name='com.hongguotv.nativeapp'" <<<"$badging"
           grep -q "versionName='$version'" <<<"$badging"
           grep -q "sdkVersion:'23'" <<<"$badging"
           code="$(sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" <<<"$badging" | head -n1)"
-          fingerprint="$("$build_tools/apksigner" verify --print-certs "$apk" | sed -n 's/^SHA-256 digest: //p' | head -n1)"
+          fingerprint="$("$build_tools/apksigner" verify --print-certs "$apk" | sed -n 's/.*certificate SHA-256 digest: //p' | head -n1)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "code=$code" >> "$GITHUB_OUTPUT"
           echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
@@ -66,12 +92,13 @@ jobs:
       - name: Write the release notes
         id: notes
         env:
+          RELEASE_TAG: ${{ steps.build.outputs.tag }}
           VERSION: ${{ steps.apk.outputs.version }}
           CODE: ${{ steps.apk.outputs.code }}
           FINGERPRINT: ${{ steps.apk.outputs.fingerprint }}
         run: |
-          set -eu
-          previous="$(git tag -l 'kotlin-v*' --sort=-creatordate | grep -v "^${GITHUB_REF_NAME}$" | head -n1 || true)"
+          set -euo pipefail
+          previous="$(git tag -l 'kotlin-v*' --sort=-creatordate | grep -v "^${RELEASE_TAG}$" | head -n1 || true)"
           if [ -n "$previous" ]; then
             heading="自 $previous 以来的改动"
             changes="$(git log --no-merges --pretty=format:'- %s' "$previous..HEAD")"
@@ -95,28 +122,32 @@ jobs:
       - name: Package the APK with the updater manifest
         id: package
         env:
-          VERSION: ${{ steps.apk.outputs.version }}
+          RELEASE_TAG: ${{ steps.build.outputs.tag }}
+          AAPT_TOOL: ${{ steps.apk.outputs.aapt_tool }}
         run: |
-          set -eu
-          build_tools="$(ls -d "$ANDROID_HOME"/build-tools/* | tail -n1)"
+          set -euo pipefail
           out="$(python3 scripts/prepare-kotlin-release.py --apk kotlin-tv/app/build/outputs/apk/release/app-release.apk \
-            --aapt "$build_tools/aapt" --output outputs/release --tag "$GITHUB_REF_NAME" --notes-file notes.md)"
+            --aapt "$AAPT_TOOL" --output outputs/release --tag "$RELEASE_TAG" --notes-file notes.md)"
           echo "directory=$out" >> "$GITHUB_OUTPUT"
           ls -l "$out"
       - name: Publish the formal release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.build.outputs.tag }}
           DIRECTORY: ${{ steps.package.outputs.directory }}
           VERSION: ${{ steps.apk.outputs.version }}
         run: |
-          set -eu
-          gh release create "$GITHUB_REF_NAME" "$DIRECTORY"/*.apk "$DIRECTORY"/update.json "$DIRECTORY"/release-notes.md \
+          set -euo pipefail
+          gh release create "$RELEASE_TAG" "$DIRECTORY"/*.apk "$DIRECTORY"/update.json "$DIRECTORY"/release-notes.md \
             --title "红果 TV $VERSION" --notes-file notes.md
-          gh release view "$GITHUB_REF_NAME" --json tagName,name,prerelease,draft,assets \
+          gh release view "$RELEASE_TAG" --json tagName,name,prerelease,draft,assets \
             --jq '{tag:.tagName,title:.name,prerelease:.prerelease,draft:.draft,assets:[.assets[].name]}'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
         with:
           name: tv-release-package
           path: |
             outputs/release/
+            build-checks.log
+            build-release.log
             kotlin-tv/app/build/reports/
