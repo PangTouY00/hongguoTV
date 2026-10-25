@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.core
 
-enum class VideoFrameMode(val label: String) {
-    FIT("完整画面"), ZOOM("等比铺满"), FILL("拉伸铺满");
+/**
+ * 画面模式。[frameScale] 是播放画面相对完整显示时的固定放大倍数：1 表示不放大，
+ * 放大模式只把画面放大 1.36 倍而不是撑满整个屏幕，竖屏视频的左右黑边明显变窄，
+ * 裁掉的边缘又比完全铺满少得多。
+ */
+enum class VideoFrameMode(val label: String, val frameScale: Float=1f) {
+    FIT("完整画面"), ZOOM("放大 1.36 倍", 1.36f), FILL("拉伸铺满");
     companion object { fun fromStored(value: String?)=entries.firstOrNull { it.name==value } ?: FIT }
 }
 

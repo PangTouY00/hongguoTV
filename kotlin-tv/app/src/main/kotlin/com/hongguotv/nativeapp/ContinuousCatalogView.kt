@@ -14,7 +14,7 @@ import com.hongguotv.core.RankPosition
 internal class ContinuousCatalogView(
     context: Context,
     private val columns: Int,
-    private val upper: View,
+    private var upper: View,
     private val bind: (Series,View?)->View,
     private val selected: (Series)->Unit,
     private val open: (Series)->Unit,
@@ -35,13 +35,23 @@ internal class ContinuousCatalogView(
     private var restorePosition: Position?=null
     private var itemHeightLimit=0
     private var remoteNavigation=false
+    private var posterAspect= CoverRatio.current
     var onBrowsePosition: ((Int)->Unit)?=null
     var onGridFocus: ((Boolean)->Unit)?=null
-    val grid=object: GridView(context) {
+    // Declared before the grid so the grid's measure hook can post it; covers arrive asynchronously and the frames then follow the real ratio.
+    private val calibrateAspect: Runnable=object: Runnable {
+        override fun run() {
+            if(closed || !CoverRatio.differsFrom(posterAspect)) return
+            posterAspect=CoverRatio.current
+            for(i in 0 until grid.childCount) (grid.getChildAt(i) as? CatalogPosterCard)?.adoptAspect(posterAspect)
+        }
+    }
+    val grid: GridView=object: GridView(context) {
         override fun onMeasure(widthMeasureSpec: Int,heightMeasureSpec: Int) {
             itemHeightLimit=View.MeasureSpec.getSize(heightMeasureSpec)-dp(6)
-            for(i in 0 until childCount) (getChildAt(i) as? CatalogPosterCard)?.fitHeight(itemHeightLimit)
+            for(i in 0 until childCount) (getChildAt(i) as? CatalogPosterCard)?.let { it.heightLimit=itemHeightLimit; it.adoptAspect(posterAspect); it.fitHeight(itemHeightLimit) }
             super.onMeasure(widthMeasureSpec,heightMeasureSpec)
+            post(calibrateAspect)
         }
     }.apply {
         id=View.generateViewId();numColumns=columns;stretchMode=GridView.STRETCH_COLUMN_WIDTH
@@ -50,6 +60,12 @@ internal class ContinuousCatalogView(
         selector=android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
         descendantFocusability=FOCUS_BLOCK_DESCENDANTS
         nextFocusUpId=upper.id
+    }
+    fun columnCount()=grid.numColumns
+    /** The header above the grid can scroll away while browsing; the grid then hands the up-key to whatever is still on screen. */
+    fun setUpper(view: View) {
+        if(view===upper || view.id==upper.id) return
+        upper=view;grid.nextFocusUpId=view.id
     }
     private val status=TextView(context).apply { textSize=13f;setTextColor(TvStyle.muted) }
     val next=action("加载更多") { requestMore(true) }
@@ -65,7 +81,7 @@ internal class ContinuousCatalogView(
         override fun getView(position: Int,convertView: View?,parent: ViewGroup): View {
             val item=entries[position]
             return bind(item,convertView).apply {
-                (this as? CatalogPosterCard)?.fitHeight(itemHeightLimit)
+                (this as? CatalogPosterCard)?.let { it.heightLimit=itemHeightLimit; it.adoptAspect(posterAspect); it.fitHeight(itemHeightLimit) }
                 tag=item.id;isFocusable=false;isClickable=false;isLongClickable=false
                 if(this is ViewGroup) descendantFocusability=FOCUS_BLOCK_DESCENDANTS
                 background=TvStyle.card(context,grid.hasFocus() && grid.selectedItemPosition==position)
@@ -112,7 +128,8 @@ internal class ContinuousCatalogView(
         grid.setOnScrollListener(object: AbsListView.OnScrollListener {
             override fun onScrollStateChanged(view: AbsListView?,state: Int) { if(state!=AbsListView.OnScrollListener.SCROLL_STATE_IDLE) navigating=true }
             override fun onScroll(view: AbsListView?,first: Int,count: Int,total: Int) {
-                if(grid.hasFocus()) onBrowsePosition?.invoke(grid.selectedItemPosition.coerceAtLeast(first))
+                // A finger drag scrolls without ever focusing the grid, so touch scrolling reports too.
+                if(grid.hasFocus() || grid.isInTouchMode) onBrowsePosition?.invoke(if(first==0) 0 else maxOf(grid.selectedItemPosition,first))
                 if(navigating && first>0 && first+count>=total-columns*2) requestMore(false)
             }
         })
@@ -208,15 +225,32 @@ internal class CatalogPosterCard(context: Context): LinearLayout(context) {
     private val title=TextView(context).apply { textSize=14f;setTextColor(TvStyle.text);includeFontPadding=false;minLines=2;maxLines=2;ellipsize=android.text.TextUtils.TruncateAt.END }
     private val badge=TextView(context).apply { textSize=12f;setTextColor(TvStyle.muted);includeFontPadding=false;maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END }
     private var preferredHeight=0
+    private var aspect= CoverRatio.current
+    private var columnWidth=0
+    var heightLimit=0
     init {
         orientation=VERTICAL
         val density=resources.displayMetrics.density
         setPadding((4*density).toInt(),(4*density).toInt(),(4*density).toInt(),(9*density).toInt())
+        // Only a first-pass guess: the real column width arrives in onMeasure and replaces it.
         val width=(resources.displayMetrics.widthPixels*.9f-14*density*5)/6
-        preferredHeight=(width/TvStyle.POSTER_ASPECT).toInt()
+        preferredHeight=(width/aspect).toInt()
         poster.addView(image,FrameLayout.LayoutParams(-1,-1))
         poster.addView(rank,FrameLayout.LayoutParams(-2,-2,android.view.Gravity.TOP or android.view.Gravity.START))
         addView(poster,LayoutParams(-1,preferredHeight));addView(title);addView(badge)
+    }
+    /** GridView hands every cell its real column width before measuring it, so the poster is sized from that width and fills the card. */
+    override fun onMeasure(widthMeasureSpec: Int,heightMeasureSpec: Int) {
+        val width=View.MeasureSpec.getSize(widthMeasureSpec)
+        if(width>0 && width!=columnWidth) { columnWidth=width; preferredHeight=(width/aspect).toInt(); if(heightLimit>0) fitHeight(heightLimit) }
+        super.onMeasure(widthMeasureSpec,heightMeasureSpec)
+    }
+    /** Adopts the measured cover ratio so the frame matches the artwork instead of leaving dark bands on both sides. */
+    fun adoptAspect(value: Float) {
+        if(value<=.25f || value>3f || kotlin.math.abs(value-aspect)<.04f) return
+        aspect=value
+        if(columnWidth>0) { preferredHeight=(columnWidth/aspect).toInt(); if(heightLimit>0) fitHeight(heightLimit) }
+        requestLayout()
     }
     fun show(item: Series,position: RankPosition?=null) {
         title.text=item.title

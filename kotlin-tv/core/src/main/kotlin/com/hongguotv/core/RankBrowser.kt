@@ -8,7 +8,10 @@ enum class RankBoard(val label: String,val route: String,val key: String) {
     val loader get()="rank_$route/page"
 }
 
-data class RankSnapshot(val board: RankBoard,val items: List<Series>,val ranking: ComicRanking) {
+data class RankSnapshot(val board: RankBoard,val items: List<Series>,val ranking: ComicRanking,
+    val pagesRead: Int = 1,val pagesTotal: Int = 1) {
+    /** True when at least one board page failed; items are real but the board is incomplete. */
+    val partial: Boolean get()=pagesRead<pagesTotal
     // Use complete tag tokens, never match title or description to invent categories.
     val topics: List<String> get()=items.flatMap { topics(it) }.groupingBy { it }.eachCount().entries
         .sortedWith(compareByDescending<Map.Entry<String,Int>> { it.value }.thenBy { it.key }).map { it.key }

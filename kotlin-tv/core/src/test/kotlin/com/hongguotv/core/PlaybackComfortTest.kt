@@ -27,4 +27,11 @@ class PlaybackComfortTest {
         assertTrue(runCatching { timer.afterEpisodes(11) }.isFailure)
         assertEquals(VideoFrameMode.FIT,VideoFrameMode.fromStored("unknown"))
     }
+    @Test fun `only the magnified frame mode scales the picture and stored names stay unchanged`() {
+        assertEquals(1.0, VideoFrameMode.FIT.frameScale.toDouble(), 0.0)
+        assertEquals(1.0, VideoFrameMode.FILL.frameScale.toDouble(), 0.0)
+        assertEquals(1.36, VideoFrameMode.ZOOM.frameScale.toDouble(), 0.001)
+        assertEquals("放大 1.36 倍",VideoFrameMode.ZOOM.label)
+        assertEquals(VideoFrameMode.ZOOM,VideoFrameMode.fromStored("ZOOM"))
+    }
 }

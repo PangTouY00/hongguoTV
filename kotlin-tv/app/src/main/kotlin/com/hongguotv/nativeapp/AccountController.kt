@@ -240,21 +240,37 @@ class AccountController(private val activity: Activity,private val play: (CloudP
             dialog?.dismiss(); submit(value)
         }
     }
+    /** One sent-code outcome: [verify] completes the same login session it belongs to. */
+    private class LoginAttempt(val masked: String,val verify: (String)->AccountCredentials)
     private fun phone() {
         input("手机号（确认后发送登录验证码）",false) { raw ->
             val mobile=runCatching { PhoneLogin.parse(raw) }.getOrElse { toast(safeError(it)); return@input }
-            val login=WebLogin(http)
-            task({ login.send(mobile) },{ sent -> code(login,sent.maskedMobile) },{ failure ->
+            val app=PhoneLogin(http); val web=WebLogin(http)
+            task({
+                // The app passport endpoint keeps the device signature the platform expects;
+                // the website endpoint now answers 1105 (slider captcha) for every phone number,
+                // so it is only a fallback when the app channel is unavailable.
+                try {
+                    val sent=app.send(mobile)
+                    LoginAttempt(sent.maskedMobile) { value -> app.verify(value) }
+                } catch(appError: Exception) {
+                    if(appError is PhoneLogin.Failure && appError.errorCode==1105) throw appError
+                    if(appError is InterruptedException || appError is java.io.InterruptedIOException) throw appError
+                    // Any other app-channel problem (timeout, endpoint change) falls back once.
+                    val sent=web.send(mobile)
+                    LoginAttempt(sent.maskedMobile) { value -> web.verify(value) }
+                }
+            },{ attempt -> code(attempt) },{ failure ->
                 showDialog(AlertDialog.Builder(activity).setTitle("短信登录未完成").setMessage(safeError(failure))
                     .setPositiveButton("改用扫码") { _,_->qrLogin() }.setNegativeButton("返回",null))
             })
         }
     }
-    private fun code(login: WebLogin,masked: String,error: String?=null) {
-        input("输入发送至 $masked 的验证码",true,error) { value ->
-            if(!value.matches(Regex("[0-9]{4,8}"))) { code(login,masked,"请输入 4—8 位验证码"); return@input }
+    private fun code(attempt: LoginAttempt,error: String?=null) {
+        input("输入发送至 ${attempt.masked} 的验证码",true,error) { value ->
+            if(!value.matches(Regex("[0-9]{4,8}"))) { code(attempt,"请输入 4—8 位验证码"); return@input }
             task({
-                validateAccount(login.verify(value)).also { store.save(it.first) }
+                validateAccount(attempt.verify(value)).also { store.save(it.first) }
             },{ (next,account) ->
                 acceptAccount(next,account)
             },{ failure ->
@@ -262,7 +278,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
                     showDialog(AlertDialog.Builder(activity).setTitle("登录未完成").setMessage(safeError(failure))
                         .setPositiveButton("返回账号页") { _,_->show() }
                         .setNeutralButton("改用扫码") { _,_->qrLogin() })
-                } else code(login,masked,safeError(failure))
+                } else code(attempt,safeError(failure))
             })
         }
     }
@@ -282,9 +298,15 @@ class AccountController(private val activity: Activity,private val play: (CloudP
         task({ login.qr() },{ qr ->
             val bitmap=android.graphics.BitmapFactory.decodeByteArray(qr.image,0,qr.image.size)
             if(bitmap==null) { toast("登录二维码无法显示，请重试"); return@task }
-            val size=(300*activity.resources.displayMetrics.density).toInt()
+            // A fixed 300dp is taller than a landscape dialog can show on phones, which clipped
+            // the code and pushed the hint out; cap the square against the shorter screen side.
+            val metrics=activity.resources.displayMetrics
+            val density=metrics.density
+            val maxSide=(minOf(metrics.widthPixels,metrics.heightPixels)*0.6f).toInt()
+            val size=minOf((300*density).toInt(),maxSide).coerceAtLeast((120*density).toInt())
             val image=android.widget.ImageView(activity).apply {
-                setImageBitmap(bitmap); adjustViewBounds=true; setBackgroundColor(android.graphics.Color.WHITE)
+                setImageBitmap(bitmap); scaleType=android.widget.ImageView.ScaleType.FIT_CENTER
+                setBackgroundColor(android.graphics.Color.WHITE)
                 layoutParams=android.widget.LinearLayout.LayoutParams(size,size).apply { gravity=android.view.Gravity.CENTER_HORIZONTAL }
             }
             val panel=android.widget.LinearLayout(activity).apply {
@@ -295,7 +317,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
                     textSize=18f; gravity=android.view.Gravity.CENTER; setPadding(0,12,0,0)
                 })
             }
-            showDialog(AlertDialog.Builder(activity).setTitle("红果官方扫码登录").setView(panel).setNegativeButton("取消",null))
+            showDialog(AlertDialog.Builder(activity).setTitle("红果官方扫码登录").setView(android.widget.ScrollView(activity).apply { addView(panel) }).setNegativeButton("取消",null))
             val current=dialog ?: return@task
             val token=generation
             val deadline=android.os.SystemClock.elapsedRealtime()+qr.expiresIn.coerceIn(1,300)*1000L

@@ -1,15 +1,17 @@
 # 应用内更新与发布
 
-更新源为 GitCode 本仓库公开 Releases：`tsukiyo-zero/hongguoTV`。
+更新源为 GitHub 上本项目的发布仓库：`PangTouY00/hongguoTV`（用户自己的仓库）。
 
-电视先请求 `https://api.gitcode.com/api/v5/repos/tsukiyo-zero/hongguoTV/releases/latest?type=latest`，获取最新正式发行版标签，再读取该标签附件中的 `update.json`，比较内部版本号，并从 GitCode 根据清单的标签和附件名下载 APK。清单标签必须与接口返回标签一致。仅允许 HTTPS 和 GitCode 官方 API、站点及 file-cdn.gitcode.com 下载域名。此流程由 App 实现；最终覆盖安装由安卓系统执行。
+电视先请求 `https://api.github.com/repos/PangTouY00/hongguoTV/releases/latest`，获取最新正式发行版标签，再读取该标签附件中的 `update.json`，比较内部版本号，并从 GitHub 根据清单的标签和附件名下载 APK。清单标签必须与接口返回标签一致。仅允许 HTTPS 和 GitHub 官方 API、站点及 objects.githubusercontent.com 下载域名。预发布（调试构建）不会进入这条通道。此流程由 App 实现；最终覆盖安装由安卓系统执行。
 
 ## 发布流程
+
+日常优先使用下方统一入口；本节分步骤流程及后面的打包／上传命令保留用于排查和单独操作。
 
 1. 在 `app/build.gradle.kts` 调整 versionName，增加 versionCode。正式发布内部版本号必须超过上一正式版本；调试过程中不递增，使用文件名区分。允许跳过未公开的版本号，无需补发每个中间版本。环境变量可覆盖默认版本，打包后核对 APK 实际元数据。
 2. 使用同一包名 `com.hongguotv.nativeapp` 和现有签名构建，检查最低系统、版本和签名。不要换用新 Debug 签名或将签名密钥提交到仓库。构建方法见 [README](README.md)。
 3. 执行 `./scripts/build-kotlin.sh`，自动在 `outputs/releases/<tag>/` 生成配套 APK 和 `update.json`。清单从实际 APK 提取版本、包名、最低系统，并计算大小和 SHA256；环境变量覆盖后的版本也会正确读取。直接运行 Gradle 或 IDEA 的普通构建任务仍只生成 APK。
-4. 在 GitCode 创建同仓库 Release。Target 选择实际打包所用的提交或分支；APK 若来自尚未合并的功能分支，不能误选 main。
+4. 在 GitHub 的 `PangTouY00/hongguoTV` 创建 Release（GitCode 的 `tsukiyo-zero/hongguoTV` 同步发布作为镜像）。Target 选择实际打包所用的提交或分支；APK 若来自尚未合并的功能分支，不能误选 main。
 5. 上传配套 APK 和 `update.json`，正式发布并设为 Latest。草稿和 Pre-release 不用于稳定在线更新。
 6. 在较旧版本的设备上检查更新，核对下载与覆盖安装。推送代码、合并 main 或生成 Actions Artifact 不等于发布在线更新。
 
@@ -76,7 +78,54 @@ python3 scripts/prepare-kotlin-release.py \
 
 GitHub 可继续作为源码仓库及备用发布页面；同步 Git 代码不会同步 Release 附件。每次须在 GitCode 上传同一套 APK 和 update.json，并标记 Latest。旧版仍访问 GitHub，需通过旧渠道升级或手动覆盖安装一次新版本，之后才能使用 GitCode 更新。
 
-## 双平台脚本发布
+## 统一发布入口
+
+功能 PR 合入 main 并经用户验收后，日常只需一条命令。无需每次手动指定版本号，也无需人工逐一建版本分支、PR、标签或上传附件：
+
+```sh
+# 默认：读取两平台版本、标签／草稿及源码版本，只预演，不提交、构建或发布
+python3 scripts/release-tv.py
+
+# 用户明确授权正式发布后：自动执行完整流程
+python3 scripts/release-tv.py --publish
+
+# 有意指定版本，或提供人工整理的说明（可选）
+python3 scripts/release-tv.py --version 0.2.0 --notes-file /绝对路径/更新说明.md --publish
+
+# 中断后继续同一版本；以实际记录的版本替换示例
+python3 scripts/release-tv.py --publish --resume 0.1.7
+```
+
+默认版本取源码与两平台正式版本中的最高语义版本，再递增补丁位；versionCode 超过源码及已发布清单的最大值。无清单的历史 Release 会读取实际 APK 元数据，包含历史多 APK 变体，不猜测或忽略内部版本。已有标签或草稿发生冲突时停止；两平台 Latest 不一致或存在未完成的本地任务时停止，使用原任务继续或先排查，不悄悄跳过一个版本。
+
+默认从上一发布标签至当前提交的 TV app/core 路径下 `feat:`、`fix:` 提交标题生成去重说明。没有此类 TV 改动时停止，避免仅因工具或文档改动就发布 APK；确需发布维护版本时可显式提供已审阅的说明文件。发布说明长度仍受 1500 字限制。
+
+`--publish` 要求从干净的 main 开始，先快进同步最新 main。脚本不会 stash、重置或删除用户修改。它自动建 `feature-release-<版本>`，提交中文版本说明并创建／合并发布准备 PR；构建及检查一次运行 `:core:test :app:testDebugUnitTest :app:assembleDebug :app:lintDebug :app:assembleRelease`，不安装、不操作模拟器。API 23/26 由现有单元测试配置覆盖。与线上最高 versionCode 的正式 APK 核对签名，并检查新包 v1、包名、版本及 minSdk 23；验证后的树必须与合并源码完全相同，main 在检查期间变化会停止，不发布未检查的新改动。
+
+新版本标签在 GitHub 和 GitCode 指向同一份源码，GitCode main 仅允许快进推送。上传、附件摘要校验和设为 Latest 复用 `publish-tv-release.py`；发布后匿名读取两平台清单并与本地比较。只操作 TV 版本标签，不触碰 Mac `mac-stable`。不会强制推送、重写旧标签、删除或覆盖旧草稿和附件。
+
+### 当前实际执行方式（GitHub Actions）
+
+开发用的这台设备没有 JDK 与 Android SDK，正式包不在本机跑 Gradle。当前按下面的顺序发布：
+
+1. 功能与修复先走 PR 合入 `main`，用户在 CI 自动产生的调试包上实机验收。
+2. 在合并完成的 `main` 上把 `versionName`／`versionCode` 递增到新版本，提交版本与更新说明，再在该提交上打 `kotlin-v<版本>` 标签并推送。
+3. `.github/workflows/release-tv.yml` 自动跑完 `:core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`，用与调试包同一把的 Actions 缓存签名密钥构建 `:app:assembleRelease`，核对包名、版本与 minSdk，再用 `prepare-kotlin-release.py` 生成 `update.json` 与中文更新说明，最后发布为正式 Release（Latest，进入 App 内的自动更新通道）。
+4. 需要镜像同步时，用 `scripts/publish-tv-release.py` 把同一标签与包上传到 GitCode；`scripts/release-tv.py` 保留用于版本规划与两平台同步的预演，不再作为本机构建入口。
+
+任务记录和构建日志保存在 `outputs/release-jobs/<版本>/`，发布文件仍在 `outputs/releases/<标签>/`，均不提交。`--resume` 使用记录中的相同版本、源码及文件摘要；已完成且未改变的构建包复用，不重复构建。改变缓存文件、签名不一致或合并树发生变化均停止。版本文件写入阶段若出现不属于脚本预期内容的修改，会保留并停止，需要先检查。网络上传可沿用下层脚本的同内容跳过机制；双平台发布仍不是原子操作。
+
+### 一次配置的本机环境
+
+沿用已有 `~/.config/hongguotv/publish.json` 或 `GITHUB_TOKEN` / `GITCODE_TOKEN`，不要重复运行 `--configure`。统一入口预演也需读取认证列表，以识别 GitHub 草稿；不会将 Token 发给公共下载地址。
+
+工具与签名可继续使用环境变量／工程私密 `keystore.properties`。也支持 `~/.config/hongguotv/release.json`，权限必须为 `0600`，用于一次保存本机路径及原签名引用；环境变量优先。允许键为 `JAVA_HOME`、`ANDROID_HOME`、`GRADLE_USER_HOME`、`HONGGUOTV_GRADLE`（Gradle 可执行路径）和现有四个签名变量 `HONGGUOTV_KEYSTORE`、`HONGGUOTV_KEY_ALIAS`、`HONGGUOTV_STORE_PASSWORD`、`HONGGUOTV_KEY_PASSWORD`。无需全部填写；SDK 还可读取 `kotlin-tv/local.properties` 的 sdk.dir，未指定 Gradle 时使用工程 wrapper。该私密配置不进入仓库或日志；不得生成新签名密钥代替原密钥。
+
+### 验证范围
+
+`python3 scripts/test-release-tv.py` 和 `python3 scripts/test-publish-tv-release.py` 为离线回归，不访问平台或上传。统一入口已完成真实只读版本预演；创建版本提交的流程在临时 Git 仓库验证，其余写入边界及续传通过隔离测试覆盖。下层上传器已有双平台真实发布记录，统一入口首次完整正式发布仍需在下一次用户授权发布时验证，本轮不为测试工具而发布新 APK。
+
+## 双平台附件上传脚本（独立使用）
 
 脚本只发布 TV 的版本标签，不修改 Mac `mac-stable`，不自动升版本、建标签或合并 PR。先按上述流程构建、检查签名，推送对应标签到两平台并核对源码提交一致。GitCode 已关闭自动镜像同步，当前可直接推送 main 和新增版本标签；不要强制推送或改写旧标签。使用 Python 3.9+，无需安装 gh 或第三方 Python 包。
 

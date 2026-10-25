@@ -49,7 +49,11 @@ class StreamLadder(val renditions: List<Rendition>) {
     companion object { private val AVC_LABELS = setOf("h264", "avc", "avc1", "avc3") }
 }
 class ContentHttpException(val statusCode: Int): IOException("内容请求失败（HTTP $statusCode）")
+/** HTTP 200 with no body: the website renderer failed transiently; safe to retry. */
+internal class EmptyContentException: IOException("内容响应为空")
 class SearchSessionExpiredException: IOException("搜索结果已过期，请从第 1 页重新搜索")
+/** A board page never recovered; [partial] holds the rows that did load, labelled by pagesRead. */
+class IncompleteRankSnapshotException(message: String,val partial: RankSnapshot): IOException(message)
 
 class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(30,TimeUnit.SECONDS).callTimeout(45,TimeUnit.SECONDS).build(), private val clock: () -> Long = System::currentTimeMillis) {
     private val signer = Signer()
@@ -67,28 +71,35 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     }
     private data class SearchCursor(val searchId: String, val passback: String, val offset: Int?, val updatedAt: Long)
     private val searchCursors=linkedMapOf<Triple<ContentType,String,Int>,SearchCursor>()
-    private fun text(url: String, signed: Signer.Request? = null, retryTransient: Boolean = false): String {
+    private fun text(url: String, signed: Signer.Request? = null, retryTransient: Boolean = false, retries: Int = 1): String {
         val request = Request.Builder().url(url).header("User-Agent",VendorConstants.VIDEO_UA).header("Accept-Language","zh-CN,zh;q=0.9")
         signed?.headers?.forEach { (k,v) -> request.header(k,v) }
         signed?.body?.let { request.post(it.toRequestBody("application/json; charset=utf-8".toMediaType())) }
         fun fetch() = RequestScope.execute(http.newCall(request.build())) { response ->
             if (!response.isSuccessful) throw ContentHttpException(response.code)
-            val body = response.body ?: throw IOException("内容响应为空")
+            val body = response.body ?: throw EmptyContentException()
             if (body.contentLength() > 16*1024*1024) throw IOException("内容响应过大")
             val input=body.byteStream(); val out=java.io.ByteArrayOutputStream(); val buffer=ByteArray(8192)
             while(out.size()<=16*1024*1024) { val n=input.read(buffer); if(n<0) break; out.write(buffer,0,n) }; val bytes=out.toByteArray()
             if(bytes.size > 16*1024*1024) throw IOException("内容响应过大")
+            // Ranking pages intermittently answer HTTP 200 with an empty body while the
+            // server renderer restarts; retry it instead of reporting broken content.
+            if(bytes.isEmpty()) throw EmptyContentException()
             String(bytes,Charsets.UTF_8)
         }
-        try { return fetch() } catch (e: IOException) {
-            val temporary=e is java.net.SocketTimeoutException || e is java.net.SocketException ||
-                e is java.net.UnknownHostException || (e is ContentHttpException && e.statusCode in setOf(500,502,503,504))
-            if(!retryTransient || !temporary || Thread.currentThread().isInterrupted) throw e
-            // One bounded retry of the same read-only search page; navigation still cancels its scope.
-            try { Thread.sleep(700) } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt();throw java.io.InterruptedIOException("请求已取消")
+        var attempt=0
+        while(true) {
+            try { return fetch() } catch (e: IOException) {
+                val temporary=e is java.net.SocketTimeoutException || e is java.net.SocketException ||
+                    e is java.net.UnknownHostException || e is EmptyContentException ||
+                    (e is ContentHttpException && e.statusCode in setOf(500,502,503,504))
+                if(!retryTransient || !temporary || attempt>=retries || Thread.currentThread().isInterrupted) throw e
+                // Bounded retries of the same read-only page; navigation still cancels its scope.
+                attempt++
+                try { Thread.sleep(700L*attempt) } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt();throw java.io.InterruptedIOException("请求已取消")
+                }
             }
-            return fetch()
         }
     }
     private fun router(url: String) = extractRouter(text(url)).getJSONObject("loaderData")
@@ -101,11 +112,13 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
     private fun valid(rows: List<Series>) = rows.filter { it.id.matches(Regex("[0-9]{1,30}")) && it.title.isNotBlank() }.distinctBy { it.id }
     fun comicRanking(page: Int = 1): CatalogPage {
         require(page in 1..100)
-        return ComicRank.parse(text("$site/rank/hot-comic-drama?page=$page"),page)
+        return ComicRank.parse(text("$site/rank/hot-comic-drama?page=$page",retryTransient=true,retries=2),page)
     }
     fun rankPage(board: RankBoard,page: Int=1): CatalogPage {
         require(page in 1..100)
-        return ComicRank.parse(text("$site/rank/${board.route}?page=$page"),page,board)
+        // A board page intermittently answers HTTP 200 with an empty body while the website
+        // renderer restarts, so every board read retries a few times before giving up.
+        return ComicRank.parse(text("$site/rank/${board.route}?page=$page",retryTransient=true,retries=3),page,board)
     }
     fun rankSnapshot(board: RankBoard): RankSnapshot {
         val first=rankPage(board)
@@ -115,12 +128,20 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         if(meta.totalPages>5) throw IOException("榜单页数已变化，请稍后重试")
         val rows=first.items.toMutableList()
         val positions=meta.positions.toMutableMap()
+        var read=1
+        val failed=mutableListOf<Int>()
         for(page in 2..meta.totalPages) {
-            val next=rankPage(board,page)
-            if(next.ranking?.totalPages!=meta.totalPages) throw IOException("榜单正在更新，请刷新重试")
-            rows+=next.items; positions.putAll(next.ranking.positions)
+            if(Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("请求已取消")
+            // One flaky page must not discard every other page of the same board.
+            val next=try { rankPage(board,page) } catch(_: IOException) { failed+=page; continue }
+            if(next.ranking?.totalPages!=meta.totalPages) { failed+=page; continue }
+            rows+=next.items; positions.putAll(next.ranking.positions); read++
         }
-        return RankSnapshot(board,rows.distinctBy { it.id },meta.copy(positions=positions))
+        val snapshot=RankSnapshot(board,rows.distinctBy { it.id },meta.copy(positions=positions),read,meta.totalPages)
+        // A partly read board is still reported as a failure, but it carries the rows that did
+        // arrive so the UI can show them clearly labelled as partial instead of an empty board.
+        if(failed.isNotEmpty()) throw IncompleteRankSnapshotException("第 ${failed.joinToString("、")} 页读取失败",snapshot)
+        return snapshot
     }
     fun home(page: Int = 1, type: ContentType = ContentType.SHORT): CatalogPage {
         require(page in 1..100)
@@ -286,6 +307,21 @@ class ContentRepository(val http: OkHttpClient = OkHttpClient.Builder().connectT
         val map=data.optJSONObject("data") ?: throw IOException("播放信息为空")
         val entry=map.optJSONObject(id) ?: map.keys().asSequence().mapNotNull { map.optJSONObject(it) }.firstOrNull() ?: throw IOException("播放信息为空")
         val model=entry.optJSONObject("video_model") ?: JSONObject(entry.str("video_model"))
+        // The current model already carries plain media URLs, dimensions and CENC keys.
+        // Only use the legacy fallback endpoint when this shape has no usable rendition.
+        val inline=model.optJSONArray("video_list")?.objects().orEmpty().mapNotNull { row -> runCatching {
+            val meta=row.optJSONObject("video_meta") ?: return@runCatching null
+            val encryption=row.optJSONObject("encrypt_info") ?: return@runCatching null
+            val codec=meta.str("codec_type").lowercase()
+            val url=cleanUrl(row.str("main_url"))
+            if(codec.isBlank() || codec in setOf("bytevc2","bvc2") || (!url.startsWith("https://") && !url.startsWith("http://"))) return@runCatching null
+            val width=dimension(meta,"vwidth","width") ?: return@runCatching null
+            val height=dimension(meta,"vheight","height") ?: return@runCatching null
+            val key=encryption.str("spade_a").takeIf(String::isNotBlank)?.let(MediaCrypto::deriveKey)
+            if(key==null && encryption.opt("encrypt") !in listOf(false,0,"0","false")) return@runCatching null
+            Rendition(qualityNumber(meta.str("definition")),codec,width,height,url,key)
+        }.getOrNull() }
+        if(inline.isNotEmpty()) return StreamLadder(inline)
         val raw=model.opt("fallback_api")
         val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
         if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")

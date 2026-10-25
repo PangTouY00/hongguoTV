@@ -29,6 +29,18 @@ class TvSocialTest {
         } finally { controller.pause().stop().destroy() }
     }
 
+    @Test fun danmakuLineSplitsEmojiTagsIntoDrawableRuns() {
+        val controller=Robolectric.buildActivity(Activity::class.java).setup()
+        try {
+            val parts=CommentEmoji(controller.get()).segments("后手就是逃[捂脸][捂脸]未知[未知]",32)
+            assertEquals(4,parts.size)
+            assertEquals("后手就是逃",parts[0].text);assertNull(parts[0].bitmap)
+            assertEquals("",parts[1].text);assertNotNull(parts[1].bitmap)
+            assertEquals("",parts[2].text);assertNotNull(parts[2].bitmap)
+            assertEquals("未知[未知]",parts[3].text);assertNull(parts[3].bitmap)
+        } finally { controller.pause().stop().destroy() }
+    }
+
     @Test fun commentSignatureWorksOnAndroid6And8() {
         val headers=com.hongguotv.core.CommentSignature().headers("aid=8662&device_id=123",1700000000123,ByteArray(11) { it.toByte() })
         assertEquals("840420e100007c44bd0bfe74163888622f1454edf858fca6234c",headers["X-Gorgon"])

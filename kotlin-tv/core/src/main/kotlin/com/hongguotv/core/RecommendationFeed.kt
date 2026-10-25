@@ -17,6 +17,13 @@ class RecommendationCursor internal constructor(@Volatile internal var session: 
     internal var lastPage=0
     internal var lastResult: CatalogPage?=null
     fun nextBatch()=RecommendationCursor(session,offset).also { it.seen.addAll(seen) }
+    /** A local starter page, with no persisted server session. The next read starts a new
+     *  server session at offset zero and filters these already-displayed IDs as usual. */
+    @Synchronized fun restoreStarter(page: CatalogPage): Boolean {
+        if(expectedPage!=1 || lastPage!=0 || offset!=0 || session.isNotBlank() || seen.isNotEmpty() || page.items.isEmpty()) return false
+        seen.addAll(page.items.map { it.id });lastResult=page;lastPage=1;expectedPage=2
+        return true
+    }
 }
 
 /** Official App feed, not the public website's sorted category list. No behavior reporting. */
