@@ -11,19 +11,25 @@ import org.json.JSONObject
 /**
  * 手机号 + 验证码登录（大陆与境外号码都收）。
  *
- * * [send]：先匿名注册一台**新设备**（[DeviceRegister]），再用这台设备的身份发码。发码这一步实测可用。
- * * [verify]：用**同一台设备**验码，平台在 `Set-Cookie` 里下发 `sessionid`。
- *   换到的凭据带上这台设备的 `device_id` / `iid`（[AccountCredentials.device]），
- *   之后账号接口的签名都用它，会话与设备保持一致。
+ * 实测跑通的完整链路（2026-10-26，真实号码，真实短信）：
  *
- * 实测边界（2026-10-26 第二轮）：`aid=8662` 这条 passport 手机号流程能发出短信；只发**一次**
- * `validate_code` 请求时，平台的第一手答复是 `error_code 1`（`会话过期，请重新登录`）——不是 `1105`
- * 滑块，也没有进到比对验证码那一步。此前观察到的 `1203`（错误次数过多）是四个端点连发四次的次生现象。
- * 现在待判定的是两件事之一：这条通道本身要求调用方已持有登录会话，或者我们没把会话材料（验证票据 /
- * 设备 Cookie）带过去。[verify] 失败时给出的会话材料清单就是用来判定这一点的。
+ * 1. [send]：先匿名注册一台**新设备**（[DeviceRegister]），再用这台设备的身份向
+ *    `/passport/mobile/send_code/v1/` 发码（`type=24`），响应里的 `mobile_ticket` 是后续校验的会话票据。
+ * 2. [verify]：`POST /passport/mobile/sms_login/` 带上 `mobile_ticket` 与验证码。**票据必须带**——
+ *    不带时平台直接回 `1203`；这条通道不需要 CSRF 头。
+ * 3. 验证码正确时平台常回 `error_code 2046`（账号安全风控），并在 `data.verify_ways` 里给出可用的
+ *    二次验证方式。其中 `mobile_up_sms_verify` 要求用户**用这台手机号向指定号码发一条内容固定的短信**，
+ *    号码与内容都在响应里；[confirmUpSms] 按官方验证页的节奏轮询 `POST /passport/upsms/verify/` 确认，
+ *    成功后平台回一张 `ticket`。另一种 `oauth_douyin_verify` 需要抖音授权，电视端不做。
+ * 4. [resend] **沿用同一个会话**重新发码，[verify] 再带上新票据与那张 `verify_ticket` ——
+ *    平台签发 `sessionid`，登录完成。
+ *
+ * 实测边界：`type=1` 在 `sms_login` 上被平台拒绝（`3052` 该类型未开通），登录固定用 `24`；
+ * 上行短信还没到达时 `upsms/verify` 回 `1045 认证失败`，这是轮询的正常中间态；
+ * 同一张验证码被 `2046` 消耗后再提交会回 `1203`，必须重新发码。
  * 官网通道（[WebLogin]）的手机号发码则被滑块风控（`1105`）挡住。
  *
- * 一个实例对应一次登录；重新发码会换一台新设备，之前的验证码随之作废。
+ * 一个实例对应一次登录；重新发码要么沿用会话（二次验证之后），要么换一台新设备并作废之前的验证码。
  */
 class PhoneLogin(private val http: OkHttpClient) {
     var deviceId=""
@@ -49,18 +55,42 @@ class PhoneLogin(private val http: OkHttpClient) {
     internal var verifyDataFields=listOf<String>()
         private set
 
-    /** 平台拒绝时的可读原因，界面直接显示 [message]；[diagnostics] 是诊断包额外展示的会话材料清单。 */
-    class Failure(message: String,val errorCode: Int?=null,val canRetryCode: Boolean=false,val diagnostics: String?=null): Exception(message)
+    /** 二次验证材料：只服务于本次登录，不写日志、不进诊断包。 */
+    private var encryptUid=""
+    private var bizParams=""
+    private var verifyScene=""
+    private var verifyReason=""
+    private var verifyTicket=""
+    private var pendingUpSms: UpSms?=null
+
+    /**
+     * 平台拒绝时的可读原因，界面直接显示 [message]；[diagnostics] 是诊断包额外展示的会话材料清单；
+     * [upSms] 非空时平台要求上行短信二次验证，界面按它显示「用哪台手机、发什么内容、到哪个号码」；
+     * [needNewCode] 为真时这张验证码已经作废，界面要重新发一张而不是让用户再输一遍。
+     */
+    class Failure(message: String,val errorCode: Int?=null,val canRetryCode: Boolean=false,val diagnostics: String?=null,val upSms: UpSms?=null,val needNewCode: Boolean=false): Exception(message)
     /** [maskedMobile] 是平台回显的打码号码（如 `+886******23`）。 */
     data class Sent(val maskedMobile: String,val retrySeconds: Int)
+    /**
+     * 平台要求的上行短信验证：用 [mobile] 向 [channelMobile] 发送内容正好为 [smsContent] 的短信。
+     * [alternatives] 是平台同时给出的其它验证方式（如抖音验证），界面只做说明，不代做。
+     */
+    data class UpSms(val mobile: String,val channelMobile: String,val smsContent: String,val alternatives: List<String>)
 
-    fun send(mobile: String): Sent {
-        val registered=CloudAccountClient(http).registerDevice() ?: throw Failure("设备注册失败，请检查网络后重试")
-        deviceId=registered.deviceId; installId=registered.installId
-        cookies.clear(); cookies.putAll(registered.cookies)
-        expired=false
+    /**
+     * 发一张登录验证码。[keepSession] 为真时**沿用当前设备与 Cookie**：上行短信验证通过之后必须用
+     * 同一个会话重新发码，平台才认那张 `verify_ticket`（实测）。全新登录才注册新设备。
+     */
+    fun send(mobile: String,keepSession: Boolean=false): Sent {
+        if(!keepSession) {
+            val registered=CloudAccountClient(http).registerDevice() ?: throw Failure("设备注册失败，请检查网络后重试")
+            deviceId=registered.deviceId; installId=registered.installId
+            cookies.clear(); cookies.putAll(registered.cookies)
+            expired=false
+            encryptUid=""; bizParams=""; verifyScene=""; verifyReason=""; verifyTicket=""; pendingUpSms=null
+        }
         this.mobile=mobile
-        val reply=call("/passport/mobile/send_code/v1/",mapOf("mobile" to mobile,"type" to type),form=false)
+        val reply=call(SEND_CODE,mapOf("mobile" to mobile,"type" to type),form=false)
         sentFields=names(reply)
         val data=reply.optJSONObject("data") ?: JSONObject()
         sentDataFields=names(data)
@@ -72,48 +102,69 @@ class PhoneLogin(private val http: OkHttpClient) {
     }
 
     /**
-     * 用**同一台设备**验码换取登录态。
+     * 提交验证码。成功时平台在 `Set-Cookie` 里下发 `sessionid`；要求二次验证时抛 [Failure] 并带上
+     * [Failure.upSms]，界面据此引导用户发那条短信，之后 [confirmUpSms] → [resend] → 再 [verify]。
      *
-     * 诊断包（第二轮）：只发一次请求，并在失败时附上**会话材料清单**——发码响应回了哪些字段、
-     * 验证票据有没有取到、校验响应回了哪些字段、这次请求带了哪些 Cookie（全部只有名字，没有值）。
-     *
-     * 之所以要问这几件事：`ticket` 取不到时是空串，而 [call] 里的 `filterValues { it.isNotBlank() }`
-     * 会把空参数**静默丢掉**——请求照发，但少了那张票据。于是「带不带票据」这个变量从来没有被真正
-     * 测过，平台回 `error_code 1`（会话过期）既可能是这条通道本身要求已登录会话，也可能只是我们
-     * 没把会话材料带过去。这份清单用来在两者之间定论。
+     * 只发一次请求，失败时附上**会话材料清单**（字段名与 Cookie 名，没有任何值），
+     * 让平台的第一手答复原样落到界面上。
      */
     fun verify(code: String): AccountCredentials {
         if(expired) throw Failure("本次登录会话已失效，不能继续使用此会话提交验证码",1)
         check(deviceId.isNotEmpty()) { "请先发送验证码" }
-        val params=mapOf("mobile" to mobile,"code" to code,"type" to type,"mobile_ticket" to ticket)
-        val codes=mutableListOf<Int>()
-        var described:String?=null
-        for((path,form) in VERIFY_ATTEMPTS) {
-            val reply=call(path,params,form)
-            if(cookies.containsKey("sessionid")) break
-            verifyFields=names(reply)
-            val error=reply.optJSONObject("data") ?: continue
-            verifyDataFields=names(error)
-            val errorCode=error.optInt("error_code",0)
-            if(errorCode==0) continue
-            codes+=errorCode
-            described=describe(error) ?: described
-            // 验证码错了换端点也没有意义，直接让界面重新输入；要求滑块的只能改用扫码。
-            if(errorCode==1102) throw Failure(described ?: "验证码不正确，请重新输入",errorCode,true)
-            if(errorCode==1105) throw Failure("红果要求完成滑块验证，请改用扫码登录",errorCode)
+        val params=linkedMapOf("mobile" to mobile,"code" to code,"type" to type,"mobile_ticket" to ticket)
+        if(verifyTicket.isNotBlank()) params["verify_ticket"]=verifyTicket
+        val reply=call(SMS_LOGIN,params,form=true)
+        if(cookies.containsKey("sessionid")) return credentials()
+        verifyFields=names(reply)
+        val data=reply.optJSONObject("data") ?: JSONObject()
+        verifyDataFields=names(data)
+        val errorCode=data.optInt("error_code",0)
+        val described=describe(data)
+        if(errorCode==MFA_REQUIRED) {
+            val up=upSmsFrom(data)
+            if(up!=null) throw Failure("红果要求完成身份验证，请按界面提示发送一条短信",MFA_REQUIRED,upSms=up)
+            throw Failure(described ?: "红果要求身份验证，但没有给出可用的验证方式",MFA_REQUIRED)
         }
+        // 验证码错了重新输入即可；要求滑块的只能改用扫码；过期或次数用尽的必须重新发一张。
+        if(data.has("verify_center_decision_conf")) throw Failure("红果要求完成滑块验证，请改用扫码登录",1105)
+        if(errorCode==1102) throw Failure(described ?: "验证码不正确，请重新输入",1102,canRetryCode=true)
+        if(errorCode==1105) throw Failure("红果要求完成滑块验证，请改用扫码登录",1105)
+        if(errorCode==CODE_EXPIRED) throw Failure(described ?: "这张验证码已经过期或尝试次数过多",CODE_EXPIRED,needNewCode=true)
         if(!cookies.containsKey("sessionid")) {
-            val distinct=codes.distinct()
             val note=sessionMaterials()   // 必须在清空 cookies / ticket 之前取
-            if(1 in distinct) { expired=true; cookies.clear(); ticket="" }
-            val reason=described ?: "平台没有为这次手机号验证签发登录会话（错误码 ${distinct.joinToString("、").ifBlank { "无" }}）"
-            // 诊断包：不加「只在官方 App 内可用」这类结论，让平台的第一手答复原样落到界面上。
-            throw Failure("$reason。本次只向 validate_code 发了一次请求，以上是平台的第一手答复。",distinct.firstOrNull(),1102 in distinct,note)
+            if(errorCode==1) { expired=true; cookies.clear(); ticket="" }
+            throw Failure(described ?: "平台没有为这次手机号验证签发登录会话（错误码 ${if(errorCode==0) "无" else errorCode}）",errorCode.takeIf { it!=0 },diagnostics=note,needNewCode=true)
         }
-        val header=cookies.entries.joinToString("; ") { (name,value) -> "$name=$value" }
-        return AccountCredentialsParser.parseHeader(header)
-            .copy(deviceId=deviceId,installId=installId,device=mapOf("device_id" to deviceId,"iid" to installId))
+        return credentials()
     }
+
+    /**
+     * 确认用户已经发出那条上行短信：按官方验证页的节奏轮询 `/passport/upsms/verify/`
+     * （最多 [UPSMS_ATTEMPTS] 次、每次间隔 [UPSMS_INTERVAL_MS] 毫秒），成功时记下平台回的 `ticket`。
+     *
+     * 短信没到达时平台回 `1045 认证失败`，这是轮询的正常中间态；轮询用尽才抛 [Failure]，
+     * 且 [Failure.canRetryCode] 为真，界面可以再试一次。
+     */
+    fun confirmUpSms() {
+        check(pendingUpSms!=null) { "当前没有待确认的身份验证，请重新发送验证码" }
+        check(encryptUid.isNotBlank()) { "平台没有给出身份验证材料，请重新发送验证码" }
+        var described:String?=null
+        for(attempt in 1..UPSMS_ATTEMPTS) {
+            if(attempt>1) Thread.sleep(UPSMS_INTERVAL_MS)
+            val reply=call(UPSMS_VERIFY,upSmsParams(),form=true)
+            val data=reply.optJSONObject("data") ?: JSONObject()
+            val issued=data.optString("ticket")
+            if(reply.optString("message")=="success" && issued.isNotBlank()) { verifyTicket=issued; return }
+            described=describe(data) ?: described
+        }
+        throw Failure(described ?: "还没收到这条短信。请核对短信内容只有一个词、号码完全一致，再试一次",UP_SMS_PENDING,canRetryCode=true)
+    }
+
+    /** 再发一张验证码：二次验证之后**沿用同一会话**（平台才认那张票），否则按全新登录处理。 */
+    fun resend(): Sent = if(pendingUpSms!=null) send(mobile,keepSession=true) else send(mobile)
+
+    /** 界面据此决定是「继续同一次登录」还是「重新开始」。 */
+    fun pendingVerification(): UpSms? = pendingUpSms
 
     /** 带这台设备的身份签名后发一次 passport 请求；`Set-Cookie` 并进 [cookies]，返回 JSON（非 JSON 时包成 `raw`）。 */
     private fun call(path: String,params: Map<String,String>,form: Boolean): JSONObject {
@@ -141,8 +192,47 @@ class PhoneLogin(private val http: OkHttpClient) {
         return reply
     }
 
+    private fun credentials(): AccountCredentials {
+        val header=cookies.entries.joinToString("; ") { (name,value) -> "$name=$value" }
+        return AccountCredentialsParser.parseHeader(header)
+            .copy(deviceId=deviceId,installId=installId,device=mapOf("device_id" to deviceId,"iid" to installId))
+    }
+
     private fun describe(data: JSONObject): String? =
         data.optString("description").takeIf { it.isNotBlank() }?.let { "$it（错误码 ${data.optInt("error_code")}）" }
+
+    /**
+     * 从 `2046` 的响应里取出上行短信验证方式，并记下轮询它所需的材料。
+     * 平台没给出 `mobile_up_sms_verify` 时返回 null（例如只给了抖音验证），界面改用扫码。
+     */
+    private fun upSmsFrom(data: JSONObject): UpSms? {
+        val ways=data.optJSONArray("verify_ways") ?: return null
+        val alternatives=mutableListOf<String>()
+        for(index in 0 until ways.length()) {
+            val way=ways.optJSONObject(index) ?: continue
+            if(way.optString("verify_way")==UP_SMS_WAY) {
+                val channel=way.optString("channel_mobile"); val content=way.optString("sms_content")
+                if(channel.isBlank() || content.isBlank()) continue
+                encryptUid=data.optString("encrypt_uid")
+                bizParams=data.optJSONObject("biz_params")?.toString().orEmpty()
+                val event=data.optJSONObject("event_params") ?: JSONObject()
+                verifyScene=event.optString("verify_scene"); verifyReason=event.optString("verify_reason")
+                pendingUpSms=UpSms(data.optString("mobile").ifBlank { mobile },channel,content,alternatives)
+                return pendingUpSms
+            }
+            alternatives+=way.optString("verify_way")
+        }
+        return null
+    }
+
+    /** 照搬官方验证页提交给 `upsms/verify` 的那组材料；空值由 [call] 统一丢掉。 */
+    private fun upSmsParams(): Map<String,String> = linkedMapOf(
+        "encrypt_uid" to encryptUid,
+        "verify_ticket" to "",
+        "biz_params" to bizParams,
+        "verify_scene" to verifyScene,
+        "verify_reason" to verifyReason,
+    )
 
     /** 会话材料清单：只有字段名与 Cookie 名，没有任何值。 */
     private fun sessionMaterials(): String = buildString {
@@ -172,15 +262,20 @@ class PhoneLogin(private val http: OkHttpClient) {
 
     companion object {
         private const val PASSPORT="https://is.snssdk.com"
-        /** login-lab 实测：24 = 登录验证码；1 / 3 是绑定 / 换绑手机号。 */
+        internal const val SEND_CODE="/passport/mobile/send_code/v1/"
+        /** 实测唯一能把真实验证码换成 `sessionid` 的端点；`validate_code` 只会回「会话过期」。 */
+        internal const val SMS_LOGIN="/passport/mobile/sms_login/"
+        internal const val UPSMS_VERIFY="/passport/upsms/verify/"
+        /** login-lab 实测：24 = 登录验证码；1 / 3 是绑定 / 换绑手机号，`type=1` 在 `sms_login` 上回 `3052`。 */
         const val LOGIN_CODE_TYPE="24"
-        /**
-         * 诊断包：只留 `validate_code` 的 GET 一次请求。
-         *
-         * 四个端点连发会把同一个 `mobile_ticket` 的校验配额烧光，最后一个错误（1203 错误次数过多）
-         * 又盖住第一个真正的错误。这里只发一次，让平台的第一手答复原样落到界面上。
-         */
-        internal val VERIFY_ATTEMPTS=listOf("/passport/mobile/validate_code/v1/" to false)
+        /** 实测错误码：2046 = 要求二次验证；1045 = 上行短信还没收到；1203 = 这张码过期或试得太多。 */
+        internal const val MFA_REQUIRED=2046
+        internal const val UP_SMS_PENDING=1045
+        internal const val CODE_EXPIRED=1203
+        internal const val UP_SMS_WAY="mobile_up_sms_verify"
+        /** 官方验证页的轮询节奏：最多 4 次、每次间隔 2 秒。 */
+        internal const val UPSMS_ATTEMPTS=4
+        internal const val UPSMS_INTERVAL_MS=2000L
 
         /**
          * 区号 + 本地号码 → 平台认的手机号；不合格时抛 [IllegalArgumentException]，[Throwable.message] 可直接显示。

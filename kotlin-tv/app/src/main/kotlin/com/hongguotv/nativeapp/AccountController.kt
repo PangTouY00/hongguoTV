@@ -222,7 +222,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
         if(closed) return
         if(busy) { toast("账号操作进行中，请稍候"); return }
         val signed=credentials!=null
-        val choices=if(signed) arrayOf("云端继续观看（最近 50 部）","刷新账号和云端记录","退出红果账号") else arrayOf("使用红果 App 扫码登录","手机号 + 验证码登录（诊断包）")
+        val choices=if(signed) arrayOf("云端继续观看（最近 50 部）","刷新账号和云端记录","退出红果账号") else arrayOf("使用红果 App 扫码登录","手机号 + 验证码登录")
         showDialog(AlertDialog.Builder(activity).setTitle(profile?.let { "红果账号 · ${it.nickname}" } ?: "红果账号（测试功能）")
             .setItems(choices) { _,index ->
                 if(!signed) { if(index==0) qrLogin() else phone() } else when(index) { 0->showHistory(); 1->refresh(true); 2->logout() }
@@ -240,24 +240,26 @@ class AccountController(private val activity: Activity,private val play: (CloudP
             dialog?.dismiss(); submit(value)
         }
     }
-    /** One sent-code outcome: [verify] completes the same login session it belongs to. */
-    private class LoginAttempt(val masked: String,val verify: (String)->AccountCredentials)
+    /**
+     * 一次已发码的登录。[verify] 提交验证码；[confirm] 确认那条身份验证短信已经发出；
+     * [again] 重新发一张并回显新的打码号码。[masked] 会随重新发码更新。
+     */
+    private class LoginAttempt(var masked: String,val verify: (String)->AccountCredentials,val confirm: ()->Unit,val again: ()->String)
     private fun phone() {
-        // 诊断包（第二轮）：只提交一次验证码；失败时除了平台的原始答复，还列出本次请求实际带过去的会话材料。
-        input("手机号（确认后发送登录验证码）",false,"诊断包：验证码只提交一次。失败时界面显示平台的原始答复，以及本次请求带过去的会话材料（只有字段名与 Cookie 名，不含任何值）。") { raw ->
+        input("手机号（确认后发送登录验证码）",false,"若红果要求身份验证，界面会告诉你用哪台手机、发什么内容、到哪个号码；那条短信要用手边的手机发。") { raw ->
             val mobile=runCatching { PhoneLogin.parse(raw) }.getOrElse { toast(safeError(it)); return@input }
             val app=PhoneLogin(http); val web=WebLogin(http)
             task({
                 // App 端 passport 保留平台期望的设备签名；官网通道只在 App 通道整体不可用时兜底一次。
                 try {
                     val sent=app.send(mobile)
-                    LoginAttempt(sent.maskedMobile) { value -> app.verify(value) }
+                    LoginAttempt(sent.maskedMobile,{ app.verify(it) },{ app.confirmUpSms() },{ app.resend().maskedMobile })
                 } catch(appError: Exception) {
                     if(appError is PhoneLogin.Failure && appError.errorCode==1105) throw appError
                     if(appError is InterruptedException || appError is java.io.InterruptedIOException) throw appError
                     // Any other app-channel problem (timeout, endpoint change) falls back once.
                     val sent=web.send(mobile)
-                    LoginAttempt(sent.maskedMobile) { value -> web.verify(value) }
+                    LoginAttempt(sent.maskedMobile,{ web.verify(it) },{ throw PhoneLogin.Failure("官网通道不支持身份验证，请改用扫码登录") },{ web.send(mobile).maskedMobile })
                 }
             },{ attempt -> code(attempt) },{ failure ->
                 showDialog(AlertDialog.Builder(activity).setTitle("短信登录未完成").setMessage(safeError(failure))
@@ -273,15 +275,49 @@ class AccountController(private val activity: Activity,private val play: (CloudP
             },{ (next,account) ->
                 acceptAccount(next,account)
             },{ failure ->
-                if(failure is PhoneLogin.Failure && !failure.canRetryCode) {
-                    // 诊断包：会话材料清单单独接在结论后面，不走 safeError 的 150 字截断。
-                    val detail=listOfNotNull(safeError(failure),failure.diagnostics).joinToString("\n\n")
-                    showDialog(AlertDialog.Builder(activity).setTitle("登录未完成").setMessage(detail)
-                        .setPositiveButton("返回账号页") { _,_->show() }
-                        .setNeutralButton("改用扫码") { _,_->qrLogin() })
-                } else code(attempt,safeError(failure))
+                when {
+                    // 平台要求身份验证：先引导用户发那条短信，发完再确认。
+                    failure is PhoneLogin.Failure && failure.upSms!=null -> upSms(attempt,failure.upSms!!)
+                    // 这张码已经作废（过期或试得太多），重新发一张比让用户再输一遍有用。
+                    failure is PhoneLogin.Failure && failure.needNewCode -> again(attempt,"这张验证码已经过期或尝试次数过多，已重新发送，请输入新收到的验证码。")
+                    failure is PhoneLogin.Failure && !failure.canRetryCode -> {
+                        val detail=listOfNotNull(safeError(failure),failure.diagnostics).joinToString("\n\n")
+                        showDialog(AlertDialog.Builder(activity).setTitle("登录未完成").setMessage(detail)
+                            .setPositiveButton("返回账号页") { _,_->show() }
+                            .setNeutralButton("改用扫码") { _,_->qrLogin() })
+                    }
+                    else -> code(attempt,safeError(failure))
+                }
             })
         }
+    }
+    /** 平台要求的身份验证：用这台手机号向指定号码发一条内容固定的短信。电视发不出去，所以让用户用手边的手机发。 */
+    private fun upSms(attempt: LoginAttempt,up: PhoneLogin.UpSms) {
+        val alternatives=if(up.alternatives.isEmpty()) "" else "\n平台也给了其它验证方式（例如抖音账号验证），本应用不做；那种情况请改用扫码登录。"
+        showDialog(AlertDialog.Builder(activity).setTitle("红果要求身份验证")
+            .setMessage("请用手机号 ${up.mobile} 发送一条内容为「${up.smsContent}」的短信到 ${up.channelMobile}。\n发送后点「我已发送」继续。${alternatives}")
+            .setPositiveButton("我已发送") { _,_-> confirmUpSms(attempt) }
+            .setNeutralButton("改用扫码") { _,_-> qrLogin() }
+            .setNegativeButton("返回",null))
+    }
+    /** 确认那条短信已到达平台；通过后重新发一张验证码——同一个会话里的第二张才认那张身份验证票据。 */
+    private fun confirmUpSms(attempt: LoginAttempt) {
+        task({ attempt.confirm() },{ _ -> again(attempt,"身份验证已通过，请再输入一次新收到的验证码。") },{ failure ->
+            if(failure is PhoneLogin.Failure && failure.canRetryCode) {
+                showDialog(AlertDialog.Builder(activity).setTitle("还没收到这条短信").setMessage(safeError(failure))
+                    .setPositiveButton("再试一次") { _,_-> confirmUpSms(attempt) }
+                    .setNeutralButton("改用扫码") { _,_-> qrLogin() }
+                    .setNegativeButton("返回",null))
+            } else showDialog(AlertDialog.Builder(activity).setTitle("身份验证未完成").setMessage(safeError(failure))
+                .setPositiveButton("改用扫码") { _,_-> qrLogin() }.setNegativeButton("返回",null))
+        })
+    }
+    /** 重新发一张验证码，然后回到输入验证码那一步。 */
+    private fun again(attempt: LoginAttempt,note: String) {
+        task({ attempt.again() },{ masked -> attempt.masked=masked; code(attempt,note) },{ failure ->
+            showDialog(AlertDialog.Builder(activity).setTitle("验证码没发出去").setMessage(safeError(failure))
+                .setPositiveButton("改用扫码") { _,_-> qrLogin() }.setNegativeButton("返回",null))
+        })
     }
     private fun validateAccount(web: AccountCredentials): Pair<AccountCredentials,CloudProfile> {
         val device=client.registerDevice() ?: throw java.io.IOException("账号设备初始化失败")
