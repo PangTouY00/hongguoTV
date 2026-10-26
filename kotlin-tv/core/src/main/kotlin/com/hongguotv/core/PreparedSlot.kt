@@ -21,5 +21,19 @@ class PreparedSlot<T: Closeable>(private val clock: ()->Long,private val ttl: Lo
         return result
     }
     @Synchronized fun isFresh(next: String): Boolean = value!=null && key==next && clock()-readyAt in 0..ttl
+    /** True while a result for this key has been started but has not landed yet. */
+    @Synchronized fun isOutstanding(next: String): Boolean = value==null && key==next
+    /** Waits for an outstanding warm-up of this key instead of paying for a second one. Returns
+     *  null as soon as nothing for this key is in flight, so a cancelled or failed request never
+     *  makes a switch wait. Waiting is a short poll, never a held monitor. */
+    fun await(next: String,timeoutMs: Long): T? {
+        val until=clock()+maxOf(0L,timeoutMs)
+        while(isOutstanding(next)) {
+            if(clock()>=until) return null
+            try { Thread.sleep(25) } catch(_: InterruptedException) { return null }
+        }
+        // Only this key is consumed; a warm-up that moved on to another episode stays untouched.
+        return if(isFresh(next)) take(next) else null
+    }
     @Synchronized fun clear() { revision++; value?.close(); value=null; key="" }
 }

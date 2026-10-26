@@ -128,7 +128,9 @@ class MainActivity: Activity() {
     private lateinit var connectivity: ConnectivityManager
     private var networkRegistered=false
     private val networkCallback=object: ConnectivityManager.NetworkCallback() {
-        private fun changed() { main.post { if(connectivity.isActiveNetworkMetered || !networkAvailable()) cancelPrefetch(); if(foreground && screen=="player" && playError && autoRecovery) scheduleRecovery() } }
+        // Only a lost connection drops the warm-up. Switching Wi-Fi to mobile data mid-episode must
+        // not throw away the next episode that was already paid for by an address lookup and index.
+        private fun changed() { main.post { if(!networkAvailable()) cancelPrefetch(); if(foreground && screen=="player" && playError && autoRecovery) scheduleRecovery() } }
         override fun onAvailable(network: Network) { changed() }
         override fun onLost(network: Network) { changed() }
         override fun onCapabilitiesChanged(network: Network,capabilities: NetworkCapabilities) { changed() }
@@ -1226,12 +1228,16 @@ class MainActivity: Activity() {
             requestedAutoplay=true;pausedForLifecycle=false
             player?.seekToNextMediaItem();player?.play();return
         }
-        val prefetched=if(position==0L && !recovering) preparedNext.take("${data.episodes[selectedIndex]}:${library.maxQuality}") else null
-        val claimedHttp=if(prefetched!=null) prefetchHttp.also { prefetchHttp=null } else null
-        android.util.Log.i("HongguoTV","Episode transition target=${selectedIndex+1} cached=${prefetched!=null} warmupAttempts=$prefetchAttempts warmupRunning=${prefetchJob?.isDone==false}")
+        val targetKey="${data.episodes[selectedIndex]}:${library.maxQuality}"
+        // A warm-up for this very episode that is still running is worth waiting a moment for:
+        // starting another one would pay for the same address lookup and index twice.
+        val warmupInFlight=position==0L && !recovering && prefetchedFor==targetKey && prefetchJob?.isDone==false
+        android.util.Log.i("HongguoTV","Episode transition target=${selectedIndex+1} warmupWaiting=$warmupInFlight warmupAttempts=$prefetchAttempts warmupRunning=${prefetchJob?.isDone==false}")
         saveProgress(); library.flush(); invalidatePage(); favoriteMonitor.stop(); releaseCatalogViews()
         if(reuse) {
-            cancelRecovery(); cancelPrefetch(); tvTools.close()
+            // Keeping the in-flight warm-up must still drop any other queued source: a leftover
+            // source would auto-transition to the wrong episode when this one ends.
+            cancelRecovery(); clearQueuedEpisode(); if(!warmupInFlight) cancelPrefetch(); tvTools.close()
             episodePanel?.dismiss(); episodePanel=null; speedDialog?.dismiss(); speedDialog=null
             playerListener?.let { player?.removeListener(it) }; playerListener=null
             player?.stop(); player?.clearMediaItems()
@@ -1239,7 +1245,7 @@ class MainActivity: Activity() {
             main.removeCallbacks(hideHud); main.removeCallbacks(seekRunnable); pendingSeek=null
         } else releasePlayer()
         artwork.cancelPage(clearMemory=true)
-        playbackHttp=claimedHttp; video=prefetched
+        playbackHttp=null; video=null
         var firstReady=true; var firstFrame=true
         if(!recovering) recovery.reset()
         autoRecovery=false; readySince=0; startPosition=position.coerceAtLeast(0); requestedAutoplay=autoplay
@@ -1288,10 +1294,13 @@ class MainActivity: Activity() {
         controls.removeAllViews(); controls.visibility=View.GONE; transportPlay=null; sleepButton=null
         syncMediaSession()
         val requestedId=data.episodes[episodeIndex]; val maxQuality=library.maxQuality; val ticket=generation
-        work({ prefetched?.let { OpenedStream(it,null,emptyList(),it.trackInfo()) }
-            ?: openStream(repository.http,repository,requestedId,maxQuality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) }
-            ?: throw java.io.IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集") }, { opened ->
-            val remote=opened.video; video=remote; quality=playedQualityLabel(opened,maxQuality); attemptedQuality=opened.rendition?.quality ?: 0
+        work({ val carried=claimWarmup(targetKey,warmupInFlight)
+            carried.first?.let { OpenedStream(it,null,emptyList(),it.trackInfo(),carried.second) }
+                ?: openStream(repository.http,repository,requestedId,maxQuality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) }
+                ?: throw java.io.IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集") }, { opened ->
+            val remote=opened.video; video=remote; val carriedOver=opened.http!=null
+            if(carriedOver) playbackHttp=opened.http
+            quality=playedQualityLabel(opened,maxQuality); attemptedQuality=opened.rendition?.quality ?: 0
             currentTrack=opened.track; currentRendition=opened.rendition; currentTiers=opened.tiers
             val p=player ?: run {
                 val load=DefaultLoadControl.Builder().setBufferDurationsMs(15000,30000,1000,2000).setTargetBufferBytes(12*1024*1024).build()
@@ -1314,7 +1323,7 @@ class MainActivity: Activity() {
                             return
                         }
                         playbackReady=true;episodeDuration=p.duration.coerceAtLeast(0)
-                        if(firstReady) { firstReady=false; readySince=android.os.SystemClock.elapsedRealtime(); android.util.Log.i("HongguoTV","Playback ready episode=${episodeIndex+1} preloaded=${prefetched!=null} reused=$reuse elapsedMs=${readySince-playbackStarted}") }
+                        if(firstReady) { firstReady=false; readySince=android.os.SystemClock.elapsedRealtime(); android.util.Log.i("HongguoTV","Playback ready episode=${episodeIndex+1} carried=$carriedOver reused=$reuse elapsedMs=${readySince-playbackStarted}") }
                         if(hud.visibility==View.VISIBLE) updatePlaybackText()
                     }
                     syncMediaSession()
@@ -1328,7 +1337,7 @@ class MainActivity: Activity() {
                 override fun onRenderedFirstFrame() {
                     if(active() && firstFrame) {
                         firstFrame=false
-                        android.util.Log.i("HongguoTV","Playback first frame episode=${episodeIndex+1} preloaded=${prefetched!=null} reused=$reuse elapsedMs=${android.os.SystemClock.elapsedRealtime()-playbackStarted}")
+                        android.util.Log.i("HongguoTV","Playback first frame episode=${episodeIndex+1} carried=$carriedOver reused=$reuse elapsedMs=${android.os.SystemClock.elapsedRealtime()-playbackStarted}")
                     }
                 }
                 override fun onIsPlayingChanged(playing: Boolean) { if(active()) { if(hud.visibility==View.VISIBLE) showHud(); updatePauseGlyph(); syncMediaSession() } }
@@ -1361,6 +1370,16 @@ class MainActivity: Activity() {
         preparedNext.clear(); prefetchJob?.cancel(true); prefetchJob=null
         closeTransport(prefetchHttp); prefetchHttp=null; prefetchedFor=""
     }
+    /** Takes a finished warm-up for this episode, or waits briefly for one that is still running
+     *  so a switch never pays for the same address lookup and index twice. Runs off the UI thread. */
+    private fun claimWarmup(key: String,waiting: Boolean): Pair<RemoteVideo?,okhttp3.OkHttpClient?> {
+        val warm=if(waiting) preparedNext.await(key,1_500) else preparedNext.take(key)
+        if(warm==null) { if(waiting) cancelPrefetch(); return Pair(null,null) }
+        if(waiting) android.util.Log.i("HongguoTV","Episode transition carried a warm-up that was still running")
+        if(waiting) prefetchJob?.cancel(true)
+        prefetchJob=null
+        return Pair(warm,prefetchHttp.also { prefetchHttp=null })
+    }
     private fun maybePrefetch() {
         val p=player ?: return; val data=detail ?: return
         if(!foreground || !p.isPlaying || !library.autoNext || playError || sleepStopped ||
@@ -1368,9 +1387,12 @@ class MainActivity: Activity() {
         val id=data.episodes[episodeIndex+1]; val quality=library.maxQuality; val key="$id:$quality"
         if(preparedNext.isFresh(key) || prefetchJob?.isDone==false) return
         val now=android.os.SystemClock.elapsedRealtime()
+        val metered=connectivity.isActiveNetworkMetered
         if(readySince==0L || !PrefetchPolicy.canStart(p.currentPosition,p.duration,p.playbackParameters.speed,
-                now-readySince,p.bufferedPosition-p.currentPosition)) return
-        if(prefetchAttempts>=3 || (prefetchAttempts>0 && now-prefetchAttemptAt<15_000) || connectivity.isActiveNetworkMetered || !networkAvailable()) return
+                now-readySince,p.bufferedPosition-p.currentPosition,metered)) return
+        if(prefetchAttempts>=PrefetchPolicy.maxAttempts(metered) ||
+            (prefetchAttempts>0 && now-prefetchAttemptAt<PrefetchPolicy.retryCooldownMs(metered)) || !networkAvailable()) return
+        val warmBytes=PrefetchPolicy.warmBytes(metered)
         cancelPrefetch(); prefetchedFor=key; prefetchAttemptAt=now; prefetchAttempts++
         val ticket=preparedNext.begin(key)
         val http=okhttp3.OkHttpClient.Builder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).callTimeout(20,java.util.concurrent.TimeUnit.SECONDS).build()
@@ -1382,10 +1404,10 @@ class MainActivity: Activity() {
                 val prepared=scope.run {
                     val opened=openStream(http,source,id,quality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) }
                         ?: throw java.io.IOException("没有电视可播放的清晰度")
-                    opened.video.also { remote=it; it.warm(PrefetchPolicy.WARM_BYTES) }
+                    opened.video.also { remote=it; it.warm(warmBytes) }
                 }
                 if(preparedNext.complete(ticket,key,prepared)) {
-                    android.util.Log.i("HongguoTV","Next episode opening buffered bytes=${PrefetchPolicy.WARM_BYTES}")
+                    android.util.Log.i("HongguoTV","Next episode opening buffered bytes=$warmBytes metered=$metered")
                     main.post { queuePreparedEpisode(key) }
                 }
             } catch(_: Exception) {
