@@ -41,6 +41,20 @@ class TvSocialTest {
         } finally { controller.pause().stop().destroy() }
     }
 
+    @Test fun platformDanmakuStickerTagsResolveToImages() {
+        val controller=Robolectric.buildActivity(Activity::class.java).setup()
+        try {
+            val emoji=CommentEmoji(controller.get())
+            for(tag in listOf("爱慕","爽","奸笑","震惊","什么","尬笑","舔屏","吃瓜","探究","送花","笑")) {
+                val parts=emoji.segments("前文[$tag]后文",32)
+                assertEquals("$tag 应拆成前文／插画／后文三段",3,parts.size)
+                assertEquals("前文",parts[0].text);assertNull(parts[0].bitmap)
+                assertNotNull("$tag 缺少插画",parts[1].bitmap)
+                assertEquals("后文",parts[2].text);assertNull(parts[2].bitmap)
+            }
+        } finally { controller.pause().stop().destroy() }
+    }
+
     @Test fun commentSignatureWorksOnAndroid6And8() {
         val headers=com.hongguotv.core.CommentSignature().headers("aid=8662&device_id=123",1700000000123,ByteArray(11) { it.toByte() })
         assertEquals("840420e100007c44bd0bfe74163888622f1454edf858fca6234c",headers["X-Gorgon"])
