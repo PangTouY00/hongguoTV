@@ -16,10 +16,10 @@ import org.json.JSONObject
  *   换到的凭据带上这台设备的 `device_id` / `iid`（[AccountCredentials.device]），
  *   之后账号接口的签名都用它，会话与设备保持一致。
  *
- * 实测边界（2026-10-26 复核）：`aid=8662` 这条 passport 手机号流程是给已登录账号**绑手机**用的，
- * 四个验码端点都回 `error_code 1`（会话不成立），平台不给第三方客户端签发登录会话；
- * 官网通道（[WebLogin]）的手机号发码又被滑块风控（`1105`）挡住。电视端目前真正可用的是扫码登录，
- * [verify] 失败时会如实说明并把用户引到扫码。
+ * 实测边界（2026-10-26）：`aid=8662` 这条 passport 手机号流程能发出短信；此前对四个验码端点的
+ * 观察是回 `error_code 1`（会话不成立），但真机上出现过 `1203`（错误次数过多或验证码过期），
+ * 说明请求确实进到了校验环节，这条通道到底能不能签发会话还没有定论。
+ * 官网通道（[WebLogin]）的手机号发码则被滑块风控（`1105`）挡住。
  *
  * 一个实例对应一次登录；重新发码会换一台新设备，之前的验证码随之作废。
  */
@@ -57,11 +57,9 @@ class PhoneLogin(private val http: OkHttpClient) {
     /**
      * 用**同一台设备**验码换取登录态。
      *
-     * 真机抓包与上游实测都表明：`aid=8662` 的 passport 手机号流程是给已登录账号**绑手机**用的，
-     * `validate_code` 对第三方客户端一律回 `error_code 1`（会话不成立），与是否带 `mobile_ticket`、
-     * GET 还是 POST 无关。所以这里把 [VERIFY_ATTEMPTS] 试完再判定：只有「验证码本身不对」和
-     * 「平台要求滑块」两种情况提前返回，其余错误继续换下一个端点；全部失败时如实说明原因，
-     * 并把用户引到当前真正可用的扫码登录，不再让人反复重发验证码。
+     * 诊断包：只发一次请求，失败时把平台原话直接落到界面上。之前这里会把 [VERIFY_ATTEMPTS]
+     * 四个端点连发完，同一个 `mobile_ticket` 被校验四次，平台改回 `1203`（错误次数过多）之后
+     * 又盖住第一个真正的错误，那样观察到的就不是平台的第一手答复了。
      */
     fun verify(code: String): AccountCredentials {
         if(expired) throw Failure("本次登录会话已失效，不能继续使用此会话提交验证码",1)
@@ -85,7 +83,8 @@ class PhoneLogin(private val http: OkHttpClient) {
             val distinct=codes.distinct()
             if(1 in distinct) { expired=true; cookies.clear(); ticket="" }
             val reason=described ?: "平台没有为这次手机号验证签发登录会话（错误码 ${distinct.joinToString("、").ifBlank { "无" }}）"
-            throw Failure("$reason。手机号登录目前只在官方 App 内可用，电视端请改用扫码登录。",distinct.firstOrNull(),1102 in distinct)
+            // 诊断包：不加「只在官方 App 内可用」这类结论，让平台的第一手答复原样落到界面上。
+            throw Failure("$reason。本次只向 validate_code 发了一次请求，以上是平台的第一手答复。",distinct.firstOrNull(),1102 in distinct)
         }
         val header=cookies.entries.joinToString("; ") { (name,value) -> "$name=$value" }
         return AccountCredentialsParser.parseHeader(header)
@@ -125,9 +124,13 @@ class PhoneLogin(private val http: OkHttpClient) {
         private const val PASSPORT="https://is.snssdk.com"
         /** login-lab 实测：24 = 登录验证码；1 / 3 是绑定 / 换绑手机号。 */
         const val LOGIN_CODE_TYPE="24"
-        /** `validate_code` 是要验证的主角；`sms_login` 系列是同一套 passport 上常见的直登端点，一并试完再判定。 */
-        internal val VERIFY_ATTEMPTS=listOf("/passport/mobile/validate_code/v1/" to false,"/passport/mobile/validate_code/v1/" to true,
-            "/passport/mobile/sms_login/" to true,"/passport/mobile/sms_login_only/" to true)
+        /**
+         * 诊断包：只留 `validate_code` 的 GET 一次请求。
+         *
+         * 四个端点连发会把同一个 `mobile_ticket` 的校验配额烧光，最后一个错误（1203 错误次数过多）
+         * 又盖住第一个真正的错误。这里只发一次，让平台的第一手答复原样落到界面上。
+         */
+        internal val VERIFY_ATTEMPTS=listOf("/passport/mobile/validate_code/v1/" to false)
 
         /**
          * 区号 + 本地号码 → 平台认的手机号；不合格时抛 [IllegalArgumentException]，[Throwable.message] 可直接显示。

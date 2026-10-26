@@ -73,18 +73,18 @@ class CloudAccountTest {
         assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
         assertEquals(1,calls); assertTrue(login.trace.isEmpty())
     }
-    @Test fun rejectedLoginSessionExhaustsEveryEndpointThenRefusesTheSameCode() {
+    @Test fun rejectedLoginSessionKeepsThePlatformsFirstReplyAndNeverRetriesAnotherEndpoint() {
         var calls=0
         val login=PhoneLogin(http { calls++; """{"message":"error","data":{"error_code":1,"description":"会话过期，请重新登录"}}""" })
         login.deviceId=credentials.deviceId; login.installId=credentials.installId
         login.cookies["temporary"]="test-session"; login.ticket="test-ticket"
         val first=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
         assertEquals(1,first.errorCode); assertFalse(first.canRetryCode)
-        // 单个端点被拒不再直接判定登录不可用：四个端点都要试完，再如实给出结论与扫码引导。
-        assertEquals(PhoneLogin.VERIFY_ATTEMPTS.size,calls)
-        assertTrue(first.message.orEmpty().contains("扫码"))
+        // 只发一次请求：同一个 ticket 被反复校验会触发 1203（错误次数过多），把平台的第一手答复盖住。
+        assertEquals(1,PhoneLogin.VERIFY_ATTEMPTS.size); assertEquals(1,calls)
+        assertTrue(first.message.orEmpty().contains("validate_code"))
         assertTrue(login.cookies.isEmpty()); assertEquals("",login.ticket)
         assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
-        assertEquals(PhoneLogin.VERIFY_ATTEMPTS.size,calls)
+        assertEquals(1,calls)
     }
 }

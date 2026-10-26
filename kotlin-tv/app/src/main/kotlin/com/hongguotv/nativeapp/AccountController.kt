@@ -222,7 +222,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
         if(closed) return
         if(busy) { toast("账号操作进行中，请稍候"); return }
         val signed=credentials!=null
-        val choices=if(signed) arrayOf("云端继续观看（最近 50 部）","刷新账号和云端记录","退出红果账号") else arrayOf("使用红果 App 扫码登录","手机号 + 验证码登录（平台暂不签发会话）")
+        val choices=if(signed) arrayOf("云端继续观看（最近 50 部）","刷新账号和云端记录","退出红果账号") else arrayOf("使用红果 App 扫码登录","手机号 + 验证码登录（诊断包）")
         showDialog(AlertDialog.Builder(activity).setTitle(profile?.let { "红果账号 · ${it.nickname}" } ?: "红果账号（测试功能）")
             .setItems(choices) { _,index ->
                 if(!signed) { if(index==0) qrLogin() else phone() } else when(index) { 0->showHistory(); 1->refresh(true); 2->logout() }
@@ -243,10 +243,8 @@ class AccountController(private val activity: Activity,private val play: (CloudP
     /** One sent-code outcome: [verify] completes the same login session it belongs to. */
     private class LoginAttempt(val masked: String,val verify: (String)->AccountCredentials)
     private fun phone() {
-        // 先把平台边界说清楚：这条通道能发出短信，但平台不给第三方客户端签发登录会话，
-        // 官网通道的手机号发码又被滑块风控挡住。真正可用的是扫码登录，所以这里提前提示，
-        // 免得用户在电视上反复重发验证码。
-        input("手机号（确认后发送登录验证码）",false,"平台目前只对官方 App 内的手机号验证签发登录会话。验证码提交失败时请改用扫码登录，不必反复获取验证码。") { raw ->
+        // 诊断包：不再预先断言「平台不签发会话」，只说明这次只提交一次验证码、失败时显示平台的原始答复。
+        input("手机号（确认后发送登录验证码）",false,"诊断包：验证码只提交一次。失败时界面显示平台的原始答复和错误码。") { raw ->
             val mobile=runCatching { PhoneLogin.parse(raw) }.getOrElse { toast(safeError(it)); return@input }
             val app=PhoneLogin(http); val web=WebLogin(http)
             task({
