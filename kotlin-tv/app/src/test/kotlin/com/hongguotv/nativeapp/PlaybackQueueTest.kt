@@ -1,7 +1,6 @@
 package com.hongguotv.nativeapp
 
 import android.net.ConnectivityManager
-import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkInfo
 import android.view.View
@@ -21,6 +20,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.LooperMode
 import org.robolectric.shadows.ShadowLooper
+import org.robolectric.shadows.ShadowNetworkCapabilities
 import java.lang.reflect.Proxy
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
@@ -66,14 +66,20 @@ class PlaybackQueueTest {
     private fun meteredNetwork(activity: MainActivity) {
         val connectivity=get(activity,"connectivity") as ConnectivityManager
         val shadow=shadowOf(connectivity)
-        val info=NetworkInfo(ConnectivityManager.TYPE_MOBILE,0,"mobile",true)
-        shadow.setActiveNetworkInfo(info)
-        val network=connectivity.activeNetwork ?: run {
-            val constructor=Network::class.java.getDeclaredConstructor(Int::class.java).apply { isAccessible=true }
-            constructor.newInstance(7).also { shadow.addNetwork(it,info) }
-        }
-        shadow.setNetworkCapabilities(network,NetworkCapabilities.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build())
+        // Robolectric counts TYPE_MOBILE as metered once it is the active network.
+        shadow.setActiveNetworkInfo(NetworkInfo(ConnectivityManager.TYPE_MOBILE,0,"mobile","mobile"))
+        val network=connectivity.activeNetwork ?: throw AssertionError("Robolectric 没有给出活动网络")
+        // android.net.NetworkCapabilities has no public builder, so the instance and the hidden
+        // capability writer come from Robolectric's own shadow. Leaving out NET_CAPABILITY_NOT_METERED
+        // is what makes it report itself as a metered network, which is the cellular case here.
+        val capabilities=ShadowNetworkCapabilities.newInstance()
+        val bit=NetworkCapabilities::class.java.getDeclaredMethod("getNetworkCapability",String::class.java)
+            .invoke(null,NetworkCapabilities.NET_CAPABILITY_INTERNET) as Int
+        NetworkCapabilities::class.java.getDeclaredMethod("addCapability",Int::class.javaPrimitiveType)
+            .invoke(capabilities,bit)
+        shadow.setNetworkCapabilities(network,capabilities)
         assertTrue(connectivity.isActiveNetworkMetered)
+        assertTrue(connectivity.getNetworkCapabilities(network)!!.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET))
     }
     private fun fixture(test: (MainActivity,QueuePlayer,Library,RemoteVideo)->Unit) {
         val controller=Robolectric.buildActivity(MainActivity::class.java).create();val activity=controller.get()
@@ -129,6 +135,10 @@ class PlaybackQueueTest {
         assertFalse(fake.calls.contains("stop"))
     }
     @Test fun cellularStillWarmsUpTheNextEpisode()=fixture { activity,fake,library,_ ->
+        // The shared fixture fills the slot for the other tests; this one needs an empty slot so the
+        // policy itself decides whether cellular may start a warm-up.
+        @Suppress("UNCHECKED_CAST") val slot=get(activity,"preparedNext") as PreparedSlot<RemoteVideo>
+        slot.clear()
         meteredNetwork(activity)
         fake.position=80_000L
         set(activity,"readySince",android.os.SystemClock.elapsedRealtime()-3_000)
