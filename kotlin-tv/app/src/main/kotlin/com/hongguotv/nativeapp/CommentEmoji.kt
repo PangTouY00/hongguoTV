@@ -12,7 +12,12 @@ import android.text.style.ImageSpan
 /** A run of a danmaku line: either plain text or one emoji illustration. */
 internal class EmojiSegment(val text: String, val bitmap: Bitmap?)
 
-/** Generic Fluent emoji illustrations, not the platform's original stickers. Unknown tags remain intact. */
+/**
+ * Fluent 表情插画，用来替代表情标签，不是平台原图；没有对应插画时标签原样保留。
+ *
+ * 名字表覆盖两类标签：评论里常见的通用写法，以及红果弹幕表情面板里的名字
+ * （爱慕、爽、奸笑、震惊、什么、尬笑、舔屏、吃瓜、探究、送花、笑）。
+ */
 internal class CommentEmoji(private val context: Context) {
     private val names=mapOf(
         "笑哭" to "1f602",
@@ -39,7 +44,19 @@ internal class CommentEmoji(private val context: Context) {
         "打call" to "1f499",
         "666" to "1f525",
         "酸" to "1f964",
-        "吃瓜" to "1f349"
+        "吃瓜" to "1f349",
+        // 红果弹幕表情面板里的标签名，按语义映射到同一套插画。
+        "爱慕" to "1f60d",
+        "爽" to "1f60c",
+        "奸笑" to "1f60f",
+        "震惊" to "1f632",
+        "什么" to "1f928",
+        // Fluent 表情集里没有 U+1F605，尬笑用 U+1F603（笑中带汗）的插画代替。
+        "尬笑" to "1f603",
+        "舔屏" to "1f924",
+        "探究" to "1f9d0",
+        "送花" to "1f490",
+        "笑" to "1f642"
     )
     private val pattern=Regex("""(?:\[|［|【)([^\]］】]{1,20})(?:\]|］|】)""")
     private val cache=mutableMapOf<String,Bitmap>()
@@ -49,13 +66,16 @@ internal class CommentEmoji(private val context: Context) {
         if(size<=0) return null
         val key="$file:$size"
         cache[key]?.let { return it }
-        val decoded=runCatching { context.assets.open("comment_emoji/$file.webp").use { BitmapFactory.decodeStream(it) } }.getOrNull() ?: return null
+        val decoded=openAsset(file)?.use { BitmapFactory.decodeStream(it) } ?: return null
         val scaled=if(decoded.width==size && decoded.height==size) decoded
             else runCatching { Bitmap.createScaledBitmap(decoded,size,size,true) }.getOrDefault(decoded)
         if(scaled!==decoded) decoded.recycle()
         cache[key]=scaled
         return scaled
     }
+    /** 素材有两种容器：早期内置的是 WebP，后补的是 Fluent 3D 的 PNG，两种 BitmapFactory 都能直接解。 */
+    private fun openAsset(file: String): java.io.InputStream? =
+        listOf("webp","png").firstNotNullOfOrNull { extension -> runCatching { context.assets.open("comment_emoji/$file.$extension") }.getOrNull() }
     /** Splits one line into drawable runs so a canvas-drawn danmaku can show the same stickers as the comment list. */
     fun segments(text: String, size: Int): List<EmojiSegment> {
         val out=ArrayList<EmojiSegment>()
