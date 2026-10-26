@@ -87,4 +87,42 @@ class CloudAccountTest {
         assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
         assertEquals(1,calls)
     }
+    /** 诊断包：失败时要说清平台到底给了哪些会话材料——只列名字，任何值都不出现。 */
+    @Test fun rejectedLoginSessionListsTheSessionMaterialsWithoutExposingTheirValues() {
+        val login=PhoneLogin(OkHttpClient.Builder().addInterceptor { chain ->
+            val request=chain.request()
+            val body=when {
+                request.url.encodedPath.contains("device_register") -> """{"device_id":"3012345678901234567","install_id":"3012345678901234568"}"""
+                request.url.encodedPath.contains("send_code") -> """{"message":"success","data":{"mobile":"+86******0000","mobile_ticket":"test-ticket","retry_time":60}}"""
+                else -> """{"message":"error","data":{"error_code":1,"description":"会话过期，请重新登录"}}"""
+            }
+            val reply=Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK").body(body.toResponseBody())
+            if(request.url.encodedPath.contains("send_code")) reply.header("Set-Cookie","verify_device_cookie=test-cookie; Path=/")
+            reply.build()
+        }.build())
+        login.send("13800138000")
+        assertEquals("test-ticket",login.ticket)
+        val failure=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
+        val note=failure.diagnostics.orEmpty()
+        assertTrue(note.contains("验证票据：已取到"))
+        assertTrue(note.contains("mobile_ticket")); assertTrue(note.contains("verify_device_cookie"))
+        assertTrue(note.contains("error_code")); assertTrue(note.contains("description"))
+        // 只有字段名与 Cookie 名：值、手机号、验证码一律不出现在诊断文本里。
+        assertFalse(note.contains("test-ticket")); assertFalse(note.contains("test-cookie"))
+        assertFalse(note.contains("13800138000")); assertFalse(note.contains("123456"))
+    }
+    /** 票据字段缺失时不再静默：请求里确实少了它，这一点必须被说出来。 */
+    @Test fun missingVerificationTicketIsReportedInsteadOfBeingSilentlyDroppedFromTheRequest() {
+        var sentTicket:String?=null
+        val login=PhoneLogin(http { request -> when {
+            request.url.encodedPath.contains("device_register") -> """{"device_id":"3012345678901234567","install_id":"3012345678901234568"}"""
+            request.url.encodedPath.contains("send_code") -> """{"message":"success","data":{"mobile":"+86******0000","retry_time":60}}"""
+            else -> { sentTicket=request.url.queryParameter("mobile_ticket"); """{"message":"error","data":{"error_code":1,"description":"会话过期，请重新登录"}}""" }
+        } })
+        login.send("13800138000")
+        assertEquals("",login.ticket)
+        val failure=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
+        assertNull("空票据被 filterValues 静默丢掉，请求里没有它",sentTicket)
+        assertTrue(failure.diagnostics.orEmpty().contains("验证票据：没取到"))
+    }
 }

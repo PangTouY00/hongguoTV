@@ -243,8 +243,8 @@ class AccountController(private val activity: Activity,private val play: (CloudP
     /** One sent-code outcome: [verify] completes the same login session it belongs to. */
     private class LoginAttempt(val masked: String,val verify: (String)->AccountCredentials)
     private fun phone() {
-        // 诊断包：不再预先断言「平台不签发会话」，只说明这次只提交一次验证码、失败时显示平台的原始答复。
-        input("手机号（确认后发送登录验证码）",false,"诊断包：验证码只提交一次。失败时界面显示平台的原始答复和错误码。") { raw ->
+        // 诊断包（第二轮）：只提交一次验证码；失败时除了平台的原始答复，还列出本次请求实际带过去的会话材料。
+        input("手机号（确认后发送登录验证码）",false,"诊断包：验证码只提交一次。失败时界面显示平台的原始答复，以及本次请求带过去的会话材料（只有字段名与 Cookie 名，不含任何值）。") { raw ->
             val mobile=runCatching { PhoneLogin.parse(raw) }.getOrElse { toast(safeError(it)); return@input }
             val app=PhoneLogin(http); val web=WebLogin(http)
             task({
@@ -274,7 +274,9 @@ class AccountController(private val activity: Activity,private val play: (CloudP
                 acceptAccount(next,account)
             },{ failure ->
                 if(failure is PhoneLogin.Failure && !failure.canRetryCode) {
-                    showDialog(AlertDialog.Builder(activity).setTitle("登录未完成").setMessage(safeError(failure))
+                    // 诊断包：会话材料清单单独接在结论后面，不走 safeError 的 150 字截断。
+                    val detail=listOfNotNull(safeError(failure),failure.diagnostics).joinToString("\n\n")
+                    showDialog(AlertDialog.Builder(activity).setTitle("登录未完成").setMessage(detail)
                         .setPositiveButton("返回账号页") { _,_->show() }
                         .setNeutralButton("改用扫码") { _,_->qrLogin() })
                 } else code(attempt,safeError(failure))
