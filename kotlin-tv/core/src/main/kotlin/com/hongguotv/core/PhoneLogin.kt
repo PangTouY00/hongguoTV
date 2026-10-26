@@ -11,11 +11,15 @@ import org.json.JSONObject
 /**
  * 手机号 + 验证码登录（大陆与境外号码都收）。
  *
- * * [send]：先匿名注册一台**新设备**（[DeviceRegister]），再用这台设备的身份发码。
- *   设备注册仅是前置条件；短信登录换取会话尚未完成实机验收。
+ * * [send]：先匿名注册一台**新设备**（[DeviceRegister]），再用这台设备的身份发码。发码这一步实测可用。
  * * [verify]：用**同一台设备**验码，平台在 `Set-Cookie` 里下发 `sessionid`。
  *   换到的凭据带上这台设备的 `device_id` / `iid`（[AccountCredentials.device]），
  *   之后账号接口的签名都用它，会话与设备保持一致。
+ *
+ * 实测边界（2026-10-26 复核）：`aid=8662` 这条 passport 手机号流程是给已登录账号**绑手机**用的，
+ * 四个验码端点都回 `error_code 1`（会话不成立），平台不给第三方客户端签发登录会话；
+ * 官网通道（[WebLogin]）的手机号发码又被滑块风控（`1105`）挡住。电视端目前真正可用的是扫码登录，
+ * [verify] 失败时会如实说明并把用户引到扫码。
  *
  * 一个实例对应一次登录；重新发码会换一台新设备，之前的验证码随之作废。
  */
@@ -50,27 +54,38 @@ class PhoneLogin(private val http: OkHttpClient) {
         return Sent(data.optString("mobile").ifBlank { mobile },data.optInt("retry_time",60))
     }
 
+    /**
+     * 用**同一台设备**验码换取登录态。
+     *
+     * 真机抓包与上游实测都表明：`aid=8662` 的 passport 手机号流程是给已登录账号**绑手机**用的，
+     * `validate_code` 对第三方客户端一律回 `error_code 1`（会话不成立），与是否带 `mobile_ticket`、
+     * GET 还是 POST 无关。所以这里把 [VERIFY_ATTEMPTS] 试完再判定：只有「验证码本身不对」和
+     * 「平台要求滑块」两种情况提前返回，其余错误继续换下一个端点；全部失败时如实说明原因，
+     * 并把用户引到当前真正可用的扫码登录，不再让人反复重发验证码。
+     */
     fun verify(code: String): AccountCredentials {
         if(expired) throw Failure("本次登录会话已失效，不能继续使用此会话提交验证码",1)
         check(deviceId.isNotEmpty()) { "请先发送验证码" }
         val params=mapOf("mobile" to mobile,"code" to code,"type" to type,"mobile_ticket" to ticket)
-        val replies=mutableListOf<JSONObject>()
+        val codes=mutableListOf<Int>()
+        var described:String?=null
         for((path,form) in VERIFY_ATTEMPTS) {
             val reply=call(path,params,form)
-            replies+=reply
             if(cookies.containsKey("sessionid")) break
-            val error=reply.optJSONObject("data")
-            if(error!=null && error.optInt("error_code",0)!=0) {
-                val errorCode=error.optInt("error_code")
-                if(errorCode==1) {
-                    expired=true; cookies.clear(); ticket=""
-                    throw Failure("平台拒绝本次登录会话（错误码 1）。短信发送成功不代表登录会话有效，当前登录链路尚未接通；请勿反复获取或提交验证码。",errorCode)
-                }
-                throw Failure(describe(error) ?: "验证码校验失败",errorCode,errorCode==1102)
-            }
+            val error=reply.optJSONObject("data") ?: continue
+            val errorCode=error.optInt("error_code",0)
+            if(errorCode==0) continue
+            codes+=errorCode
+            described=describe(error) ?: described
+            // 验证码错了换端点也没有意义，直接让界面重新输入；要求滑块的只能改用扫码。
+            if(errorCode==1102) throw Failure(described ?: "验证码不正确，请重新输入",errorCode,true)
+            if(errorCode==1105) throw Failure("红果要求完成滑块验证，请改用扫码登录",errorCode)
         }
         if(!cookies.containsKey("sessionid")) {
-            throw Failure(replies.firstNotNullOfOrNull { describe(it.optJSONObject("data") ?: JSONObject()) } ?: "登录没有成功，平台没有下发登录态")
+            val distinct=codes.distinct()
+            if(1 in distinct) { expired=true; cookies.clear(); ticket="" }
+            val reason=described ?: "平台没有为这次手机号验证签发登录会话（错误码 ${distinct.joinToString("、").ifBlank { "无" }}）"
+            throw Failure("$reason。手机号登录目前只在官方 App 内可用，电视端请改用扫码登录。",distinct.firstOrNull(),1102 in distinct)
         }
         val header=cookies.entries.joinToString("; ") { (name,value) -> "$name=$value" }
         return AccountCredentialsParser.parseHeader(header)
@@ -110,8 +125,8 @@ class PhoneLogin(private val http: OkHttpClient) {
         private const val PASSPORT="https://is.snssdk.com"
         /** login-lab 实测：24 = 登录验证码；1 / 3 是绑定 / 换绑手机号。 */
         const val LOGIN_CODE_TYPE="24"
-        /** `validate_code` 是要验证的主角；`sms_login` 系列是同一套 passport 上常见的直登端点，顺手一起试。 */
-        private val VERIFY_ATTEMPTS=listOf("/passport/mobile/validate_code/v1/" to false,"/passport/mobile/validate_code/v1/" to true,
+        /** `validate_code` 是要验证的主角；`sms_login` 系列是同一套 passport 上常见的直登端点，一并试完再判定。 */
+        internal val VERIFY_ATTEMPTS=listOf("/passport/mobile/validate_code/v1/" to false,"/passport/mobile/validate_code/v1/" to true,
             "/passport/mobile/sms_login/" to true,"/passport/mobile/sms_login_only/" to true)
 
         /**

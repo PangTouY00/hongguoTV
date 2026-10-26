@@ -87,7 +87,8 @@ class AppUpdateRepository : java.io.Closeable {
         .callTimeout(5, TimeUnit.MINUTES).addNetworkInterceptor { chain ->
             val url = chain.request().url
             // Follow GitHub's asset CDN redirects, never cleartext or arbitrary manifest-provided hosts.
-            if (url.scheme != "https" || url.host !in setOf("gh-proxy.com", "api.github.com", "github.com", "objects.githubusercontent.com"))
+            // GitHub serves release assets from either of its two asset hosts depending on the asset.
+            if (url.scheme != "https" || url.host !in setOf("gh-proxy.com", "api.github.com", "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"))
                 throw IOException("更新下载地址不受支持")
             chain.proceed(chain.request())
         }.build()
