@@ -41,6 +41,16 @@ class TvSocialTest {
         } finally { controller.pause().stop().destroy() }
     }
 
+    @Test fun danmakuStickerAssetIsPresentAndDecodable() {
+        val controller=Robolectric.buildActivity(Activity::class.java).setup()
+        try {
+            val assets=controller.get().assets.list("comment_emoji").orEmpty().toList()
+            assertTrue("随包素材里没有 1f60d.png",assets.contains("1f60d.png"))
+            val bitmap=android.graphics.BitmapFactory.decodeStream(controller.get().assets.open("comment_emoji/1f60d.png"))
+            assertNotNull("1f60d.png 解不出图片",bitmap)
+        } finally { controller.pause().stop().destroy() }
+    }
+
     @Test fun platformDanmakuStickerTagsResolveToImages() {
         val controller=Robolectric.buildActivity(Activity::class.java).setup()
         try {
