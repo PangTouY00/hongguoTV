@@ -21,12 +21,17 @@ import org.json.JSONObject
  *    二次验证方式。其中 `mobile_up_sms_verify` 要求用户**用这台手机号向指定号码发一条内容固定的短信**，
  *    号码与内容都在响应里；[confirmUpSms] 按官方验证页的节奏轮询 `POST /passport/upsms/verify/` 确认，
  *    成功后平台回一张 `ticket`。另一种 `oauth_douyin_verify` 需要抖音授权，电视端不做。
- * 4. [resend] **沿用同一个会话**重新发码，[verify] 再带上新票据与那张 `verify_ticket` ——
- *    平台签发 `sessionid`，登录完成。
+ * 4. 拿到 `verify_ticket` 之后先带票重放**同一张验证码**：`2046` 与 `upsms/verify` 的响应里都另给了一张
+ *    `mobile_ticket`，而平台在身份验证期间留着那张码（`biz_params.sms_code_key`），带票重放常常直接签发 `sessionid`，
+ *    不必再发一张。
+ * 5. 那张码确实作废时 [resend] **沿用同一个会话**重新发码，[verify] 再带上新票据与 `verify_ticket` 完成登录。
+ *    发码有冷却：成功发码时平台回 `retry_time`（实测 60 秒），没到点再发回 `1206 验证码发送太频繁`；
+ *    [resend] 先等满冷却再发，被 `1206` 拒绝时再等一轮重试一次，要等的秒数通过 [onSendWait] 告诉界面。
  *
  * 实测边界：`type=1` 在 `sms_login` 上被平台拒绝（`3052` 该类型未开通），登录固定用 `24`；
  * 上行短信还没到达时 `upsms/verify` 回 `1045 认证失败`，这是轮询的正常中间态；
- * 同一张验证码被 `2046` 消耗后再提交会回 `1203`，必须重新发码。
+ * 同一张验证码被 `2046` 消耗后**不带票**再提交会回 `1203`；同一号码两次发码之间的冷却由 `retry_time` 给出，
+ * 而 `1206` 的响应里只有 `description` 与一张新的 `mobile_ticket`，不再回冷却值。
  * 官网通道（[WebLogin]）的手机号发码则被滑块风控（`1105`）挡住。
  *
  * 一个实例对应一次登录；重新发码要么沿用会话（二次验证之后），要么换一台新设备并作废之前的验证码。
@@ -63,12 +68,24 @@ class PhoneLogin(private val http: OkHttpClient) {
     private var verifyTicket=""
     private var pendingUpSms: UpSms?=null
 
+    /** 上一次成功发码给的冷却秒数与发码时刻，用来不在冷却里抢着发码。 */
+    private var cooldownSeconds=0
+    private var lastSendAtMs=0L
+
+    /** 界面可订阅：重新发码前还要等多少秒（发码冷却）。不订阅也照样能走完，只是界面不知道在等。 */
+    var onSendWait: ((Int)->Unit)?=null
+
+    /** 时间与等待的替身：真机就是系统时钟和 [Thread.sleep]，测试里换成不真等的记录器。 */
+    internal var clock: ()->Long=System::currentTimeMillis
+    internal var sleeper: (Long)->Unit={ millis -> Thread.sleep(millis) }
+
     /**
      * 平台拒绝时的可读原因，界面直接显示 [message]；[diagnostics] 是诊断包额外展示的会话材料清单；
      * [upSms] 非空时平台要求上行短信二次验证，界面按它显示「用哪台手机、发什么内容、到哪个号码」；
-     * [needNewCode] 为真时这张验证码已经作废，界面要重新发一张而不是让用户再输一遍。
+     * [needNewCode] 为真时这张验证码已经作废，界面要重新发一张而不是让用户再输一遍；
+     * [retryAfterSeconds] 大于零时这是限频类的暂时拒绝，等这么久再发就有效，会话与身份验证票据都保留。
      */
-    class Failure(message: String,val errorCode: Int?=null,val canRetryCode: Boolean=false,val diagnostics: String?=null,val upSms: UpSms?=null,val needNewCode: Boolean=false): Exception(message)
+    class Failure(message: String,val errorCode: Int?=null,val canRetryCode: Boolean=false,val diagnostics: String?=null,val upSms: UpSms?=null,val needNewCode: Boolean=false,val retryAfterSeconds: Int=0): Exception(message)
     /** [maskedMobile] 是平台回显的打码号码（如 `+886******23`）。 */
     data class Sent(val maskedMobile: String,val retrySeconds: Int)
     /**
@@ -96,9 +113,17 @@ class PhoneLogin(private val http: OkHttpClient) {
         sentDataFields=names(data)
         // 风控要求滑块验证：电视上没法做，也不去绕它。
         if(data.has("verify_center_decision_conf")) throw Failure("红果要求完成滑块验证，请改用扫码登录",1105)
-        if(reply.optString("message")!="success") throw Failure(describe(data) ?: "验证码没发出去")
+        if(reply.optString("message")!="success") {
+            val rejected=data.optInt("error_code",0)
+            // 同一号码两次发码之间有冷却（实测 retry_time 秒）。1206 的响应里不再回冷却值，只能沿用上一张码给的那个。
+            if(rejected==SEND_TOO_FREQUENT) throw Failure(describe(data) ?: "红果要求稍等一会儿才能再发验证码",SEND_TOO_FREQUENT,canRetryCode=true,retryAfterSeconds=if(cooldownSeconds>0) cooldownSeconds else DEFAULT_COOLDOWN_SECONDS)
+            throw Failure(describe(data) ?: "验证码没发出去")
+        }
         ticket=data.optString("mobile_ticket")
-        return Sent(data.optString("mobile").ifBlank { mobile },data.optInt("retry_time",60))
+        // 冷却按号码算，换设备重登也不会更快，所以换会话时保留它。
+        cooldownSeconds=data.optInt("retry_time",if(cooldownSeconds>0) cooldownSeconds else DEFAULT_COOLDOWN_SECONDS)
+        lastSendAtMs=clock()
+        return Sent(data.optString("mobile").ifBlank { mobile },cooldownSeconds)
     }
 
     /**
@@ -122,6 +147,9 @@ class PhoneLogin(private val http: OkHttpClient) {
         val described=describe(data)
         if(errorCode==MFA_REQUIRED) {
             val up=upSmsFrom(data)
+            // 平台在 2046 里另给一张 mobile_ticket 并留着那张码（biz_params.sms_code_key）：后续一律用新票据。
+            val renewed=data.optString("mobile_ticket")
+            if(renewed.isNotBlank()) ticket=renewed
             if(up!=null) throw Failure("红果要求完成身份验证，请按界面提示发送一条短信",MFA_REQUIRED,upSms=up)
             throw Failure(described ?: "红果要求身份验证，但没有给出可用的验证方式",MFA_REQUIRED)
         }
@@ -154,14 +182,51 @@ class PhoneLogin(private val http: OkHttpClient) {
             val reply=call(UPSMS_VERIFY,upSmsParams(),form=true)
             val data=reply.optJSONObject("data") ?: JSONObject()
             val issued=data.optString("ticket")
-            if(reply.optString("message")=="success" && issued.isNotBlank()) { verifyTicket=issued; return }
+            if(reply.optString("message")=="success" && issued.isNotBlank()) {
+                verifyTicket=issued
+                // 身份验证通过时平台常同时换一张发码票据，接住它，后面无论重放还是重发都用新的。
+                val renewed=data.optString("mobile_ticket")
+                if(renewed.isNotBlank()) ticket=renewed
+                return
+            }
             described=describe(data) ?: described
         }
         throw Failure(described ?: "还没收到这条短信。请核对短信内容只有一个词、号码完全一致，再试一次",UP_SMS_PENDING,canRetryCode=true)
     }
 
-    /** 再发一张验证码：二次验证之后**沿用同一会话**（平台才认那张票），否则按全新登录处理。 */
-    fun resend(): Sent = if(pendingUpSms!=null) send(mobile,keepSession=true) else send(mobile)
+    /**
+     * 再发一张验证码：二次验证之后**沿用同一会话**（平台才认那张票），否则按全新登录处理。
+     * 先等满平台给的发码冷却再发；被 `1206` 拒绝时再等一轮、只重试一次，仍不行才把限频的答复交给界面。
+     */
+    fun resend(): Sent {
+        val keepSession=pendingUpSms!=null
+        var retries=0
+        while(true) {
+            waitOutCooldown()
+            try { return send(mobile,keepSession=keepSession) } catch(refused: Failure) {
+                if(refused.errorCode!=SEND_TOO_FREQUENT || retries>=SEND_RETRY_ATTEMPTS) throw refused
+                retries++
+                waitBeforeSend(refused.retryAfterSeconds.takeIf { it>0 } ?: cooldownSeconds)
+            }
+        }
+    }
+
+    /** 上一次发码的冷却还没过就先等够，省掉一次注定被 `1206` 拒绝的请求。 */
+    private fun waitOutCooldown() {
+        if(lastSendAtMs<=0L || cooldownSeconds<=0) return
+        val remaining=cooldownSeconds-(clock()-lastSendAtMs)/1000
+        if(remaining<=0) return
+        waitBeforeSend(remaining.toInt())
+    }
+
+    private fun waitBeforeSend(seconds: Int) {
+        val wait=seconds.coerceIn(1,MAX_SEND_WAIT_SECONDS)
+        onSendWait?.invoke(wait)
+        sleeper(wait*1000L)
+    }
+
+    /** 身份验证已通过、票已拿到：界面可以先带票重放同一张验证码，省掉一次发码。 */
+    fun verificationPassed(): Boolean = verifyTicket.isNotBlank()
 
     /** 界面据此决定是「继续同一次登录」还是「重新开始」。 */
     fun pendingVerification(): UpSms? = pendingUpSms
@@ -272,6 +337,12 @@ class PhoneLogin(private val http: OkHttpClient) {
         internal const val MFA_REQUIRED=2046
         internal const val UP_SMS_PENDING=1045
         internal const val CODE_EXPIRED=1203
+        /** 实测错误码 1206 = 同一号码发码太频繁；冷却秒数只在成功发码时由 `retry_time` 给出。 */
+        internal const val SEND_TOO_FREQUENT=1206
+        /** 平台没回 `retry_time` 时按实测的 60 秒算；自动等待的上限；被 1206 拒绝后的自动重试次数。 */
+        internal const val DEFAULT_COOLDOWN_SECONDS=60
+        internal const val MAX_SEND_WAIT_SECONDS=120
+        internal const val SEND_RETRY_ATTEMPTS=1
         internal const val UP_SMS_WAY="mobile_up_sms_verify"
         /** 官方验证页的轮询节奏：最多 4 次、每次间隔 2 秒。 */
         internal const val UPSMS_ATTEMPTS=4
