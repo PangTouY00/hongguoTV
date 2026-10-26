@@ -2,7 +2,7 @@
 
 非官方红果短剧客户端，主要维护 Android TV 版，同时提供原生 Mac 客户端 hongguoMac。
 
-当前使用 `kotlin-tv/` 中的 Kotlin 原生客户端，支持 **Android 6.0 及以上**。安装一个 APK 即可使用，无需部署 Node 或 Docker。稳定分支为 `main`；当前 TV 正式版为 **0.1.7（versionCode 48）**，对应标签 `kotlin-v0.1.7`。源码分支合并与 APK 发布分别进行，正式包由 GitHub Actions 在 `kotlin-v*` 标签上构建并发布，下载以正式 Release 附件为准。
+当前使用 `kotlin-tv/` 中的 Kotlin 原生客户端，支持 **Android 6.0 及以上**。安装一个 APK 即可使用，无需部署 Node 或 Docker。稳定分支为 `main`；当前 TV 正式版为 **0.1.8（versionCode 49）**，对应标签 `kotlin-v0.1.8`。源码分支合并与 APK 发布分别进行，正式包由 GitHub Actions 在 `kotlin-v*` 标签上构建并发布，下载以正式 Release 附件为准。
 
 ## Android TV 下载与安装
 

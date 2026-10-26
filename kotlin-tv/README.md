@@ -48,11 +48,11 @@
 
 推送到 `main`、`feature-*` 或 `fix-*` 分支时，GitHub Actions 会执行同一组检查并生成可安装的调试 APK，文件名带分支名和提交短哈希。同一次 push 的 APK 会自动发布成一条预发布 Release：标题为「调试构建 <分支> <提交>」，正文列出分支、提交、versionName/versionCode、本次改动、自动化检查结果与安装说明；同一提交重复构建时更新既有 Release 与附件，不新建标签。这些 Release 不标记 Latest，也不进入 App 内的自动更新通道，只用于本机安装验证，不是发布版本。
 
-正式包不在本机构建：在合并完成的 `main` 上打 `kotlin-v<版本>` 标签并推送，`.github/workflows/release-tv.yml` 会跑完全部检查、用同一把缓存签名密钥构建 `:app:assembleRelease`、核对包名／版本／minSdk、生成 `update.json` 与中文更新说明，然后发布为正式 Release（标记 Latest，进入 App 内的自动更新通道）。
+正式包不在本机构建：在合并完成的 `main` 上打 `kotlin-v<版本>` 标签并推送，`.github/workflows/release-tv.yml` 会跑完全部检查、用同一把缓存签名密钥构建 `:app:assembleRelease`、核对包名／版本／minSdk、生成 `update.json` 与中文更新说明（详细日志取自仓库里的 `release-notes/<标签>.md`），然后发布为正式 Release（标记 Latest，进入 App 内的自动更新通道）。
 
 ## 版本与签名
 
-修改 `app/build.gradle.kts` 中 `versionCode`、`versionName` 后重新构建。环境变量 `HONGGUOTV_VERSION_CODE`、`HONGGUOTV_VERSION_NAME` 会覆盖文件中的默认值。正式上线时递增版本号与 versionCode，编译调试期间保持不变，测试包通过文件名区分；当前正式版为 0.1.7（versionCode 48），后续正式发布再递增。分支名、APK 文件名或 Git 标签不会自动改变 APK 内部版本，标签只决定发布哪一份已经写好版本的源码。
+修改 `app/build.gradle.kts` 中 `versionCode`、`versionName` 后重新构建。环境变量 `HONGGUOTV_VERSION_CODE`、`HONGGUOTV_VERSION_NAME` 会覆盖文件中的默认值。正式上线时递增版本号与 versionCode，编译调试期间保持不变，测试包通过文件名区分；当前正式版为 0.1.8（versionCode 49），后续正式发布再递增。分支名、APK 文件名或 Git 标签不会自动改变 APK 内部版本，标签只决定发布哪一份已经写好版本的源码。
 
 开发 APK 使用 Debug 签名。电视已经安装的版本只能由相同包名、相同签名的新版覆盖；换电脑或改用其他签名可能无法覆盖安装。CI 构建共用一份缓存在 Actions 缓存里的 Debug 签名密钥（`~/.android`，缓存键 `hongguotv-debug-keystore-v1`），因此同一仓库的多次 CI 构建产物可以互相覆盖安装；该缓存被清理后会重新生成密钥，此时需要先卸载旧应用再安装。正式包同样使用这份缓存密钥：`release-tv.yml` 先构建 Debug 包确保密钥存在，再把它作为 `delivery` 签名配置传给 `:app:assembleRelease`，所以已安装调试包的设备可以直接覆盖安装正式版并保留本机数据。不要删除、替换现有签名密钥，不要将密钥或密码提交到仓库。
 

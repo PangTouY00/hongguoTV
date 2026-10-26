@@ -1,6 +1,6 @@
 # 首页推荐与试播
 
-当前正式基线 `0.1.7` / versionCode 48，Android 6+。`feature-home-feed-smooth` 的加载优化已随主线合入。
+当前正式基线 `0.1.8` / versionCode 49，Android 6+。`feature-home-feed-smooth` 的加载优化已随主线合入。
 
 ## 内容来源
 

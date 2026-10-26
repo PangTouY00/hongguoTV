@@ -43,12 +43,20 @@ class AppUpdatesTest {
         assertTrue(update.newerThan(9, 26)); assertFalse(update.newerThan(10001, 36)); assertFalse(update.newerThan(10002, 36)); assertFalse(update.newerThan(9, 25))
     }
     @Test fun downloadUrlUsesOnlyFixedRepositoryAndValidatedNames() {
-        assertEquals("https://github.com/PangTouY00/hongguoTV/releases/download/kotlin-v0.9.0-build.1/hongguotv-kotlin-0.9.0-build.1-android8.apk", update().downloadUrl)
+        assertEquals("https://github.com/PangTouY00/hongguoTV/releases/download/kotlin-v0.9.0-build.1/hongguotv-kotlin-0.9.0-build.1-android8.apk", update().directDownloadUrl)
+        assertEquals("https://gh-proxy.com/https://github.com/PangTouY00/hongguoTV/releases/download/kotlin-v0.9.0-build.1/hongguotv-kotlin-0.9.0-build.1-android8.apk", update().downloadUrl)
         for (value in listOf("../../bad.apk", "evil.apk", "https://example.com/evil.apk", "hongguotv-kotlin-1/2-android8.apk")) {
             val o = json(); o.getJSONObject("apk").put("name", value)
             assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(o.toString()) }
         }
         assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(json().put("tag", "../../other").toString()) }
+    }
+    @Test fun updateChannelPrefersTheMirrorForLatestCheckManifestAndDownload() {
+        // 检查更新、读取清单与下载三个环节都先走镜像；直连地址只作为回退保留。
+        assertEquals("https://gh-proxy.com/https://api.github.com/repos/PangTouY00/hongguoTV/releases/latest", AppUpdate.mirrored(AppUpdate.LATEST_API))
+        assertEquals("https://gh-proxy.com/https://github.com/PangTouY00/hongguoTV/releases/download/kotlin-v0.9.0-build.1/update.json",
+            AppUpdate.mirrored("${AppUpdate.RELEASES}/download/kotlin-v0.9.0-build.1/update.json"))
+        assertTrue(update().downloadUrl.startsWith("${AppUpdate.MIRROR}/https://"))
     }
     @Test fun rejectOtherPackageAndInvalidSchema() {
         assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(json().put("packageName", "other.app").toString()) }

@@ -9,7 +9,7 @@ on:
       tag:
         description: 要发布的 kotlin-v 标签（用于中断后继续同一版本）
         required: true
-        default: kotlin-v0.1.7
+        default: kotlin-v0.1.8
 permissions:
   contents: write
 jobs:
@@ -103,26 +103,32 @@ jobs:
           FINGERPRINT: ${{ steps.apk.outputs.fingerprint }}
         run: |
           set -euo pipefail
-          previous="$(git tag -l 'kotlin-v*' --sort=-creatordate | grep -v "^${RELEASE_TAG}$" | head -n1 || true)"
-          if [ -n "$previous" ]; then
-            heading="自 $previous 以来的改动"
-            changes="$(git log --no-merges --pretty=format:'- %s' "$previous..HEAD")"
+          # 仓库里带手写发布说明时优先用它：正式版的更新日志要写清改了什么、为什么、怎么安装验证。
+          if [ -f "release-notes/${RELEASE_TAG}.md" ]; then
+            cp "release-notes/${RELEASE_TAG}.md" notes.md
+            printf '\n## 签名信息\n本包签名证书 SHA-256 指纹 \`%s\`，与调试包及后续 CI 构建共用同一把密钥。\n' "$FINGERPRINT" >> notes.md
           else
-            heading="本次发布的改动"
-            changes="$(git log --no-merges -n 25 --pretty=format:'- %s')"
+            previous="$(git tag -l 'kotlin-v*' --sort=-creatordate | grep -v "^${RELEASE_TAG}$" | head -n1 || true)"
+            if [ -n "$previous" ]; then
+              heading="自 $previous 以来的改动"
+              changes="$(git log --no-merges --pretty=format:'- %s' "$previous..HEAD")"
+            else
+              heading="本次发布的改动"
+              changes="$(git log --no-merges -n 25 --pretty=format:'- %s')"
+            fi
+            cat > notes.md <<EOF
+            红果 TV ${VERSION} 正式版（versionCode ${CODE}），支持 Android 6.0 及以上。
+
+            ## ${heading}
+            ${changes}
+
+            ## 检查
+            GitHub Actions 已运行 \`:core:test\`、\`:app:testDebugUnitTest\`、\`:app:lintDebug\`、\`:app:assembleDebug\`、\`:app:assembleRelease\`，全部通过后才发布本包。
+
+            ## 签名与安装
+            本包与后续 CI 构建共用这把签名密钥（SHA-256 指纹 \`${FINGERPRINT}\`），已装版本若来自更早的临时签名构建，首次安装需要先卸载旧应用（可先在 App 内用二维码备份本机记录），之后即可直接覆盖安装并保留数据。下载 \`hongguotv-kotlin-${VERSION}-android6.apk\` 安装即可；App 内的自动更新读取本仓库的最新正式版。
+            EOF
           fi
-          cat > notes.md <<EOF
-          红果 TV ${VERSION} 正式版（versionCode ${CODE}），支持 Android 6.0 及以上。
-
-          ## ${heading}
-          ${changes}
-
-          ## 检查
-          GitHub Actions 已运行 \`:core:test\`、\`:app:testDebugUnitTest\`、\`:app:lintDebug\`、\`:app:assembleDebug\`、\`:app:assembleRelease\`，全部通过后才发布本包。
-
-          ## 签名与安装
-          本包与后续 CI 构建共用这把签名密钥（SHA-256 指纹 \`${FINGERPRINT}\`），已装版本若来自更早的临时签名构建，首次安装需要先卸载旧应用（可先在 App 内用二维码备份本机记录），之后即可直接覆盖安装并保留数据。下载 \`hongguotv-kotlin-${VERSION}-android6.apk\` 安装即可；App 内的自动更新读取本仓库的最新正式版。
-          EOF
           cat notes.md
       - name: Package the APK with the updater manifest
         id: package
