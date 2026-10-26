@@ -69,17 +69,26 @@ class PlaybackQueueTest {
         // Robolectric counts TYPE_MOBILE as metered once it is the active network.
         shadow.setActiveNetworkInfo(NetworkInfo(ConnectivityManager.TYPE_MOBILE,0,"mobile","mobile"))
         val network=connectivity.activeNetwork ?: throw AssertionError("Robolectric 没有给出活动网络")
-        // android.net.NetworkCapabilities has no public builder, so the instance and the hidden
-        // capability writer come from Robolectric's own shadow. Leaving out NET_CAPABILITY_NOT_METERED
-        // is what makes it report itself as a metered network, which is the cellular case here.
-        val capabilities=ShadowNetworkCapabilities.newInstance()
-        val bit=NetworkCapabilities::class.java.getDeclaredMethod("getNetworkCapability",String::class.java)
-            .invoke(null,NetworkCapabilities.NET_CAPABILITY_INTERNET) as Int
-        NetworkCapabilities::class.java.getDeclaredMethod("addCapability",Int::class.javaPrimitiveType)
-            .invoke(capabilities,bit)
-        shadow.setNetworkCapabilities(network,capabilities)
+        // android.net.NetworkCapabilities has no public builder, and both its factory and its
+        // addCapability are hidden here, so the instance comes from Robolectric's own shadow and the
+        // capability is filled through reflection. NET_CAPABILITY_NOT_METERED is deliberately left
+        // out: that is what makes it report itself as metered, which is the cellular case under test.
+        shadow.setNetworkCapabilities(network,internetCapabilities())
         assertTrue(connectivity.isActiveNetworkMetered)
         assertTrue(connectivity.getNetworkCapabilities(network)!!.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET))
+    }
+    private fun internetCapabilities(): NetworkCapabilities {
+        val capabilities=ShadowNetworkCapabilities.newInstance()
+        val writers=NetworkCapabilities::class.java.declaredMethods.filter { it.name=="addCapability" }
+        val byName=writers.firstOrNull { it.parameterTypes.singleOrNull()==String::class.java }
+        if(byName!=null) byName.apply { isAccessible=true }.invoke(capabilities,NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        else {
+            val bit=NetworkCapabilities::class.java.getDeclaredMethod("getNetworkCapability",String::class.java)
+                .apply { isAccessible=true }.invoke(null,NetworkCapabilities.NET_CAPABILITY_INTERNET) as Int
+            writers.first { it.parameterTypes.singleOrNull()==Int::class.javaPrimitiveType }
+                .apply { isAccessible=true }.invoke(capabilities,bit)
+        }
+        return capabilities
     }
     private fun fixture(test: (MainActivity,QueuePlayer,Library,RemoteVideo)->Unit) {
         val controller=Robolectric.buildActivity(MainActivity::class.java).create();val activity=controller.get()

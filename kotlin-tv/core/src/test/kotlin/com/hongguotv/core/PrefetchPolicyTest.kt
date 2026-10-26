@@ -26,8 +26,12 @@ class PrefetchPolicyTest {
     @Test fun playbackSpeedCountsAgainstTheLead() {
         // 50 seconds of media left at 2x is 25 seconds of wall clock, so unmetered starts.
         assertTrue(PrefetchPolicy.canStart(40_000,90_000,2f,2_000,6_000,false))
+        // 55 seconds of wall clock left is outside the 30 second window but inside the 60 second
+        // one cellular allows itself, because a phone needs more time to pull the same bytes.
+        assertFalse(PrefetchPolicy.nearEnd(35_000,90_000,1f,false))
+        assertTrue(PrefetchPolicy.nearEnd(35_000,90_000,1f,true))
         assertFalse(PrefetchPolicy.nearEnd(10_000,90_000,1f,false))
-        assertTrue(PrefetchPolicy.nearEnd(10_000,90_000,1f,true))
+        assertFalse(PrefetchPolicy.nearEnd(10_000,90_000,1f,true))
     }
     @Test fun unstableOrFinishedPlaybackNeverWarms() {
         assertFalse(PrefetchPolicy.canStart(80_000,90_000,1f,1_400,9_000,true))
