@@ -346,7 +346,9 @@ class ContentRepository(
             "User-Agent" to "com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)",
             "Accept" to "application/json; charset=utf-8,application/x-protobuf"
         ),payload)
-        val response=text(playerUrl,request)
+        // The player API answers HTTP 200 with an empty body often enough that one failed read
+        // shows up as a broken episode, so retry the same read-only lookup before reporting it.
+        val response=text(playerUrl,request,retryTransient=true,retries=2)
         if(response.isBlank()) throw IOException("播放接口返回空响应，请稍后重试或更新应用")
         val data=JSONObject(response)
         val code=data.optInt("Code",data.optInt("code",0))
@@ -372,7 +374,7 @@ class ContentRepository(
         val raw=model.opt("fallback_api")
         val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
         if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")
-        val info=JSONObject(text(fallback)).optJSONObject("video_info")?.optJSONObject("data") ?: throw IOException("没有播放资源")
+        val info=JSONObject(text(fallback,retryTransient=true)).optJSONObject("video_info")?.optJSONObject("data") ?: throw IOException("没有播放资源")
         val videoList=info.optJSONObject("video_list") ?: throw IOException("没有可用清晰度")
         // ByteVC2 resources can expose playable audio but no video track in Android's MP4 extractor.
         // Keep missing legacy codec labels usable, but never select a known incompatible variant.

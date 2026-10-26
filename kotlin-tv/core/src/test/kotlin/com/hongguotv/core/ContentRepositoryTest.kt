@@ -255,6 +255,31 @@ class ContentRepositoryTest {
     }
 
     @Test
+    fun playerApiEmptyBodyIsRetriedBeforeReportingABrokenEpisode() {
+        // 播放接口偶发 HTTP 200 空响应：同一查询有界重试即可恢复，不该把整集报成播放失败。
+        val meta=JSONObject().put("definition","720p").put("codec_type","h264").put("vwidth",720).put("vheight",1280)
+        val row=JSONObject().put("main_url","https://example.com/inline").put("video_meta",meta)
+            .put("encrypt_info",JSONObject().put("encrypt",false))
+        var calls=0
+        val repo=repository { _ ->
+            calls+=1
+            if(calls<=2) "" else JSONObject().put("data",JSONObject().put("123",JSONObject().put("video_model",
+                JSONObject().put("video_list",JSONArray().put(row))))).toString()
+        }
+        val ladder=repo.streamLadder("123")
+        assertEquals(3,calls)
+        assertEquals("https://example.com/inline",ladder.renditions.single().url)
+    }
+
+    @Test
+    fun playerApiStaysEmptyAfterBoundedRetriesInsteadOfRetryingForever() {
+        var calls=0
+        val repo=repository { _ -> calls+=1; "" }
+        assertThrows(IOException::class.java) { repo.streamLadder("123") }
+        assertEquals(3,calls)
+    }
+
+    @Test
     fun renderedLastPageCountsCurrentPageWithoutAnAnchor() {
         val repo = repository {
             """<script>_ROUTER_DATA={"loaderData":{"rank_hot-comic-drama/page":{"rankKey":"comic","pageNum":5}}};</script>

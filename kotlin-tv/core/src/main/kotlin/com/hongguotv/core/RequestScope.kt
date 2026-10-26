@@ -16,6 +16,9 @@ class RequestScope {
         calls.clear()
     }
 
+    /** Lets a caller tell a read cancelled by navigation from a read that actually failed. */
+    @Synchronized fun isCancelled(): Boolean = cancelled
+
     @Synchronized private fun attach(call: Call) {
         if (cancelled || Thread.currentThread().isInterrupted) {
             call.cancel()

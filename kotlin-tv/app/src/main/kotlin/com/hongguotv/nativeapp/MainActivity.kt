@@ -1335,9 +1335,16 @@ class MainActivity: Activity() {
                     }
                 }
                 override fun onRenderedFirstFrame() {
-                    if(active() && firstFrame) {
+                    if(player!==p || generation!=ticket) return
+                    val rendered=p.currentMediaItem?.mediaId?.let { data.episodes.indexOf(it) } ?: -1
+                    if(rendered==episodeIndex) {
+                        if(!firstFrame) return
                         firstFrame=false
                         android.util.Log.i("HongguoTV","Playback first frame episode=${episodeIndex+1} carried=$carriedOver reused=$reuse elapsedMs=${android.os.SystemClock.elapsedRealtime()-playbackStarted}")
+                    } else if(rendered>=0) {
+                        // A queued episode renders its first frame before the queue switch is applied, so
+                        // that frame belongs to the next episode and must not be timed against this one.
+                        android.util.Log.i("HongguoTV","Next episode rendered its first frame before the queue switch episode=${rendered+1}")
                     }
                 }
                 override fun onIsPlayingChanged(playing: Boolean) { if(active()) { if(hud.visibility==View.VISIBLE) showHud(); updatePauseGlyph(); syncMediaSession() } }
@@ -1410,9 +1417,10 @@ class MainActivity: Activity() {
                     android.util.Log.i("HongguoTV","Next episode opening buffered bytes=$warmBytes metered=$metered")
                     main.post { queuePreparedEpisode(key) }
                 }
-            } catch(_: Exception) {
+            } catch(error: Exception) {
                 remote?.close()
-                android.util.Log.i("HongguoTV","Next episode warmup cancelled or unavailable")
+                if(scope.isCancelled()) android.util.Log.i("HongguoTV","Next episode warmup cancelled by an episode change")
+                else android.util.Log.i("HongguoTV","Next episode warmup failed: ${error.javaClass.simpleName}")
             }
         }
     }
