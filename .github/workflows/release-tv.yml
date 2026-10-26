@@ -125,6 +125,14 @@ jobs:
               printf '\n## 签名与安装\n本包与后续 CI 构建共用这把签名密钥（SHA-256 指纹 %s），已装版本若来自更早的临时签名构建，首次安装需要先卸载旧应用（可先在 App 内用二维码备份本机记录），之后即可直接覆盖安装并保留数据。下载 hongguotv-kotlin-%s-android6.apk 安装即可；App 内的自动更新读取本仓库的最新正式版。\n' "$FINGERPRINT" "$VERSION"
             } > notes.md
           fi
+          # App 内的更新弹窗只显示 update.json 里的 notes，上限 1500 字（与 AppUpdates 的 take(1500) 一致）。
+          # 完整更新日志留在 Release 正文和 release-notes.md 资产里，清单只带短摘要：
+          # 有 release-notes/<标签>.update.md 时优先用它，否则按段落从完整说明截断。
+          if [ -f "release-notes/${RELEASE_TAG}.update.md" ]; then
+            python3 scripts/shorten-release-notes.py --notes-file "release-notes/${RELEASE_TAG}.update.md" --output update-notes.md
+          else
+            python3 scripts/shorten-release-notes.py --notes-file notes.md --output update-notes.md
+          fi
           cat notes.md
       - name: Package the APK with the updater manifest
         id: package
@@ -134,7 +142,8 @@ jobs:
         run: |
           set -euo pipefail
           out="$(python3 scripts/prepare-kotlin-release.py --apk kotlin-tv/app/build/outputs/apk/release/app-release.apk \
-            --aapt "$AAPT_TOOL" --output outputs/release --tag "$RELEASE_TAG" --notes-file notes.md)"
+            --aapt "$AAPT_TOOL" --output outputs/release --tag "$RELEASE_TAG" \
+            --update-notes-file update-notes.md --notes-file notes.md)"
           echo "directory=$out" >> "$GITHUB_OUTPUT"
           ls -l "$out"
       - name: Publish the formal release

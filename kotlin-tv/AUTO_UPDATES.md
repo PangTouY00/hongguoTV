@@ -19,7 +19,7 @@
 
 默认从 APK 的三段版本号生成标签，例如 `0.0.8-search-input` 对应 `kotlin-v0.0.8`。发布时 GitCode 标签必须与清单一致。脚本不会自动增加版本号。
 
-可以指定标签及 UTF-8 更新说明文件（最多 1500 字；不指定时说明为空）：
+可以指定标签及 UTF-8 更新说明文件（写入 `update.json` 的说明最多 1500 字，与 App 内 `take(1500)` 一致；不指定时说明为空）：
 
 ```sh
 HONGGUOTV_RELEASE_TAG=kotlin-v0.0.8 \
@@ -35,6 +35,8 @@ python3 scripts/prepare-kotlin-release.py \
   --aapt "$ANDROID_HOME/build-tools/36.0.0/aapt" \
   --output outputs/releases
 ```
+
+`--notes-file` 是完整更新日志，写进 `release-notes.md` 附件；`--update-notes-file` 是 App 内显示的短摘要，写进 `update.json` 的 `notes`，超过 1500 字会直接失败。只给 `--notes-file` 时两者用同一份文本，因此完整日志超过 1500 字的发布必须同时给短摘要，或用 `scripts/shorten-release-notes.py --notes-file 完整说明 --output 短摘要` 按段落生成。
 
 同一标签再次生成会覆盖该目录的 `update.json`；上传前确认附件名和清单一致。生成清单不代表验证了签名连续性，发布前仍需核对签名和已分发的最高 versionCode。
 
@@ -110,7 +112,7 @@ python3 scripts/release-tv.py --publish --resume 0.1.7
 
 1. 功能与修复先走 PR 合入 `main`，用户在 CI 自动产生的调试包上实机验收。
 2. 在合并完成的 `main` 上把 `versionName`／`versionCode` 递增到新版本，提交版本与更新说明，再在该提交上打 `kotlin-v<版本>` 标签并推送。
-3. `.github/workflows/release-tv.yml` 自动跑完 `:core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`，用与调试包同一把的 Actions 缓存签名密钥构建 `:app:assembleRelease`，核对包名、版本与 minSdk，再用 `prepare-kotlin-release.py` 生成 `update.json` 与中文更新说明（详细更新日志写在仓库的 `release-notes/<标签>.md`，工作流优先使用它，没有该文件时才按 `git log` 汇总），最后发布为正式 Release（Latest，进入 App 内的自动更新通道）。
+3. `.github/workflows/release-tv.yml` 自动跑完 `:core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`，用与调试包同一把的 Actions 缓存签名密钥构建 `:app:assembleRelease`，核对包名、版本与 minSdk，再用 `prepare-kotlin-release.py` 生成 `update.json` 与中文更新说明，最后发布为正式 Release（Latest，进入 App 内的自动更新通道）。完整更新日志写在仓库的 `release-notes/<标签>.md`（工作流优先使用它，没有该文件时才按 `git log` 汇总），它只作为 Release 正文和 `release-notes.md` 附件；App 内更新弹窗读取的是 `update.json` 里不超过 1500 字的短摘要，优先取 `release-notes/<标签>.update.md`，没有该文件时由 `scripts/shorten-release-notes.py` 按段落截断并附上指向完整说明的提示。
 4. 需要镜像同步时，用 `scripts/publish-tv-release.py` 把同一标签与包上传到 GitCode；`scripts/release-tv.py` 保留用于版本规划与两平台同步的预演，不再作为本机构建入口。
 
 任务记录和构建日志保存在 `outputs/release-jobs/<版本>/`，发布文件仍在 `outputs/releases/<标签>/`，均不提交。`--resume` 使用记录中的相同版本、源码及文件摘要；已完成且未改变的构建包复用，不重复构建。改变缓存文件、签名不一致或合并树发生变化均停止。版本文件写入阶段若出现不属于脚本预期内容的修改，会保留并停止，需要先检查。网络上传可沿用下层脚本的同内容跳过机制；双平台发布仍不是原子操作。
