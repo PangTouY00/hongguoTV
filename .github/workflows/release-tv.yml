@@ -106,7 +106,7 @@ jobs:
           # 仓库里带手写发布说明时优先用它：正式版的更新日志要写清改了什么、为什么、怎么安装验证。
           if [ -f "release-notes/${RELEASE_TAG}.md" ]; then
             cp "release-notes/${RELEASE_TAG}.md" notes.md
-            printf '\n## 签名信息\n本包签名证书 SHA-256 指纹 \`%s\`，与调试包及后续 CI 构建共用同一把密钥。\n' "$FINGERPRINT" >> notes.md
+            printf '\n## 签名信息\n本包签名证书 SHA-256 指纹 `%s`，与调试包及后续 CI 构建共用同一把密钥。\n' "$FINGERPRINT" >> notes.md
           else
             previous="$(git tag -l 'kotlin-v*' --sort=-creatordate | grep -v "^${RELEASE_TAG}$" | head -n1 || true)"
             if [ -n "$previous" ]; then
@@ -116,18 +116,14 @@ jobs:
               heading="本次发布的改动"
               changes="$(git log --no-merges -n 25 --pretty=format:'- %s')"
             fi
-            cat > notes.md <<EOF
-            红果 TV ${VERSION} 正式版（versionCode ${CODE}），支持 Android 6.0 及以上。
-
-            ## ${heading}
-            ${changes}
-
-            ## 检查
-            GitHub Actions 已运行 \`:core:test\`、\`:app:testDebugUnitTest\`、\`:app:lintDebug\`、\`:app:assembleDebug\`、\`:app:assembleRelease\`，全部通过后才发布本包。
-
-            ## 签名与安装
-            本包与后续 CI 构建共用这把签名密钥（SHA-256 指纹 \`${FINGERPRINT}\`），已装版本若来自更早的临时签名构建，首次安装需要先卸载旧应用（可先在 App 内用二维码备份本机记录），之后即可直接覆盖安装并保留数据。下载 \`hongguotv-kotlin-${VERSION}-android6.apk\` 安装即可；App 内的自动更新读取本仓库的最新正式版。
-            EOF
+            # 用 printf 逐段写入：YAML 块标量会保留比 run 基准更深的缩进，
+            # 带缩进的 heredoc 结束符不会被 bash 识别，整段脚本会直接语法失败。
+            {
+              printf '%s\n' "红果 TV ${VERSION} 正式版（versionCode ${CODE}），支持 Android 6.0 及以上。"
+              printf '\n## %s\n%s\n' "$heading" "$changes"
+              printf '\n## 检查\nGitHub Actions 已运行 :core:test、:app:testDebugUnitTest、:app:lintDebug、:app:assembleDebug、:app:assembleRelease，全部通过后才发布本包。\n'
+              printf '\n## 签名与安装\n本包与后续 CI 构建共用这把签名密钥（SHA-256 指纹 %s），已装版本若来自更早的临时签名构建，首次安装需要先卸载旧应用（可先在 App 内用二维码备份本机记录），之后即可直接覆盖安装并保留数据。下载 hongguotv-kotlin-%s-android6.apk 安装即可；App 内的自动更新读取本仓库的最新正式版。\n' "$FINGERPRINT" "$VERSION"
+            } > notes.md
           fi
           cat notes.md
       - name: Package the APK with the updater manifest
