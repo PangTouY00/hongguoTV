@@ -66,16 +66,23 @@ internal class CommentEmoji(private val context: Context) {
         if(size<=0) return null
         val key="$file:$size"
         cache[key]?.let { return it }
-        val decoded=openAsset(file)?.use { BitmapFactory.decodeStream(it) } ?: return null
+        val decoded=decodeAsset(file) ?: return null
         val scaled=if(decoded.width==size && decoded.height==size) decoded
             else runCatching { Bitmap.createScaledBitmap(decoded,size,size,true) }.getOrDefault(decoded)
         if(scaled!==decoded) decoded.recycle()
         cache[key]=scaled
         return scaled
     }
-    /** 素材有两种容器：早期内置的是 WebP，后补的是 Fluent 3D 的 PNG，两种 BitmapFactory 都能直接解。 */
-    private fun openAsset(file: String): java.io.InputStream? =
-        listOf("webp","png").firstNotNullOfOrNull { extension -> runCatching { context.assets.open("comment_emoji/$file.$extension") }.getOrNull() }
+    /**
+     * 素材有两种容器：早期内置的是 WebP，后补的是 Fluent 3D 的 PNG。
+     *
+     * 逐个容器试到能解出图片为止。只判断「文件能否打开」不够：缺文件时某些实现给的是空流而不是异常，
+     * 空流解不出图片却算打开成功，后面的容器就再也没有机会被试到。
+     */
+    private fun decodeAsset(file: String): Bitmap? =
+        listOf("webp","png").firstNotNullOfOrNull { extension ->
+            runCatching { context.assets.open("comment_emoji/$file.$extension").use { BitmapFactory.decodeStream(it) } }.getOrNull()
+        }
     /** Splits one line into drawable runs so a canvas-drawn danmaku can show the same stickers as the comment list. */
     fun segments(text: String, size: Int): List<EmojiSegment> {
         val out=ArrayList<EmojiSegment>()
