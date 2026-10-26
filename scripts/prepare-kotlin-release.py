@@ -10,7 +10,7 @@ import shutil
 import subprocess
 
 
-def prepare(apk, aapt, output, tag=None, notes=""):
+def prepare(apk, aapt, output, tag=None, notes="", release_notes=None):
     badging = subprocess.check_output([str(aapt), "dump", "badging", str(apk)], text=True)
     package_line = next(line for line in badging.splitlines() if line.startswith("package:"))
     fields = dict(re.findall(r"(\w+)='([^']*)'", package_line))
@@ -50,8 +50,9 @@ def prepare(apk, aapt, output, tag=None, notes=""):
     temporary = destination / "update.json.tmp"
     temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, destination / "update.json")
-    if notes:
-        (destination / "release-notes.md").write_text(notes.strip() + "\n", encoding="utf-8")
+    if notes or release_notes:
+        # release-notes.md 资产放完整更新日志；App 内只读取 update.json 的 notes 短摘要。
+        (destination / "release-notes.md").write_text((release_notes or notes).strip() + "\n", encoding="utf-8")
     return destination
 
 
@@ -61,10 +62,15 @@ def main():
     parser.add_argument("--aapt", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--tag")
-    parser.add_argument("--notes-file", type=Path)
+    parser.add_argument("--notes-file", type=Path, help="完整更新日志，写入 release-notes.md 资产")
+    parser.add_argument("--update-notes-file", type=Path, help="写入 update.json 的短摘要，最多 1500 字")
     args = parser.parse_args()
     notes = args.notes_file.read_text(encoding="utf-8").strip() if args.notes_file else ""
-    print(prepare(args.apk, args.aapt, args.output, args.tag, notes))
+    if args.update_notes_file:
+        manifest_notes = args.update_notes_file.read_text(encoding="utf-8").strip()
+    else:
+        manifest_notes = notes
+    print(prepare(args.apk, args.aapt, args.output, args.tag, manifest_notes, notes or None))
 
 
 if __name__ == "__main__":
