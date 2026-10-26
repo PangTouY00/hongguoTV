@@ -267,6 +267,26 @@ class CloudAccountTest {
         assertEquals(listOf("third-ticket"),carried)
         assertEquals("带票重放能收尾，就不该再发一张验证码",0,sent)
     }
+    /** 带票重放还被要求身份验证时，不再让人重发那条短信：那条路已经走过，短信按条计费。 */
+    @Test fun aRejectedVerificationTicketDoesNotAskForAnotherPaidSmsTwice() {
+        val asked="""{"message":"error","data":{"error_code":2046,"description":"为保证账号安全，暂不支持此操作","mobile":"185******71","encrypt_uid":"opaque","biz_params":{"sms_code_key":"k"},"event_params":{"verify_scene":"sms_login","verify_reason":"ato"},"verify_ways":[{"channel_mobile":"9515211003","mobile":"185******71","sms_content":"YZ","verify_way":"mobile_up_sms_verify"}]}}"""
+        val login=PhoneLogin(httpCookies { request ->
+            when {
+                request.url.encodedPath==PhoneLogin.UPSMS_VERIFY -> response("""{"message":"success","data":{"ticket":"verify-ticket"}}""")
+                else -> response(asked)
+            }
+        })
+        login.deviceId=credentials.deviceId; login.installId=credentials.installId; login.mobile="18560515271"; login.ticket="first-ticket"
+        val first=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
+        assertNotNull("第一次照常引导用户发那条短信",first.upSms)
+        login.confirmUpSms()
+        val second=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }   // 带票重放，平台还是不接受
+        assertNotNull("带票第一次被拒还可以再试一次",second.upSms)
+        login.confirmUpSms()
+        val third=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
+        assertNull("不再让人重发第二条付费短信，界面该把人引到扫码",third.upSms)
+        assertFalse("这不是再试一次能解决的",third.canRetryCode)
+    }
     private fun response(body: String,vararg cookies: String)=Pair(body,cookies.toList())
     private fun formOf(request: Request): String {
         val body=request.body ?: return ""

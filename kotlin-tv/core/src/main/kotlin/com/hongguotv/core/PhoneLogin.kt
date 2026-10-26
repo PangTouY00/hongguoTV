@@ -67,6 +67,7 @@ class PhoneLogin(private val http: OkHttpClient) {
     private var verifyReason=""
     private var verifyTicket=""
     private var pendingUpSms: UpSms?=null
+    private var replayedWithTicket=0
 
     /** 上一次成功发码给的冷却秒数与发码时刻，用来不在冷却里抢着发码。 */
     private var cooldownSeconds=0
@@ -104,7 +105,7 @@ class PhoneLogin(private val http: OkHttpClient) {
             deviceId=registered.deviceId; installId=registered.installId
             cookies.clear(); cookies.putAll(registered.cookies)
             expired=false
-            encryptUid=""; bizParams=""; verifyScene=""; verifyReason=""; verifyTicket=""; pendingUpSms=null
+            encryptUid=""; bizParams=""; verifyScene=""; verifyReason=""; verifyTicket=""; pendingUpSms=null; replayedWithTicket=0
         }
         this.mobile=mobile
         val reply=call(SEND_CODE,mapOf("mobile" to mobile,"type" to type),form=false)
@@ -150,7 +151,12 @@ class PhoneLogin(private val http: OkHttpClient) {
             // 平台在 2046 里另给一张 mobile_ticket 并留着那张码（biz_params.sms_code_key）：后续一律用新票据。
             val renewed=data.optString("mobile_ticket")
             if(renewed.isNotBlank()) ticket=renewed
-            if(up!=null) throw Failure("红果要求完成身份验证，请按界面提示发送一条短信",MFA_REQUIRED,upSms=up)
+            if(verifyTicket.isNotBlank()) replayedWithTicket++
+            if(up!=null) {
+                // 带过票还被要求身份验证：第二次起不再让人重发那条短信，那条路已经走过了，短信也在计费。
+                if(replayedWithTicket>1) throw Failure(described ?: "红果没有接受这次身份验证的结果，请改用扫码登录",MFA_REQUIRED)
+                throw Failure("红果要求完成身份验证，请按界面提示发送一条短信",MFA_REQUIRED,upSms=up)
+            }
             throw Failure(described ?: "红果要求身份验证，但没有给出可用的验证方式",MFA_REQUIRED)
         }
         // 验证码错了重新输入即可；要求滑块的只能改用扫码；过期或次数用尽的必须重新发一张。
