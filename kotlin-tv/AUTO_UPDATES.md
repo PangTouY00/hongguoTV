@@ -2,7 +2,7 @@
 
 更新源为 GitHub 上本项目的发布仓库：`PangTouY00/hongguoTV`（用户自己的仓库）。
 
-电视先请求 `https://api.github.com/repos/PangTouY00/hongguoTV/releases/latest`，获取最新正式发行版标签，再读取该标签附件中的 `update.json`，比较内部版本号，并从 GitHub 根据清单的标签和附件名下载 APK。清单标签必须与接口返回标签一致。仅允许 HTTPS 和 GitHub 官方 API、站点及 objects.githubusercontent.com 下载域名。预发布（调试构建）不会进入这条通道。此流程由 App 实现；最终覆盖安装由安卓系统执行。
+电视先请求 `https://api.github.com/repos/PangTouY00/hongguoTV/releases/latest`，获取最新正式发行版标签，再读取该标签附件中的 `update.json`，比较内部版本号，并按清单的标签和附件名下载 APK。检查更新、读取清单和下载三个环节都优先加公共镜像前缀 `https://gh-proxy.com/`，镜像不可用或下载内容校验不通过时自动回退 GitHub 直连，因此国内网络下载更快，镜像故障也不会让更新通道不可用。清单标签必须与接口返回标签一致。仅允许 HTTPS 与 `gh-proxy.com`、GitHub 官方 API、GitHub 站点及 objects.githubusercontent.com 这些固定域名，清单本身不提供任意下载主机。预发布（调试构建）不会进入这条通道。此流程由 App 实现；最终覆盖安装由安卓系统执行。
 
 ## 发布流程
 
@@ -110,7 +110,7 @@ python3 scripts/release-tv.py --publish --resume 0.1.7
 
 1. 功能与修复先走 PR 合入 `main`，用户在 CI 自动产生的调试包上实机验收。
 2. 在合并完成的 `main` 上把 `versionName`／`versionCode` 递增到新版本，提交版本与更新说明，再在该提交上打 `kotlin-v<版本>` 标签并推送。
-3. `.github/workflows/release-tv.yml` 自动跑完 `:core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`，用与调试包同一把的 Actions 缓存签名密钥构建 `:app:assembleRelease`，核对包名、版本与 minSdk，再用 `prepare-kotlin-release.py` 生成 `update.json` 与中文更新说明，最后发布为正式 Release（Latest，进入 App 内的自动更新通道）。
+3. `.github/workflows/release-tv.yml` 自动跑完 `:core:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug`，用与调试包同一把的 Actions 缓存签名密钥构建 `:app:assembleRelease`，核对包名、版本与 minSdk，再用 `prepare-kotlin-release.py` 生成 `update.json` 与中文更新说明（详细更新日志写在仓库的 `release-notes/<标签>.md`，工作流优先使用它，没有该文件时才按 `git log` 汇总），最后发布为正式 Release（Latest，进入 App 内的自动更新通道）。
 4. 需要镜像同步时，用 `scripts/publish-tv-release.py` 把同一标签与包上传到 GitCode；`scripts/release-tv.py` 保留用于版本规划与两平台同步的预演，不再作为本机构建入口。
 
 任务记录和构建日志保存在 `outputs/release-jobs/<版本>/`，发布文件仍在 `outputs/releases/<标签>/`，均不提交。`--resume` 使用记录中的相同版本、源码及文件摘要；已完成且未改变的构建包复用，不重复构建。改变缓存文件、签名不一致或合并树发生变化均停止。版本文件写入阶段若出现不属于脚本预期内容的修改，会保留并停止，需要先检查。网络上传可沿用下层脚本的同内容跳过机制；双平台发布仍不是原子操作。
