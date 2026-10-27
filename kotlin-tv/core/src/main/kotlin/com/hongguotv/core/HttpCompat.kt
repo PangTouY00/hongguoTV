@@ -111,7 +111,17 @@ internal fun okhttp3.OkHttpClient.Builder.compatTls(): okhttp3.OkHttpClient.Buil
             as? javax.net.ssl.X509TrustManager ?: return this
         val context = javax.net.ssl.SSLContext.getInstance("TLSv1.2")
         context.init(null, trustFactory.trustManagers, null)
-        sslSocketFactory(context.socketFactory, trust)
+        // 只给 socket factory 不够：OkHttp 先按 connectionSpecs 挑协议，默认的 MODERN_TLS 含
+        // TLS 1.3，4.4 上 isSupported() 判为不支持就整条跳过，退回 COMPATIBLE_TLS（只有 1.0/1.1），
+        // 于是服务端回 "tlsv1 alert protocol version"，表现为每个界面都「暂时无法加载」。
+        // 这里显式只保留 TLS 1.2，OkHttp 才会真的 setEnabledProtocols("TLSv1.2")。
+        val tls12Only = okhttp3.ConnectionSpec.Builder(okhttp3.ConnectionSpec.MODERN_TLS)
+            .tlsVersions(okhttp3.TlsVersion.TLS_1_2)
+            // 不写死套件名：MODERN_TLS 自带 CHACHA20 等 4.4 没有的套件，一旦逐个比对失败，
+            // 这条 spec 同样会被跳过。交给设备自己那套 enabled suites 去协商。
+            .allEnabledCipherSuites()
+            .build()
+        sslSocketFactory(context.socketFactory, trust).connectionSpecs(listOf(tls12Only))
     } catch (_: Exception) {
         this
     }
