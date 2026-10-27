@@ -4,7 +4,6 @@ package com.hongguotv.nativeapp
 import android.app.Activity
 import com.hongguotv.core.*
 import okhttp3.*
-import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith

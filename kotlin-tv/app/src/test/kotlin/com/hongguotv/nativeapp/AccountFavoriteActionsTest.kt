@@ -3,7 +3,6 @@ package com.hongguotv.nativeapp
 import android.app.Activity
 import com.hongguotv.core.*
 import okhttp3.*
-import okhttp3.ResponseBody.Companion.toResponseBody
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
@@ -33,8 +32,8 @@ class AccountFavoriteActionsTest {
             var present=false;var writes=0
             val http=OkHttpClient.Builder().addInterceptor { chain ->
                 val request=chain.request()
-                val body=if(request.method=="POST") {
-                    writes++;val buffer=okio.Buffer();request.body!!.writeTo(buffer)
+                val body=if(request.method()=="POST") {
+                    writes++;val buffer=okio.Buffer();request.body()!!.writeTo(buffer)
                     present=JSONObject(buffer.readUtf8()).getJSONArray("update_bookshelf_video_list").getJSONObject(0).getInt("video_shelf_operate_type")==0
                     """{"code":0}"""
                 } else rows(present)
@@ -59,9 +58,9 @@ class AccountFavoriteActionsTest {
             flush(account);ShadowLooper.idleMainLooper();set(account,"credentials",AccountCredentials("test-only"))
             var writes=0
             set(account,"client",CloudAccountClient(OkHttpClient.Builder().addInterceptor { chain ->
-                val request=chain.request();if(request.method=="POST") writes++
+                val request=chain.request();if(request.method()=="POST") writes++
                 Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK")
-                    .body((if(request.method=="POST") """{"code":0}""" else rows(false)).toResponseBody()).build()
+                    .body((if(request.method()=="POST") """{"code":0}""" else rows(false)).toResponseBody()).build()
             }.build()))
             var message=""
             account.changeFavorite(Series("123","测试剧"),true) { message=it };flush(account);ShadowLooper.idleMainLooper()
@@ -101,9 +100,9 @@ class AccountFavoriteActionsTest {
             flush(account);ShadowLooper.idleMainLooper();set(account,"credentials",AccountCredentials("test-only"))
             var present=false;var callback=false
             set(account,"client",CloudAccountClient(OkHttpClient.Builder().addInterceptor { chain ->
-                val request=chain.request();if(request.method=="POST") present=true
+                val request=chain.request();if(request.method()=="POST") present=true
                 Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK")
-                    .body((if(request.method=="POST") """{"code":0}""" else rows(present)).toResponseBody()).build()
+                    .body((if(request.method()=="POST") """{"code":0}""" else rows(present)).toResponseBody()).build()
             }.build()))
             account.changeFavorite(Series("123","测试剧"),true) { callback=true };flush(account)
             AccountController::class.java.getDeclaredMethod("logout").apply { isAccessible=true }.invoke(account)

@@ -6,7 +6,6 @@ import android.widget.EditText
 import android.widget.TextView
 import com.hongguotv.core.*
 import okhttp3.*
-import okhttp3.ResponseBody.Companion.toResponseBody
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -37,12 +36,12 @@ class DramaDiscoveryScreenTest {
         ShadowLooper.idleMainLooper()
     }
     private fun body(request: Request): JSONObject {
-        val buffer=okio.Buffer();request.body!!.writeTo(buffer);return JSONObject(buffer.readUtf8())
+        val buffer=okio.Buffer();request.body()!!.writeTo(buffer);return JSONObject(buffer.readUtf8())
     }
     private fun views(view: View): List<View> = listOf(view)+(if(view is ViewGroup) (0 until view.childCount).flatMap { views(view.getChildAt(it)) } else emptyList())
     private fun response(request: Request): String {
-        if(request.url.encodedPath=="/incent_resource/suggestion") return """{"suggest_list":[{"name":"大佬，你该出手了"}]}"""
-        if(request.url.encodedPath=="/api/search/result") return """{"hasMore":false,"searchList":[{"series_id":"900","series_name":"搜索结果剧"}]}"""
+        if(request.url().encodedPath=="/incent_resource/suggestion") return """{"suggest_list":[{"name":"大佬，你该出手了"}]}"""
+        if(request.url().encodedPath=="/api/search/result") return """{"hasMore":false,"searchList":[{"series_id":"900","series_name":"搜索结果剧"}]}"""
         val input=body(request);val offset=input.getInt("offset")
         val real=input.getJSONObject("select_items").getJSONArray("genre").optString(0)=="short_play"
         val rows=JSONArray()
