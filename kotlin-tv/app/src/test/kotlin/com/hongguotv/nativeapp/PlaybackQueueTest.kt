@@ -86,14 +86,11 @@ class PlaybackQueueTest {
         val capabilities=ShadowNetworkCapabilities.newInstance()
         val writers=NetworkCapabilities::class.java.declaredMethods.filter { it.name=="addCapability" }
         val byName=writers.firstOrNull { it.parameterTypes.singleOrNull()==String::class.java }
-        if(byName!=null) byName.apply { isAccessible=true }.invoke(capabilities,NetworkCapabilities.NET_CAPABILITY_INTERNET)
-        else {
-            // API 23/26 的 NetworkCapabilities 用位图存能力，只有 private 的 addCapability(int)，
-            // 没有高版本才有的 getNetworkCapability(String)，位值就是 AOSP 里 addCapability 自己算的 1<<cap。
-            val bit=1 shl NetworkCapabilities.NET_CAPABILITY_INTERNET
-            writers.first { it.parameterTypes.singleOrNull()==Int::class.javaPrimitiveType }
-                .apply { isAccessible=true }.invoke(capabilities,bit)
-        }
+        // 两个重载都按 AOSP 的语义收「能力编号」，不是位值：23/26 的 addCapability(int) 会先检查
+        // capability <= NET_CAPABILITY_LAST，再自己做 1<<capability，传 1 shl 12 会撞 IllegalArgumentException。
+        if(byName!=null) byName.apply { isAccessible=true }.invoke(capabilities,"NET_CAPABILITY_INTERNET")
+        else writers.first { it.parameterTypes.singleOrNull()==Int::class.javaPrimitiveType }
+            .apply { isAccessible=true }.invoke(capabilities,NetworkCapabilities.NET_CAPABILITY_INTERNET)
         return capabilities
     }
     private fun fixture(test: (MainActivity,QueuePlayer,Library,RemoteVideo)->Unit) {
