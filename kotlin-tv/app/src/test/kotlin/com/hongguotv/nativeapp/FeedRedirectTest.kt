@@ -32,7 +32,7 @@ class FeedRedirectTest {
             val http=PublicFeedBackend::class.java.getDeclaredField("http").apply { isAccessible=true }.get(backend) as OkHttpClient
             http.newCall(Request.Builder().url("http://127.0.0.1:${server.localPort}/start").build()).execute().use {
                 assertEquals(200,it.code);assertEquals("video-response",it.body!!.string())
-                assertEquals(301,it.priorResponse?.code)
+                assertEquals(301,it.priorResponse()?.code())
             }
         } finally { backend.close();server.close();serving.join(5000) }
         assertNull(errors.get())
