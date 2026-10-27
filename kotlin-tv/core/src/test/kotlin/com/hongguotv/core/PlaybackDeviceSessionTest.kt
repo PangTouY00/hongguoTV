@@ -1,6 +1,7 @@
 package com.hongguotv.core
 
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -123,5 +124,42 @@ class PlaybackDeviceSessionTest {
         assertEquals(0, registrations)
         session.profile(http)
         assertEquals(1, registrations)
+
+    @Test
+    fun registrationFailureKeepsItsOwnSafeCategory() {
+        val session = PlaybackDeviceSession { throw IOException("test-only private response") }
+        val error = assertThrows(PlaybackDeviceRegistrationException::class.java) { session.profile(OkHttpClient()) }
+        assertFalse(error.message.orEmpty().contains("private response"))
+    }
+
+    @Test
+    fun emptyPlaybackResponseIsRetriedWithAFreshTicket() {
+        val reads = AtomicInteger()
+        val tickets = mutableListOf<String?>()
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            tickets += request.url.queryParameter("_rticket")
+            val body = if (reads.incrementAndGet() < 3) "" else model
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("fixture")
+                .body(body.toResponseBody()).build()
+        }.build()
+        var now = 0L
+        val repo = ContentRepository(http, { now += 1_000L; now }, PlaybackDeviceSession { DeviceRegister.Registered("333", "444") })
+        assertEquals(1, repo.streamLadder("123").renditions.size)
+        assertEquals(3, reads.get())
+        // 同一签名重读通常还是空响应，所以每次重试都要换新的 _rticket。
+        assertEquals(3, tickets.distinct().size)
+    }
+
+    @Test
+    fun interruptedCallerDoesNotStartARegistration() {
+        val session = PlaybackDeviceSession { throw AssertionError("registration must not start") }
+        Thread.currentThread().interrupt()
+        try {
+            assertThrows(InterruptedIOException::class.java) { session.profile(OkHttpClient()) }
+        } finally {
+            Thread.interrupted()
+        }
+    }
     }
 }

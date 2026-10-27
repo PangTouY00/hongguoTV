@@ -14,7 +14,7 @@
 
 - 搜索使用 `ContentRepository.searchAll()` 的网站搜索，覆盖短剧和漫剧。首页分类与搜索独立；不要重新引入已失败的漫剧搜索链路。
 - 首页、搜索正常但播放超时时，先核对播放请求路由、设备标识和响应是否为空。
-- 当前播放使用独立的随机设备标识，同一 Repository 实例内保持稳定；不附带搜索签名头。参考来源和许可见 [NOTICE](../kotlin-tv/NOTICE.md)。不要把其他社区项目的播放路由直接替换进来而不验证本项目已有效的链路。
+- 播放身份改为匿名注册下发（0.1.11）：播放信息接口只认 `POST /service/2/device_register/` 换来的 `device_id` / `iid`，客户端自己编的 19 位随机数字会被回成 HTTP 200 空响应，表现是整集播不了。身份由 `PlaybackDeviceSession.shared` 在进程内持有，全屏、首页试播与下一集预热共用一份，`cdid` 全程不变；并发注册合并为一次。平台拒注册（`0` 或空串）报 `PlaybackDeviceRegistrationException`，不回退到随机身份硬播。注册请求不带账号 Cookie，回写只保留 `install_id` / `ttreq` / `store-region` / `store-region-src`。空响应时换新 `_rticket` 重新签名重读，至多三次，仍空报 `EmptyPlaybackResponseException`。不附带搜索签名头。参考来源和许可见 [NOTICE](../kotlin-tv/NOTICE.md)。不要把其他社区项目的播放路由直接替换进来而不验证本项目已有效的链路。
 - 保留响应大小限制、请求取消、媒体解密、视频轨道检查和原有清晰度筛选。空响应或平台拒绝不应伪装成空列表或成功播放。
 - 只有明确的前后台页面、会话代次允许异步结果更新 UI；离开页面或切换账号后丢弃旧结果。
 

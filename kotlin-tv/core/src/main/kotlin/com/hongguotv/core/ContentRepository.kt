@@ -78,6 +78,8 @@ class ContentHttpException(val statusCode: Int): IOException("内容请求失败
 /** HTTP 200 with no body: the website renderer failed transiently; safe to retry. */
 internal class EmptyContentException: IOException("内容响应为空")
 class SearchSessionExpiredException: IOException("搜索结果已过期，请从第 1 页重新搜索")
+/** 播放接口偶发 HTTP 200 空响应：换新签名重读，仍空才报成这个独立类别。 */
+class EmptyPlaybackResponseException: IOException("播放接口暂时返回空响应，请稍后重试")
 /** A board page never recovered; [partial] holds the rows that did load, labelled by pagesRead. */
 class IncompleteRankSnapshotException(message: String,val partial: RankSnapshot): IOException(message)
 
@@ -91,6 +93,7 @@ class ContentRepository(
             .compatTls()
             .build(),
     private val clock: () -> Long = System::currentTimeMillis,
+    // 播放身份必须来自设备注册，并由调用方在首页与全屏之间共享同一份。
     private val playbackSession: PlaybackDeviceSession = PlaybackDeviceSession(),
 ) {
     private val signer = Signer()
@@ -336,25 +339,48 @@ class ContentRepository(
         val info=selected.toStreamInfo()
         return if(selected.quality>maxQuality) info.copy(quality=info.quality+"（兼容资源）") else info
     }
+    /**
+     * 读取一集的播放信息。
+     *
+     * 只认注册下发的匿名设备身份：随机编的 device_id 换回的就是 HTTP 200 空响应。
+     * 空响应时换新的 _rticket 重新签名再读（同一签名重读通常还是空），最多三次，
+     * 与榜单、搜索的有限重试保持同一量级；被导航取消的请求不重试。
+     */
+    private fun playbackModel(payload: ByteArray): String {
+        val identity=playbackSession.profile(http)
+        var last: IOException?=null
+        for(attempt in 0 until 3) {
+            val query=Signer.encode(identity.values + ("_rticket" to clock().toString()))
+            val playerUrl="https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/?$query"
+            val headers=linkedMapOf(
+                "User-Agent" to "com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)",
+                "Accept" to "application/json; charset=utf-8,application/x-protobuf"
+            )
+            if(identity.cookie.isNotBlank()) headers["Cookie"]=identity.cookie
+            try {
+                val body=text(playerUrl,Signer.Request(playerUrl,headers,payload))
+                if(body.isNotBlank()) return body
+                last=EmptyPlaybackResponseException()
+            } catch (error: IOException) {
+                val temporary=error is java.net.SocketTimeoutException || error is java.net.SocketException ||
+                    error is java.net.UnknownHostException || error is EmptyContentException ||
+                    (error is ContentHttpException && error.statusCode in setOf(500,502,503,504))
+                if(!temporary) throw error
+                last=error
+            }
+            if(Thread.currentThread().isInterrupted) throw java.io.InterruptedIOException("请求已取消")
+            if(attempt==2) break
+            try { Thread.sleep(700L*(attempt+1)) } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt(); throw java.io.InterruptedIOException("请求已取消")
+            }
+        }
+        throw last ?: EmptyPlaybackResponseException()
+    }
     /** Every playable rendition of one episode, best tier first; one player-API round trip. */
     fun streamLadder(id: String): StreamLadder {
         require(id.matches(Regex("[0-9]{1,30}")))
         val payload="""{"biz_param":{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}""".toByteArray()
-        // 播放接口只认服务端注册过的身份：先匿名注册（进程内只做一次），再带身份取流。
-        val identity=playbackSession.profile(http)
-        val query=Signer.encode(identity.values + ("_rticket" to clock().toString()))
-        val playerUrl="https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/?$query"
-        val headers=linkedMapOf(
-            "User-Agent" to "com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)",
-            "Accept" to "application/json; charset=utf-8,application/x-protobuf"
-        )
-        // 注册下发的设备 Cookie 显式回写：注册域与播放域不同子域，CookieJar 按域匹配发不出去。
-        if(identity.cookie.isNotBlank()) headers["Cookie"]=identity.cookie
-        val request=Signer.Request(playerUrl,headers,payload)
-        // The player API answers HTTP 200 with an empty body often enough that one failed read
-        // shows up as a broken episode, so retry the same read-only lookup before reporting it.
-        val response=text(playerUrl,request,retryTransient=true,retries=2)
-        if(response.isBlank()) throw IOException("播放接口返回空响应，请稍后重试或更新应用")
+        val response=playbackModel(payload)
         val data=JSONObject(response)
         val code=data.optInt("Code",data.optInt("code",0))
         if(code!=0) throw IOException("播放接口暂不可用（错误码 $code）")

@@ -1413,7 +1413,8 @@ class MainActivity: Activity() {
         val warmBytes=PrefetchPolicy.warmBytes(metered)
         cancelPrefetch(); prefetchedFor=key; prefetchAttemptAt=now; prefetchAttempts++
         val ticket=preparedNext.begin(key)
-        val http=newHttpClientBuilder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).build()
+        val http=newHttpClientBuilder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).callTimeout(20,java.util.concurrent.TimeUnit.SECONDS).build()
         val source=ContentRepository(http, playbackSession=PlaybackDeviceSession.shared); prefetchHttp=http
         val scope=RequestScope(); prefetchScope=scope
         prefetchJob=prefetchWorker.submit {
