@@ -21,6 +21,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.LooperMode
 import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowNetworkCapabilities
+import org.robolectric.shadows.ShadowNetworkInfo
 import java.lang.reflect.Proxy
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
@@ -66,8 +67,12 @@ class PlaybackQueueTest {
     private fun meteredNetwork(activity: MainActivity) {
         val connectivity=get(activity,"connectivity") as ConnectivityManager
         val shadow=shadowOf(connectivity)
-        // Robolectric counts TYPE_MOBILE as metered once it is the active network.
-        shadow.setActiveNetworkInfo(NetworkInfo(ConnectivityManager.TYPE_MOBILE,0,"mobile","mobile"))
+        // Robolectric 的 android-all 里 NetworkInfo.stateMap 这个静态字段在沙箱内没有初始化，直接
+        // NetworkInfo(...) 会抛 NullPointerException: stateMap is null，所以用 shadow 的工厂绕开构造器。
+        shadow.setActiveNetworkInfo(ShadowNetworkInfo.newInstance(
+            NetworkInfo.DetailedState.CONNECTED,ConnectivityManager.TYPE_MOBILE,0,true,NetworkInfo.State.CONNECTED))
+        // Robolectric 的 isActiveNetworkMetered 只在默认网络被标为活跃时才按 TYPE_MOBILE 判定。
+        shadow.setDefaultNetworkActive(true)
         val network=connectivity.activeNetwork ?: throw AssertionError("Robolectric 没有给出活动网络")
         // android.net.NetworkCapabilities has no public builder, and both its factory and its
         // addCapability are hidden here, so the instance comes from Robolectric's own shadow and the
