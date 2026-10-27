@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit
 
 /** Shared anonymous transport for read-only comment lists. Never accepts account credentials. */
 internal class CommentTransport {
-    private val http=OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).followRedirects(false).build()
+    private val http=OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).followRedirects(false).compatTls().build()
     private val signature=CommentSignature()
     fun read(episode: String, payload: JSONObject, source: Int, channel: Int): JSONObject {
         val query=linkedMapOf("aid" to "8662","app_name" to "novelread","version_code" to "73532","version_name" to "7.3.5.32","manifest_version_code" to "73532","update_version_code" to "73532","channel" to "update_64","device_platform" to "android","os" to "android","ssmix" to "a","device_type" to "25053RT47C","device_brand" to "Redmi","language" to "zh","os_api" to "36","os_version" to "16","resolution" to "1280*2772","dpi" to "520","ac" to "wifi","device_id" to "7397450988462912345","iid" to "7397450988462912346","_rticket" to System.currentTimeMillis().toString())

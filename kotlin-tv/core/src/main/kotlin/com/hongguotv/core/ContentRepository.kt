@@ -88,6 +88,7 @@ class ContentRepository(
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .cookieJar(MemoryCookies())
+            .compatTls()
             .build(),
     private val clock: () -> Long = System::currentTimeMillis,
 ) {

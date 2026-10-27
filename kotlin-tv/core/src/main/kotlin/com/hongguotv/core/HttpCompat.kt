@@ -81,3 +81,32 @@ internal val okhttp3.HttpUrl.encodedQuery: String? get() = encodedQuery()
 internal val okhttp3.Headers.size: Int get() = size()
 internal fun ByteArray.toResponseBody(contentType: okhttp3.MediaType? = null): okhttp3.ResponseBody =
     okhttp3.ResponseBody.create(contentType, this)
+
+// Android 4.1~4.4 实现了 TLS 1.2，但默认不启用；服务端只接受 1.2 时握手会直接失败。
+// core 是纯 JVM 模块，不能直接引用 android.os.Build，按名字取；取不到（JVM 测试环境）
+// 就当高版本处理，这条分支只在真机 Android 4.x 上生效。
+private val androidApiLevel: Int by lazy {
+    try {
+        Class.forName("android.os.Build\$VERSION").getField("SDK_INT").getInt(null)
+    } catch (_: Exception) {
+        Int.MAX_VALUE
+    }
+}
+
+/** 给 OkHttp 一个明确启用 TLS 1.2 的 socket factory；设备不支持时保持系统默认。 */
+internal fun okhttp3.OkHttpClient.Builder.compatTls(): okhttp3.OkHttpClient.Builder {
+    if (androidApiLevel > 20) return this
+    return try {
+        val trustFactory = javax.net.ssl.TrustManagerFactory.getInstance(
+            javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
+        )
+        trustFactory.init(null as java.security.KeyStore?)
+        val trust = trustFactory.trustManagers.firstOrNull { it is javax.net.ssl.X509TrustManager }
+            as? javax.net.ssl.X509TrustManager ?: return this
+        val context = javax.net.ssl.SSLContext.getInstance("TLSv1.2")
+        context.init(null, trustFactory.trustManagers, null)
+        sslSocketFactory(context.socketFactory, trust)
+    } catch (_: Exception) {
+        this
+    }
+}
