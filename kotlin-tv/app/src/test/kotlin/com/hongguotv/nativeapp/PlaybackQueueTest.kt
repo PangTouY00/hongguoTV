@@ -88,8 +88,9 @@ class PlaybackQueueTest {
         val byName=writers.firstOrNull { it.parameterTypes.singleOrNull()==String::class.java }
         if(byName!=null) byName.apply { isAccessible=true }.invoke(capabilities,NetworkCapabilities.NET_CAPABILITY_INTERNET)
         else {
-            val bit=NetworkCapabilities::class.java.getDeclaredMethod("getNetworkCapability",String::class.java)
-                .apply { isAccessible=true }.invoke(null,NetworkCapabilities.NET_CAPABILITY_INTERNET) as Int
+            // API 23/26 的 NetworkCapabilities 用位图存能力，只有 private 的 addCapability(int)，
+            // 没有高版本才有的 getNetworkCapability(String)，位值就是 AOSP 里 addCapability 自己算的 1<<cap。
+            val bit=1 shl NetworkCapabilities.NET_CAPABILITY_INTERNET
             writers.first { it.parameterTypes.singleOrNull()==Int::class.javaPrimitiveType }
                 .apply { isAccessible=true }.invoke(capabilities,bit)
         }
