@@ -35,16 +35,37 @@ data class AppUpdate(val versionCode: Long, val versionName: String, val minSdk:
             return tag
         }
         const val MAX_APK_BYTES = 80L * 1024 * 1024
-        fun parse(json: String): AppUpdate {
+        /**
+         * 解析更新清单。
+         *
+         * 顶层 `apk` 是默认包，给还不认识 `variants` 的旧客户端用（Android 6.0+ 构建）。
+         * `variants` 里同一版本可以挂多个不同 minSdk 的构建：Android 4.4 拿 android44，
+         * 6.0 及以上拿 android6，两条线共用同一个 versionCode / versionName 与同一个标签。
+         */
+        fun parse(json: String, sdk: Int = Int.MAX_VALUE): AppUpdate {
             val o = JSONObject(json)
             require(o.getInt("schema") == 1 && o.getString("packageName") == "com.hongguotv.nativeapp") { "更新信息不匹配" }
-            val apk = o.getJSONObject("apk")
-            val update = AppUpdate(o.getLong("versionCode"), o.getString("versionName"), o.getInt("minSdk"),
+            val variant = o.optJSONArray("variants")?.let { array ->
+                var best: JSONObject? = null
+                var bestMinSdk = 0
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val minSdk = item.optInt("minSdk", 0)
+                    // 兼容旧清单里没有的字段；只选当前系统版本装得上的最高 minSdk 构建。
+                    if (minSdk !in 19..100 || minSdk > sdk || minSdk <= bestMinSdk) continue
+                    best = item
+                    bestMinSdk = minSdk
+                }
+                best
+            }
+            val apk = variant?.optJSONObject("apk") ?: o.getJSONObject("apk")
+            val minSdk = variant?.optInt("minSdk", 0) ?: o.getInt("minSdk")
+            val update = AppUpdate(o.getLong("versionCode"), o.getString("versionName"), minSdk,
                 o.getString("tag"), apk.getString("name"), apk.getLong("size"), apk.getString("sha256").lowercase(), o.optString("notes").take(1500))
-            require(update.versionCode in 1..Int.MAX_VALUE.toLong() && update.minSdk in 23..100)
+            require(update.versionCode in 1..Int.MAX_VALUE.toLong() && update.minSdk in 19..100)
             require(update.versionName.matches(Regex("[0-9][0-9A-Za-z.+-]{0,63}")))
             require(update.tag.matches(Regex("kotlin-v[0-9][0-9A-Za-z.+-]{0,80}")))
-            require(update.fileName.matches(Regex("hongguotv-kotlin-[0-9][0-9A-Za-z.+-]{0,80}-android(?:6|8)\\.apk")))
+            require(update.fileName.matches(Regex("hongguotv-kotlin-[0-9][0-9A-Za-z.+-]{0,80}-android(?:44|6|8)\\.apk")))
             require(update.size in 1..MAX_APK_BYTES && update.sha256.matches(Regex("[0-9a-f]{64}")))
             return update
         }
@@ -109,12 +130,13 @@ class AppUpdateRepository : java.io.Closeable {
     /** 取址顺序：先镜像加速，镜像不可用时回退 GitHub 直连，避免镜像故障让整条更新通道不可用。 */
     private fun <T> mirroredFetch(direct: String, read: (String) -> T): T =
         try { read(AppUpdate.mirrored(direct)) } catch (_: IOException) { read(direct) }
-    fun latest(): AppUpdate {
+    /** sdk 是当前设备的 API 级别：清单里有多条构建时，按它选装得上的那一个。 */
+    fun latest(sdk: Int = Int.MAX_VALUE): AppUpdate {
         val release = mirroredFetch(AppUpdate.LATEST_API) { readMetadata(it) }
         val tag = try { AppUpdate.latestTag(release) } catch (_: Exception) { throw IOException("最新发行版信息格式不正确") }
         val metadata = mirroredFetch("${AppUpdate.RELEASES}/download/$tag/update.json") { readMetadata(it) }
         return try {
-            AppUpdate.parse(metadata).also { require(it.tag == tag) { "清单标签不匹配" } }
+            AppUpdate.parse(metadata, sdk).also { require(it.tag == tag) { "清单标签不匹配" } }
         } catch (_: Exception) { throw IOException("更新信息格式不正确") }
     }
     fun download(update: AppUpdate, file: File, progress: (Int) -> Unit) {

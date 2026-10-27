@@ -36,7 +36,26 @@ class AppUpdatesTest {
         val compatible=AppUpdate.parse(metadata.toString())
         assertTrue(compatible.newerThan(16,23)); assertFalse(compatible.newerThan(16,22))
         assertFalse(update().newerThan(16,23))
-        assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(metadata.put("minSdk",22).toString()) }
+        assertThrows(IllegalArgumentException::class.java) { AppUpdate.parse(metadata.put("minSdk",18).toString()) }
+    }
+    @Test fun variantManifestsPickTheBuildForTheDeviceSdk() {
+        // 同一版本同时挂 android44 与 android6 两个构建：4.4 设备选 19，6.0+ 选 23，旧客户端读顶层默认包。
+        val manifest = json().put("versionCode", 10002).put("versionName", "0.1.12").put("minSdk", 23).put("tag", "kotlin-v0.1.12")
+        val android6 = JSONObject(manifest.getJSONObject("apk").toString()).put("name", "hongguotv-kotlin-0.1.12-android6.apk")
+        manifest.put("apk", android6)
+        val android44 = JSONObject(android6.toString()).put("name", "hongguotv-kotlin-0.1.12-android44.apk")
+        manifest.put("variants", org.json.JSONArray()
+            .put(JSONObject().put("minSdk", 19).put("apk", android44))
+            .put(JSONObject().put("minSdk", 23).put("apk", android6)))
+        val onAndroid44 = AppUpdate.parse(manifest.toString(), 19)
+        assertEquals("hongguotv-kotlin-0.1.12-android44.apk", onAndroid44.fileName)
+        assertEquals(19, onAndroid44.minSdk)
+        assertTrue(onAndroid44.newerThan(10001, 19))
+        val onAndroid6 = AppUpdate.parse(manifest.toString(), 33)
+        assertEquals("hongguotv-kotlin-0.1.12-android6.apk", onAndroid6.fileName)
+        assertEquals(23, onAndroid6.minSdk)
+        // 还不知道 variants 的老客户端（0.1.11 及以前）读顶层的 android6 包，行为保持不变。
+        assertEquals("hongguotv-kotlin-0.1.12-android6.apk", AppUpdate.parse(manifest.toString()).fileName)
     }
     @Test fun onlyHigherCompatibleVersionsAreUpdates() {
         val update = update()
