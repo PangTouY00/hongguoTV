@@ -91,6 +91,7 @@ class ContentRepository(
             .compatTls()
             .build(),
     private val clock: () -> Long = System::currentTimeMillis,
+    private val playbackSession: PlaybackDeviceSession = PlaybackDeviceSession(),
 ) {
     private val signer = Signer()
 
@@ -105,53 +106,15 @@ class ContentRepository(
     }
     private val site = "https://hongguoduanju.com"
     private val suggestionWebId = UUID.randomUUID().toString()
-    // Compatibility approach from upstream PR #22. Keep search signing separate.
-    // Identifiers remain stable for this repository's lifetime, including episode changes.
-    private val cdid = UUID.randomUUID().toString()
     /**
-     * 播放接口认的是「服务端注册过的 `device_id` + `iid` 这一对」：没注册过的身份它回
-     * HTTP 200 + 0 字节（本机探针实测复现，见 [DeviceRegister] 的记录）。所以游客也要先做一次
-     * 匿名注册；注册不成才退回随机身份，并且最多试两次，不让每次播放都多付一次注册请求。
+     * 播放身份来自 [PlaybackDeviceSession]：第一次取播放地址前匿名注册一次，之后同一个应用进程
+     * 内的首页试播、正式播放、换剧切集全部复用。这里不再随机生成 `iid`/`device_id`——
+     * 未注册的身份只会换来 HTTP 200 + 0 字节。
      */
-    @Volatile private var resolvedPlayerDevice: Map<String, String>? = null
-    @Volatile private var registeredIdentity = false
-    @Volatile private var registrationAttempts = 0
-    /** 当前播放请求实际使用的设备身份（界面诊断会读它）。 */
-    val playerDevice: Map<String, String> get() = resolvedPlayerDevice ?: resolvePlayerDevice()
-    /** 这个身份是不是服务端刚下发的。界面诊断用它区分「没注册成功」和「服务端不给流」。 */
-    val playerDeviceIsRegistered: Boolean get() = registeredIdentity
-    /** 已经解析到的身份；没解析过就是 null。诊断在 UI 线程读它，绝不能顺手发起注册请求。 */
-    val resolvedPlayerDeviceOrNull: Map<String, String>? get() = resolvedPlayerDevice
-    /** 探针与测试可以直接指定身份，或传 null 回到「自己注册」的默认路径。 */
-    internal fun usePlayerDevice(device: Map<String, String>?) { resolvedPlayerDevice = device }
-    private fun resolvePlayerDevice(): Map<String, String> {
-        resolvedPlayerDevice?.let { return it }
-        synchronized(this) {
-            resolvedPlayerDevice?.let { return it }
-            val registered = if (registrationAttempts < 2) {
-                registrationAttempts++
-                runCatching { CloudAccountClient(http).registerDevice() }.getOrNull()
-            } else null
-            registeredIdentity = registered != null
-            val random = {
-                VendorConstants.device + mapOf(
-                    "iid" to newPlayerDeviceId(), "device_id" to newPlayerDeviceId(), "cdid" to cdid
-                )
-            }
-            // 注册失败但还有重试额度：这次先用临时身份播，下一次播放再试注册。
-            // 失败就永久钉死随机身份的话，一次网络抖动会让这台电视再也注册不上。
-            if (registered == null && registrationAttempts < 2) return random()
-            val device = if (registered == null) random() else VendorConstants.device + mapOf(
-                "iid" to registered.installId, "device_id" to registered.deviceId, "cdid" to cdid
-            )
-            resolvedPlayerDevice = device
-            return device
-        }
-    }
-    private fun newPlayerDeviceId() = buildString {
-        append('3')
-        repeat(18) { append(kotlin.random.Random.nextInt(10)) }
-    }
+    /** 已经拿到的播放身份；还没注册成功时是 null。诊断在 UI 线程读它，不触发注册。 */
+    val resolvedPlayerDeviceOrNull: Map<String, String>? get() = playbackSession.readyProfile()?.values
+    /** 这个身份是不是服务端注册下发的。用来区分「没注册成功」和「服务端不给流」。 */
+    val playerDeviceIsRegistered: Boolean get() = playbackSession.readyProfile() != null
     private data class SearchCursor(val searchId: String, val passback: String, val offset: Int?, val updatedAt: Long)
     private val searchCursors=linkedMapOf<Triple<ContentType,String,Int>,SearchCursor>()
     private fun text(url: String, signed: Signer.Request? = null, retryTransient: Boolean = false, retries: Int = 1, client: OkHttpClient = http): String {
@@ -377,12 +340,17 @@ class ContentRepository(
     fun streamLadder(id: String): StreamLadder {
         require(id.matches(Regex("[0-9]{1,30}")))
         val payload="""{"biz_param":{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}""".toByteArray()
-        val query=Signer.encode(playerDevice + ("_rticket" to clock().toString()))
+        // 播放接口只认服务端注册过的身份：先匿名注册（进程内只做一次），再带身份取流。
+        val identity=playbackSession.profile(http)
+        val query=Signer.encode(identity.values + ("_rticket" to clock().toString()))
         val playerUrl="https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/?$query"
-        val request=Signer.Request(playerUrl,mapOf(
+        val headers=linkedMapOf(
             "User-Agent" to "com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)",
             "Accept" to "application/json; charset=utf-8,application/x-protobuf"
-        ),payload)
+        )
+        // 注册下发的设备 Cookie 显式回写：注册域与播放域不同子域，CookieJar 按域匹配发不出去。
+        if(identity.cookie.isNotBlank()) headers["Cookie"]=identity.cookie
+        val request=Signer.Request(playerUrl,headers,payload)
         // The player API answers HTTP 200 with an empty body often enough that one failed read
         // shows up as a broken episode, so retry the same read-only lookup before reporting it.
         val response=text(playerUrl,request,retryTransient=true,retries=2)

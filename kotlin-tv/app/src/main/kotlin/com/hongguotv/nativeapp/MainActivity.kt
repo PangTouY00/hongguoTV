@@ -23,7 +23,7 @@ class MainActivity: Activity() {
     private val accent=TvStyle.accent; private val white=TvStyle.text; private val muted=TvStyle.muted
     private val main=Handler(Looper.getMainLooper())
     private val io=Executors.newFixedThreadPool(3)
-    private val repository=ContentRepository()
+    private val repository=ContentRepository(playbackSession=PlaybackDeviceSession.shared)
     // 榜单专用并行加载通道：最多四榜各自在途、互不取消，与全局单飞 work() 隔离。
     private val rankWorker=Executors.newFixedThreadPool(3)
     private val networkCleanup=Executors.newSingleThreadExecutor()
@@ -1395,7 +1395,7 @@ class MainActivity: Activity() {
         cancelPrefetch(); prefetchedFor=key; prefetchAttemptAt=now; prefetchAttempts++
         val ticket=preparedNext.begin(key)
         val http=newHttpClientBuilder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).build()
-        val source=ContentRepository(http); prefetchHttp=http
+        val source=ContentRepository(http, playbackSession=PlaybackDeviceSession.shared); prefetchHttp=http
         val scope=RequestScope(); prefetchScope=scope
         prefetchJob=prefetchWorker.submit {
             var remote: RemoteVideo?=null
@@ -1470,6 +1470,7 @@ class MainActivity: Activity() {
         // 只读已解析的身份：诊断跑在主线程，读 playerDevice 会在未解析时同步发一次注册请求。
         val identity=repository.resolvedPlayerDeviceOrNull
         appendLine("播放身份：iid=${identity?.get("iid") ?: "尚未解析"} · 服务端注册过=${repository.playerDeviceIsRegistered}")
+        appendLine("设备注册：${if(repository.playerDeviceIsRegistered) "已完成（匿名，无需登录）" else "未完成或失败，播放接口会一直返回空响应"}")
         appendLine("已记录的解码失败：${CodecCapabilities.learnedCount()} 条")
         append("本机解码器：${CodecCapabilities.deviceSummary()}")
     }
@@ -1494,7 +1495,14 @@ class MainActivity: Activity() {
         playError=true; player?.pause(); progressBar.visibility=View.GONE; hud.visibility=View.VISIBLE; controls.removeAllViews(); controls.visibility=View.VISIBLE; panel=true
         val decoding=problem is PlaybackFailure && problem.decoding
         val retryable=if(problem is PlaybackFailure) problem.retryable else problem is java.io.IOException
-        playbackText.text=if(decoding) "电视无法解码当前视频，可尝试更低清晰度。" else "播放失败，可重试或切换清晰度。"
+        // 注册失败和「取不到流」不是一回事：前者的解决动作是重试注册，而不用登录或换清晰度。
+        val registrationFailure=generateSequence(problem){ it.cause }.take(8)
+            .any { it is com.hongguotv.core.PlaybackDeviceRegistrationException }
+        playbackText.text=when {
+            registrationFailure -> "播放设备注册失败，请稍后重试（无需登录）。"
+            decoding -> "电视无法解码当前视频，可尝试更低清晰度。"
+            else -> "播放失败，可重试或切换清晰度。"
+        }
         showPlaybackFailureDetail(problem,false)
         val actions=row(); controls.addView(actions)
         addButton(actions,"立即重试") { playEpisode(episodeIndex,retryPosition,retryAutoplay) }.requestFocus()
