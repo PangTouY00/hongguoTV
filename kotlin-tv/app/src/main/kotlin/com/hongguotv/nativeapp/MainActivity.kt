@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.nativeapp
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
 import android.os.Bundle
@@ -237,6 +238,7 @@ class MainActivity: Activity() {
     }
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
+        registerBackHandling()
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         librarySources=LibrarySources(this)
         library=Library(this); artwork=ArtworkLoader(this); tvTools=TvTools(this); root=FrameLayout(this).apply { setBackgroundColor(bg) }; setContentView(root)
@@ -1937,12 +1939,27 @@ class MainActivity: Activity() {
             else -> if(tab==1 && query.isNotBlank()) returnToDiscovery() else if(collection!=null) { leaveCollection(); showCatalog() } else if(nav.any { it.hasFocus() }) { if(tab!=0) { switchTab(0); nav[0].requestFocus() } else finish() } else nav.getOrNull(tab)?.requestFocus()
         }
     }
-    @Deprecated("TV remote back is handled through the activity")
-    override fun onBackPressed()=goBack()
+    /** 返回处理分两条路：Android 13 起系统把返回派发成 OnBackInvokedCallback，16 起默认开启且不再调用 onBackPressed、也不再派发 BACK 按键；
+     *  更早的系统没有这套回调，只能在 dispatchKeyEvent 里接管 BACK 键。两条路都只进 goBack()，界面层级不变。
+     *  这条分支要用 API 19 的 android.jar 编译，API 33 才有的类只能按名字取用；低版本上整段不会执行。 */
+    private fun registerBackHandling() {
+        if (android.os.Build.VERSION.SDK_INT < 33) return
+        try {
+            val dispatcher = javaClass.getMethod("getOnBackInvokedDispatcher").invoke(this) ?: return
+            val listener = Class.forName("android.window.OnBackInvokedCallback")
+            val priority = Class.forName("android.window.OnBackInvokedDispatcher").getField("PRIORITY_DEFAULT").getInt(null)
+            val callback = java.lang.reflect.Proxy.newProxyInstance(listener.classLoader, arrayOf(listener)) { _, _, _ -> goBack(); null }
+            dispatcher.javaClass.getMethod("registerOnBackInvokedCallback", Int::class.javaPrimitiveType, listener).invoke(dispatcher, priority, callback)
+        } catch (problem: Throwable) {
+            android.util.Log.w("HongguoTV", "Back callback registration failed: $problem")
+        }
+    }
+    @SuppressLint("GestureBackNavigation")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Android 12 及以下没有可注册的返回回调，BACK 键只能在这里接管；13 起系统不再派发它，走上面的回调。
+        if(event.keyCode==KeyEvent.KEYCODE_BACK) { if(event.action==KeyEvent.ACTION_UP) goBack(); return true }
         if(screen=="player") {
             val key=event.keyCode
-            if(key==KeyEvent.KEYCODE_BACK) { if(event.action==KeyEvent.ACTION_UP) goBack(); return true }
             if(key in listOf(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,KeyEvent.KEYCODE_MEDIA_PLAY,KeyEvent.KEYCODE_MEDIA_PAUSE,KeyEvent.KEYCODE_MEDIA_NEXT,KeyEvent.KEYCODE_MEDIA_PREVIOUS,KeyEvent.KEYCODE_MEDIA_STOP,KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,KeyEvent.KEYCODE_MEDIA_REWIND)) {
                 if(event.action==KeyEvent.ACTION_DOWN && event.repeatCount==0) when(key) {
                     KeyEvent.KEYCODE_MEDIA_PLAY -> requestPlayback(true)
