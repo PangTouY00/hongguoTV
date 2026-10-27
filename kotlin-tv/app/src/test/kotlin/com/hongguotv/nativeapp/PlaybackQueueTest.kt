@@ -1,5 +1,8 @@
 package com.hongguotv.nativeapp
 
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.NetworkInfo
 import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -14,8 +17,10 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.LooperMode
 import org.robolectric.shadows.ShadowLooper
+import org.robolectric.shadows.ShadowNetworkCapabilities
 import java.lang.reflect.Proxy
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
@@ -33,14 +38,15 @@ class PlaybackQueueTest {
     }
     private class QueuePlayer {
         val items=mutableListOf(MediaItem.Builder().setMediaId("101").build())
-        val calls=mutableListOf<String>();var index=0
+        val calls=mutableListOf<String>();var index=0;var position=0L;var buffered=95_000L
         val player=Proxy.newProxyInstance(ExoPlayer::class.java.classLoader,arrayOf(ExoPlayer::class.java)) { _,method,args ->
             calls+=method.name
             when(method.name) {
                 "getCurrentMediaItem" -> items.getOrNull(index)
                 "getMediaItemCount" -> items.size
                 "getCurrentMediaItemIndex" -> index
-                "getCurrentPosition" -> 0L
+                "getCurrentPosition" -> position
+                "getBufferedPosition" -> buffered
                 "getDuration" -> 90000L
                 "getPlaybackState" -> Player.STATE_READY
                 "getPlaybackParameters" -> PlaybackParameters(1f)
@@ -55,6 +61,34 @@ class PlaybackQueueTest {
                 else -> when(method.returnType) { java.lang.Boolean.TYPE -> false;java.lang.Integer.TYPE -> 0;java.lang.Long.TYPE -> 0L;else -> null }
             }
         } as ExoPlayer
+    }
+    /** Mobile data with working internet: the case a phone is actually in while watching. */
+    private fun meteredNetwork(activity: MainActivity) {
+        val connectivity=get(activity,"connectivity") as ConnectivityManager
+        val shadow=shadowOf(connectivity)
+        // Robolectric counts TYPE_MOBILE as metered once it is the active network.
+        shadow.setActiveNetworkInfo(NetworkInfo(ConnectivityManager.TYPE_MOBILE,0,"mobile","mobile"))
+        val network=connectivity.activeNetwork ?: throw AssertionError("Robolectric 没有给出活动网络")
+        // android.net.NetworkCapabilities has no public builder, and both its factory and its
+        // addCapability are hidden here, so the instance comes from Robolectric's own shadow and the
+        // capability is filled through reflection. NET_CAPABILITY_NOT_METERED is deliberately left
+        // out: that is what makes it report itself as metered, which is the cellular case under test.
+        shadow.setNetworkCapabilities(network,internetCapabilities())
+        assertTrue(connectivity.isActiveNetworkMetered)
+        assertTrue(connectivity.getNetworkCapabilities(network)!!.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET))
+    }
+    private fun internetCapabilities(): NetworkCapabilities {
+        val capabilities=ShadowNetworkCapabilities.newInstance()
+        val writers=NetworkCapabilities::class.java.declaredMethods.filter { it.name=="addCapability" }
+        val byName=writers.firstOrNull { it.parameterTypes.singleOrNull()==String::class.java }
+        if(byName!=null) byName.apply { isAccessible=true }.invoke(capabilities,NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        else {
+            val bit=NetworkCapabilities::class.java.getDeclaredMethod("getNetworkCapability",String::class.java)
+                .apply { isAccessible=true }.invoke(null,NetworkCapabilities.NET_CAPABILITY_INTERNET) as Int
+            writers.first { it.parameterTypes.singleOrNull()==Int::class.javaPrimitiveType }
+                .apply { isAccessible=true }.invoke(capabilities,bit)
+        }
+        return capabilities
     }
     private fun fixture(test: (MainActivity,QueuePlayer,Library,RemoteVideo)->Unit) {
         val controller=Robolectric.buildActivity(MainActivity::class.java).create();val activity=controller.get()
@@ -108,6 +142,49 @@ class PlaybackQueueTest {
         assertNull(get(activity,"queuedNext"))
         assertThrows(java.io.IOException::class.java) { remote.read(0,1) }
         assertFalse(fake.calls.contains("stop"))
+    }
+    @Test fun cellularStillWarmsUpTheNextEpisode()=fixture { activity,fake,library,_ ->
+        // The shared fixture fills the slot for the other tests; this one needs an empty slot so the
+        // policy itself decides whether cellular may start a warm-up.
+        @Suppress("UNCHECKED_CAST") val slot=get(activity,"preparedNext") as PreparedSlot<RemoteVideo>
+        slot.clear()
+        meteredNetwork(activity)
+        fake.position=80_000L
+        set(activity,"readySince",android.os.SystemClock.elapsedRealtime()-3_000)
+        set(activity,"prefetchAttempts",0);set(activity,"prefetchAttemptAt",0L)
+        invoke(activity,"maybePrefetch")
+        assertEquals("102:${library.maxQuality}",get(activity,"prefetchedFor"))
+        assertNotNull(get(activity,"prefetchJob"))
+        // The warm-up reaches the network for real, so the test cancels it again.
+        invoke(activity,"cancelPrefetch")
+        assertNull(get(activity,"prefetchJob"));assertEquals("",get(activity,"prefetchedFor"))
+    }
+    @Test fun aWarmupStillRunningIsClaimedInsteadOfOpeningTheEpisodeTwice()=fixture { activity,fake,library,_ ->
+        val key="102:${library.maxQuality}"
+        @Suppress("UNCHECKED_CAST") val slot=get(activity,"preparedNext") as PreparedSlot<RemoteVideo>
+        val ticket=slot.begin(key)
+        val warm=RemoteVideo(OkHttpClient(),StreamInfo("https://example.com/warm",null,"720P"))
+        set(activity,"prefetchedFor",key)
+        val runner=java.util.concurrent.Executors.newSingleThreadExecutor()
+        set(activity,"prefetchJob",runner.submit { Thread.sleep(3_000) })
+        val completer=Thread { Thread.sleep(150); slot.complete(ticket,key,warm) }
+        completer.start()
+        @Suppress("UNCHECKED_CAST") val claimed=invoke(activity,"claimWarmup",key,true) as Pair<RemoteVideo?,okhttp3.OkHttpClient?>
+        assertSame(warm,claimed.first)
+        assertNull(get(activity,"prefetchJob"))
+        completer.join();runner.shutdownNow()
+    }
+    @Test fun aWarmupThatNeverLandsIsCancelledInsteadOfDelayingTheSwitchForever()=fixture { activity,fake,library,_ ->
+        val key="102:${library.maxQuality}"
+        @Suppress("UNCHECKED_CAST") val slot=get(activity,"preparedNext") as PreparedSlot<RemoteVideo>
+        slot.begin(key)
+        set(activity,"prefetchedFor",key)
+        val runner=java.util.concurrent.Executors.newSingleThreadExecutor()
+        set(activity,"prefetchJob",runner.submit { Thread.sleep(3_000) })
+        @Suppress("UNCHECKED_CAST") val claimed=invoke(activity,"claimWarmup",key,true) as Pair<RemoteVideo?,okhttp3.OkHttpClient?>
+        assertNull(claimed.first)
+        assertNull(get(activity,"prefetchJob"));assertEquals("",get(activity,"prefetchedFor"))
+        runner.shutdownNow()
     }
     @Test fun timerAndQualityMismatchPreventQueueing()=fixture { activity,fake,library,_ ->
         invoke(activity,"queuePreparedEpisode","102:wrong-quality")

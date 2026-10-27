@@ -9,7 +9,9 @@ import com.hongguotv.core.Rendition
 import com.hongguotv.core.VideoTracks
 import okhttp3.OkHttpClient
 
-internal class OpenedStream(val video: RemoteVideo,val rendition: Rendition?,val tiers: List<Rendition>,val track: VideoTracks.Track?)
+/** `http` is set only when the stream was carried over from an earlier warm-up, so the caller
+ *  hands that client to playback instead of opening a second connection for the same episode. */
+internal data class OpenedStream(val video: RemoteVideo,val rendition: Rendition?,val tiers: List<Rendition>,val track: VideoTracks.Track?,val http: OkHttpClient?=null)
 /** Opens the first rendition the device can actually decode: select by API metadata, then
  *  verify the coded size read from the MP4 header and step down the ladder on mismatch. */
 internal fun openStream(http: OkHttpClient,repository: ContentRepository,id: String,maxQuality: Int,

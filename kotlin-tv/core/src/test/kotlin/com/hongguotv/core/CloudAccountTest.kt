@@ -14,6 +14,13 @@ class CloudAccountTest {
         Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
             .body(respond(chain.request()).toResponseBody()).build()
     }.build()
+    /** 登录流程要看 `Set-Cookie`，所以这一组桩额外带响应头。 */
+    private fun httpCookies(respond: (Request)->Pair<String,List<String>>) = OkHttpClient.Builder().addInterceptor { chain ->
+        val (body,cookies)=respond(chain.request())
+        val builder=Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK").body(body.toResponseBody())
+        cookies.forEach { builder.addHeader("Set-Cookie",it) }
+        builder.build()
+    }.build()
 
     @Test fun accountSessionRoundTripsWithoutExposingCredentialsInToString() {
         assertEquals(credentials,AccountCredentials.fromJson(credentials.toJson()))
@@ -66,25 +73,224 @@ class CloudAccountTest {
         val client=CloudAccountClient(http { """{"code":100103}""" })
         assertThrows(IOException::class.java) { client.upload(credentials,CloudProgress(Series("123","测试"),"456",0,0,0,1),1) }
     }
-    @Test fun phoneLoginStopsOnIncorrectVerificationCodeWithoutRetryingOtherEndpoints() {
-        var calls=0
-        val login=PhoneLogin(http { calls++; """{"message":"error","data":{"error_code":1102,"description":"验证码错误"}}""" })
+    @Test fun phoneLoginSubmitsTheCodeToSmsLoginAndStopsOnAnIncorrectCode() {
+        var calls=0; var path=""
+        val login=PhoneLogin(http { request -> calls++; path=request.url.encodedPath; """{"message":"error","data":{"error_code":1102,"description":"验证码错误"}}""" })
         login.deviceId=credentials.deviceId; login.installId=credentials.installId; login.mobile="13800138000"
-        assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
-        assertEquals(1,calls); assertTrue(login.trace.isEmpty())
+        val failure=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
+        // 实测：只有 sms_login 能把真实验证码换成 sessionid，validate_code 永远回「会话过期」。
+        assertEquals(PhoneLogin.SMS_LOGIN,path); assertEquals(1,calls); assertTrue(login.trace.isEmpty())
+        assertTrue("验证码错了允许重新输入",failure.canRetryCode)
     }
-    @Test fun rejectedLoginSessionExhaustsEveryEndpointThenRefusesTheSameCode() {
+    @Test fun rejectedLoginSessionKeepsThePlatformsFirstReplyAndInvalidatesTheSession() {
         var calls=0
         val login=PhoneLogin(http { calls++; """{"message":"error","data":{"error_code":1,"description":"会话过期，请重新登录"}}""" })
         login.deviceId=credentials.deviceId; login.installId=credentials.installId
         login.cookies["temporary"]="test-session"; login.ticket="test-ticket"
         val first=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
-        assertEquals(1,first.errorCode); assertFalse(first.canRetryCode)
-        // 单个端点被拒不再直接判定登录不可用：四个端点都要试完，再如实给出结论与扫码引导。
-        assertEquals(PhoneLogin.VERIFY_ATTEMPTS.size,calls)
-        assertTrue(first.message.orEmpty().contains("扫码"))
+        assertEquals(1,first.errorCode); assertFalse(first.canRetryCode); assertTrue("会话作废后要重新发码",first.needNewCode)
+        // 只发一次请求：同一个 ticket 被反复校验会触发 1203（错误次数过多），把平台的第一手答复盖住。
+        assertEquals(1,calls)
         assertTrue(login.cookies.isEmpty()); assertEquals("",login.ticket)
         assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
-        assertEquals(PhoneLogin.VERIFY_ATTEMPTS.size,calls)
+        assertEquals(1,calls)
     }
+    /** 诊断包：失败时要说清平台到底给了哪些会话材料——只列名字，任何值都不出现。 */
+    @Test fun rejectedLoginSessionListsTheSessionMaterialsWithoutExposingTheirValues() {
+        val login=PhoneLogin(OkHttpClient.Builder().addInterceptor { chain ->
+            val request=chain.request()
+            val body=when {
+                request.url.encodedPath.contains("device_register") -> """{"device_id":"3012345678901234567","install_id":"3012345678901234568"}"""
+                request.url.encodedPath.contains("send_code") -> """{"message":"success","data":{"mobile":"+86******0000","mobile_ticket":"test-ticket","retry_time":60}}"""
+                else -> """{"message":"error","data":{"error_code":1,"description":"会话过期，请重新登录"}}"""
+            }
+            val reply=Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK").body(body.toResponseBody())
+            if(request.url.encodedPath.contains("send_code")) reply.header("Set-Cookie","verify_device_cookie=test-cookie; Path=/")
+            reply.build()
+        }.build())
+        login.send("13800138000")
+        assertEquals("test-ticket",login.ticket)
+        val failure=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
+        val note=failure.diagnostics.orEmpty()
+        assertTrue(note.contains("验证票据：已取到"))
+        assertTrue(note.contains("mobile_ticket")); assertTrue(note.contains("verify_device_cookie"))
+        assertTrue(note.contains("error_code")); assertTrue(note.contains("description"))
+        // 只有字段名与 Cookie 名：值、手机号、验证码一律不出现在诊断文本里。
+        assertFalse(note.contains("test-ticket")); assertFalse(note.contains("test-cookie"))
+        assertFalse(note.contains("13800138000")); assertFalse(note.contains("123456"))
+    }
+    /** 票据字段缺失时不再静默：请求里确实少了它，这一点必须被说出来。 */
+    @Test fun missingVerificationTicketIsReportedInsteadOfBeingSilentlyDroppedFromTheRequest() {
+        var sentTicket:String?=null
+        val login=PhoneLogin(http { request -> when {
+            request.url.encodedPath.contains("device_register") -> """{"device_id":"3012345678901234567","install_id":"3012345678901234568"}"""
+            request.url.encodedPath.contains("send_code") -> """{"message":"success","data":{"mobile":"+86******0000","retry_time":60}}"""
+            else -> { sentTicket=formOf(request).formValue("mobile_ticket"); """{"message":"error","data":{"error_code":1,"description":"会话过期，请重新登录"}}""" }
+        } })
+        login.send("13800138000")
+        assertEquals("",login.ticket)
+        val failure=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
+        assertNull("空票据被 filterValues 静默丢掉，请求体里没有它",sentTicket)
+        assertTrue(failure.diagnostics.orEmpty().contains("验证票据：没取到"))
+    }
+    /** 实测：真实验证码正确时平台常回 2046，并在 verify_ways 里写清「发什么内容、到哪个号码」。 */
+    @Test fun riskControlTurnsIntoTheUpstreamSmsInstructionTheScreenHasToShow() {
+        val login=PhoneLogin(http { """{"message":"error","data":{"error_code":2046,"description":"为保证账号安全，暂不支持此操作","mobile":"185******71","encrypt_uid":"opaque","biz_params":{"sms_code_key":"k"},"event_params":{"verify_scene":"sms_login","verify_reason":"ato"},"verify_ways":[{"channel_mobile":"9515211003","mobile":"185******71","sms_content":"YZ","verify_way":"mobile_up_sms_verify"},{"platform_screen_name":"**海","verify_way":"oauth_douyin_verify"}]}}""" })
+        login.deviceId=credentials.deviceId; login.installId=credentials.installId; login.mobile="13800138000"; login.ticket="test-ticket"
+        val failure=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
+        val up=failure.upSms
+        assertNotNull("平台给了 verify_ways，界面必须拿到它",up)
+        assertEquals("9515211003",up!!.channelMobile); assertEquals("YZ",up.smsContent); assertEquals("185******71",up.mobile)
+        assertTrue("已经给出上行短信方式，不再列其它方式",up.alternatives.isEmpty())
+        assertEquals(up,login.pendingVerification())
+    }
+    /** 平台只给了电视做不到的方式（抖音授权）时不硬编一条上行短信出来。 */
+    @Test fun riskControlWithoutAnUpstreamSmsOptionDoesNotInventOne() {
+        val login=PhoneLogin(http { """{"message":"error","data":{"error_code":2046,"description":"为保证账号安全，暂不支持此操作","verify_ways":[{"verify_way":"oauth_douyin_verify"}]}}""" })
+        login.deviceId=credentials.deviceId; login.installId=credentials.installId; login.mobile="13800138000"; login.ticket="test-ticket"
+        val failure=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
+        assertNull(failure.upSms); assertNull(login.pendingVerification())
+    }
+    /** 实测链路：没收到短信时回 1045，收到后回 ticket；带票重新发码再校验才签发 sessionid。 */
+    @Test fun upstreamSmsVerificationPollsThenCompletesTheLoginWithTheTicket() {
+        val paths=mutableListOf<String>(); var upstream=0
+        val login=PhoneLogin(httpCookies { request ->
+            val path=request.url.encodedPath; paths+=path
+            when {
+                path==PhoneLogin.UPSMS_VERIFY && ++upstream==1 -> response("""{"message":"error","data":{"error_code":1045,"description":"认证失败"}}""")
+                path==PhoneLogin.UPSMS_VERIFY -> response("""{"message":"success","data":{"ticket":"verify-ticket","registered":false}}""")
+                path==PhoneLogin.SEND_CODE -> response("""{"message":"success","data":{"mobile":"185******71","mobile_ticket":"second-ticket","retry_time":60}}""")
+                path==PhoneLogin.SMS_LOGIN && !formOf(request).formValue("verify_ticket").isNullOrEmpty() ->
+                    response("""{"message":"success","data":{"user_id":"42","screen_name":"测试"}}""","sessionid=test-session; Path=/")
+                path==PhoneLogin.SMS_LOGIN -> response("""{"message":"error","data":{"error_code":2046,"description":"为保证账号安全，暂不支持此操作","mobile":"185******71","encrypt_uid":"opaque","biz_params":{"sms_code_key":"k"},"event_params":{"verify_scene":"sms_login","verify_reason":"ato"},"verify_ways":[{"channel_mobile":"9515211003","mobile":"185******71","sms_content":"YZ","verify_way":"mobile_up_sms_verify"}]}}""")
+                else -> response("""{"message":"error","data":{"error_code":1,"description":"不该再请求这个端点"}}""")
+            }
+        })
+        login.deviceId=credentials.deviceId; login.installId=credentials.installId; login.mobile="13800138000"; login.ticket="first-ticket"
+        val ask=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
+        assertNotNull(ask.upSms)
+        login.confirmUpSms()                       // 第一次 1045，第二次拿到 ticket
+        val sent=login.resend()
+        assertEquals("185******71",sent.maskedMobile)
+        // 二次验证之后必须沿用同一个会话，平台才认那张票：不重新注册设备。
+        assertFalse(paths.any { it.contains("device_register") })
+        val account=login.verify("654321")
+        assertTrue(account.cookie.contains("sessionid"))
+        assertEquals(credentials.deviceId,account.deviceId)
+    }
+    /** 同一张验证码被 2046 消耗后再提交回 1203：界面要重新发一张，而不是让用户再输一遍。 */
+    @Test fun expiredCodeAsksForANewOneInsteadOfAnotherAttempt() {
+        val login=PhoneLogin(http { """{"message":"error","data":{"error_code":1203,"description":"错误次数过多或验证码过期，请稍后重试","mobile_ticket":"next-ticket"}}""" })
+        login.deviceId=credentials.deviceId; login.installId=credentials.installId; login.mobile="13800138000"; login.ticket="used-ticket"
+        val failure=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
+        assertEquals(1203,failure.errorCode); assertTrue(failure.needNewCode); assertFalse(failure.canRetryCode)
+    }
+    /** 实测：成功发码时平台回 `retry_time`（60 秒）的冷却，抢着再发回 `1206`。重发要先等满冷却，别把一次注定被拒的请求送出去。 */
+    @Test fun resendingACodeWaitsOutThePlatformsSendCooldownFirst() {
+        val waited=mutableListOf<Long>(); val announced=mutableListOf<Int>(); var sent=0; var now=1_700_000_000_000L
+        val login=PhoneLogin(http { request -> when {
+            request.url.encodedPath.contains("device_register") -> """{"device_id":"3012345678901234567","install_id":"3012345678901234568"}"""
+            request.url.encodedPath==PhoneLogin.SEND_CODE -> { sent++; """{"message":"success","data":{"mobile":"185******71","mobile_ticket":"ticket-$sent","retry_time":60}}""" }
+            else -> """{"message":"error","data":{"error_code":1,"description":"不该再请求这个端点"}}"""
+        } })
+        login.clock={ now }; login.sleeper={ millis -> waited+=millis; now+=millis }
+        login.onSendWait={ seconds -> announced+=seconds }
+        assertEquals(60,login.send("18560515271").retrySeconds)
+        login.resend()
+        assertEquals("冷却没到就先等满 60 秒，只等这一次",listOf(60_000L),waited)
+        assertEquals("等待的秒数要告诉界面，否则看起来像卡住了",listOf(60),announced)
+        assertEquals(2,sent); assertEquals("ticket-2",login.ticket)
+    }
+    /** 实测：`1206` 的响应里只有 `description` 和一张没人用的票据，不再回冷却值——等待只能按上一张码给的 `retry_time` 算。 */
+    @Test fun aTooFrequentSendWaitsOnceAndThenGoesThrough() {
+        val waited=mutableListOf<Long>(); var sent=0; var now=1_700_000_000_000L
+        val login=PhoneLogin(http { request -> when {
+            request.url.encodedPath.contains("device_register") -> """{"device_id":"3012345678901234567","install_id":"3012345678901234568"}"""
+            request.url.encodedPath==PhoneLogin.SEND_CODE -> { sent++; if(sent==2)
+                """{"message":"error","data":{"error_code":1206,"description":"验证码发送太频繁，请稍后再试","mobile_ticket":"unused"}}"""
+            else """{"message":"success","data":{"mobile":"185******71","mobile_ticket":"ticket-$sent","retry_time":60}}""" }
+            else -> """{"message":"error","data":{"error_code":1,"description":"不该再请求这个端点"}}"""
+        } })
+        login.clock={ now }; login.sleeper={ millis -> waited+=millis; now+=millis }
+        login.send("18560515271")
+        now+=61_000   // 冷却已经过了，平台仍按更长的窗口拒了一次
+        val next=login.resend()
+        assertEquals("被拒之后按上一张码的 60 秒再等一轮",listOf(60_000L),waited)
+        assertEquals(3,sent); assertEquals("ticket-3",login.ticket); assertEquals(60,next.retrySeconds)
+    }
+    /** 一直限频时不无限循环：把「还要等多久」交给界面，会话与身份验证票据都留着。 */
+    @Test fun aSendThatStaysRateLimitedHandsTheWaitToTheScreenInsteadOfLooping() {
+        val waited=mutableListOf<Long>(); var sent=0; var now=1_700_000_000_000L
+        val login=PhoneLogin(http { request -> when {
+            request.url.encodedPath.contains("device_register") -> """{"device_id":"3012345678901234567","install_id":"3012345678901234568"}"""
+            request.url.encodedPath==PhoneLogin.SEND_CODE -> { sent++; if(sent==1)
+                """{"message":"success","data":{"mobile":"185******71","mobile_ticket":"ticket-1","retry_time":60}}"""
+            else """{"message":"error","data":{"error_code":1206,"description":"验证码发送太频繁，请稍后再试"}}""" }
+            else -> """{"message":"error","data":{"error_code":1,"description":"不该再请求这个端点"}}"""
+        } })
+        login.clock={ now }; login.sleeper={ millis -> waited+=millis; now+=millis }
+        login.send("18560515271")
+        now+=61_000
+        val failure=assertThrows(PhoneLogin.Failure::class.java) { login.resend() }
+        assertEquals(1206,failure.errorCode)
+        assertTrue("限频是可重试的：界面留着会话再发一次就行",failure.canRetryCode)
+        assertFalse("这不是验证码作废，身份验证的结果不作废",failure.needNewCode)
+        assertEquals(60,failure.retryAfterSeconds)
+        assertEquals("一次被拒、自动重试一次，仍被拒就停",3,sent)
+        assertEquals(listOf(60_000L),waited)
+    }
+    /** 实测：`2046` 与 `upsms/verify` 的响应里都另给一张 `mobile_ticket`，后续一律带最新那张——带票重放同一张码就能收尾，不必再发一张。 */
+    @Test fun theNewestTicketFromTheVerificationRepliesIsTheOneCarriedForward() {
+        val carried=mutableListOf<String?>(); var sent=0; var upstream=0
+        val login=PhoneLogin(httpCookies { request ->
+            val path=request.url.encodedPath; val form=formOf(request)
+            when {
+                path==PhoneLogin.SMS_LOGIN && !form.formValue("verify_ticket").isNullOrEmpty() -> {
+                    carried+=form.formValue("mobile_ticket")
+                    response("""{"message":"success","data":{"user_id":"42","screen_name":"测试"}}""","sessionid=test-session; Path=/")
+                }
+                path==PhoneLogin.SMS_LOGIN -> response("""{"message":"error","data":{"error_code":2046,"description":"为保证账号安全，暂不支持此操作","mobile":"185******71","mobile_ticket":"second-ticket","encrypt_uid":"opaque","biz_params":{"passport_mfa_retry_tag":"1","sms_code_key":"k"},"event_params":{"verify_scene":"sms_login","verify_reason":"ato"},"verify_ways":[{"channel_mobile":"9515211003","mobile":"185******71","sms_content":"YZ","verify_way":"mobile_up_sms_verify"}]}}""")
+                path==PhoneLogin.UPSMS_VERIFY && ++upstream==1 -> response("""{"message":"error","data":{"error_code":1045,"description":"认证失败"}}""")
+                path==PhoneLogin.UPSMS_VERIFY -> response("""{"message":"success","data":{"ticket":"verify-ticket","mobile_ticket":"third-ticket"}}""")
+                path==PhoneLogin.SEND_CODE -> { sent++; response("""{"message":"success","data":{"mobile":"185******71","mobile_ticket":"fourth-ticket","retry_time":60}}""") }
+                else -> response("""{"message":"error","data":{"error_code":1,"description":"不该再请求这个端点"}}""")
+            }
+        })
+        login.deviceId=credentials.deviceId; login.installId=credentials.installId; login.mobile="18560515271"; login.ticket="first-ticket"
+        assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
+        assertEquals("2046 换发的票据要接住","second-ticket",login.ticket)
+        login.confirmUpSms()
+        assertEquals("身份验证通过时又换了一张，同样要接住","third-ticket",login.ticket)
+        assertTrue(login.verificationPassed())
+        val account=login.verify("123456")   // 同一张验证码带票重放
+        assertTrue(account.cookie.contains("sessionid"))
+        assertEquals(listOf("third-ticket"),carried)
+        assertEquals("带票重放能收尾，就不该再发一张验证码",0,sent)
+    }
+    /** 带票重放还被要求身份验证时，不再让人重发那条短信：那条路已经走过，短信按条计费。 */
+    @Test fun aRejectedVerificationTicketDoesNotAskForAnotherPaidSmsTwice() {
+        val asked="""{"message":"error","data":{"error_code":2046,"description":"为保证账号安全，暂不支持此操作","mobile":"185******71","encrypt_uid":"opaque","biz_params":{"sms_code_key":"k"},"event_params":{"verify_scene":"sms_login","verify_reason":"ato"},"verify_ways":[{"channel_mobile":"9515211003","mobile":"185******71","sms_content":"YZ","verify_way":"mobile_up_sms_verify"}]}}"""
+        val login=PhoneLogin(httpCookies { request ->
+            when {
+                request.url.encodedPath==PhoneLogin.UPSMS_VERIFY -> response("""{"message":"success","data":{"ticket":"verify-ticket"}}""")
+                else -> response(asked)
+            }
+        })
+        login.deviceId=credentials.deviceId; login.installId=credentials.installId; login.mobile="18560515271"; login.ticket="first-ticket"
+        val first=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
+        assertNotNull("第一次照常引导用户发那条短信",first.upSms)
+        login.confirmUpSms()
+        val second=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }   // 带票重放，平台还是不接受
+        assertNotNull("带票第一次被拒还可以再试一次",second.upSms)
+        login.confirmUpSms()
+        val third=assertThrows(PhoneLogin.Failure::class.java) { login.verify("123456") }
+        assertNull("不再让人重发第二条付费短信，界面该把人引到扫码",third.upSms)
+        assertFalse("这不是再试一次能解决的",third.canRetryCode)
+    }
+    private fun response(body: String,vararg cookies: String)=Pair(body,cookies.toList())
+    private fun formOf(request: Request): String {
+        val body=request.body ?: return ""
+        val buffer=okio.Buffer(); body.writeTo(buffer); return buffer.readUtf8()
+    }
+    private fun String.formValue(name: String): String? = split("&").firstOrNull { it.substringBefore("=")==name }?.substringAfter("=")
 }

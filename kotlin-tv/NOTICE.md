@@ -4,7 +4,7 @@
 https://github.com/N3urda/hongguoTV/pull/22 。播放请求使用独立设备标识和无签名请求，复用本项目原有的响应大小限制、请求取消及媒体解析逻辑。
 
 2026-10-21 账号测试功能参考 charlie901208/HGTV 的 `feat/phone-login` 分支（GPL-3.0-only）：
-https://github.com/charlie901208/HGTV/tree/feat/phone-login 。`DeviceRegister.kt`、`PhoneLogin.kt` 由该分支移植并修改；账号读写的路径和字段参照其 `Account.kt`、`ContentRepository.kt`。本地实现补充有界响应读取、登录态加密存储、错误验证码停止重试与云端精确进度字段保留；账号界面和同步调度为本地实现。未合并该分支的广告、遥测、界面重构或其他功能。原作者著作权保留。
+https://github.com/charlie901208/HGTV/tree/feat/phone-login 。`DeviceRegister.kt`、`PhoneLogin.kt` 由该分支移植并修改；账号读写的路径和字段参照其 `Account.kt`、`ContentRepository.kt`。本地实现补充有界响应读取、登录态加密存储、错误验证码停止重试与云端精确进度字段保留；手机号登录改用 `sms_login` 端点，并接入平台要求的上行短信二次验证（`verify_ways` → `upsms/verify` 轮询 → 同一会话带 `verify_ticket` 重放），这条链路是本仓库实测得出的，上游分支没有。账号界面和同步调度为本地实现。未合并该分支的广告、遥测、界面重构或其他功能。原作者著作权保留。
 
 `core` 中内容请求签名、Spade URL / key 处理、MP4 CENC 处理是以下 GPL-3.0 源码的 Kotlin 移植：
 
