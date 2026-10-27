@@ -38,6 +38,17 @@ class PreparedSlotTest {
         assertNull(slot.await("102",5_000))
         assertTrue(slot.isOutstanding("103"))
     }
+    @Test fun awaitTimesOutEvenWhenTheInjectedClockIsFrozen() {
+        // Robolectric's paused looper keeps SystemClock.elapsedRealtime fixed, so a wait budget read
+        // off the injected clock never expires and the caller blocks forever. The app hits this on
+        // every episode switch that reuses a warm-up, so the deadline must survive a frozen clock.
+        val slot=PreparedSlot<Value>({ 1_000L })
+        slot.begin("102")
+        val started=System.nanoTime()
+        assertNull(slot.await("102",200))
+        assertTrue(System.nanoTime()-started>=150_000_000L)
+        assertTrue(slot.isOutstanding("102"))
+    }
     @Test fun aStaleCompletionClosesItselfAndAwaitNeverReturnsIt() {
         val slot=PreparedSlot<Value>({ System.currentTimeMillis() })
         val ticket=slot.begin("102")
