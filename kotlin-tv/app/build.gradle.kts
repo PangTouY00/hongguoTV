@@ -43,5 +43,9 @@ dependencies {
     implementation("com.google.zxing:core:3.3.3")
     implementation("com.squareup.okhttp3:okhttp:3.12.0")
     implementation(project(":core")) { exclude(group = "org.json") }
-    // 播放改走系统 MediaPlayer + 一个只监听本机的 HTTP 代理（见 nativeapp/MediaPlayerPlayer.kt）。
+    // 播放走 ExoPlayer（见 nativeapp/ExoPlayerPlayer.kt）。1.4.1 是 androidx.media3 里最后一个
+    // minSdk 19 的版本：它自己的 constants.gradle 在 1.4.1 写的是 19，1.5.0 起抬到 21，
+    // 所以 Android 4.4 只能用这一版。
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-common:1.4.1")
 }

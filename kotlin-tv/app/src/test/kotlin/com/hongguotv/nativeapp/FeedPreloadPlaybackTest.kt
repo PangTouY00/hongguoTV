@@ -16,9 +16,9 @@ import org.robolectric.annotation.LooperMode
 @Config(sdk=[23,26])
 @LooperMode(LooperMode.Mode.PAUSED)
 class FeedPreloadPlaybackTest {
-    @Test fun realMediaPlayerTrialKeepsOneClipAndReportsNoPrefetchOnBothSupportedApis() {
+    @Test fun realTrialPlaybackKeepsOneClipAndReportsNoPrefetchOnBothSupportedApis() {
         val controller=Robolectric.buildActivity(Activity::class.java).setup()
-        val playback=MediaPlayerTrialPlayback(controller.get())
+        val playback=ExoPlayerTrialPlayback(controller.get())
         fun clip(id: String)=TrialClip(Detail(Series(id,"测试"),listOf(id+"01")),RemoteVideo(OkHttpClient(),StreamInfo("https://example.test/video",null,"测试")))
         val first=clip("1");val second=clip("2")
         try {

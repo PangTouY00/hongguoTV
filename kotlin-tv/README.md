@@ -1,6 +1,6 @@
 # 红果 TV 原生客户端
 
-工程：Kotlin + Android View。正式线同时维护两个构建，版本号一致：`main` 是 Android 6.0+ / API 23（Media3），`android44-support` 是 Android 4.4+ / API 19（系统 MediaPlayer + 只监听本机的 HTTP 代理，OkHttp 3.12、无核心库脱糖）。compileSdk、targetSdk 为 36。包名 `com.hongguotv.nativeapp`，与旧 React Native 应用 `com.hongguotv` 的数据独立。
+工程：Kotlin + Android View。正式线同时维护两个构建，版本号一致：`main` 是 Android 6.0+ / API 23（Media3），`android44-support` 是 Android 4.4+ / API 19（Media3 1.4.1——androidx.media3 中最后一个 minSdk 19 的版本，解密取流经自定义数据源直接交给播放器，OkHttp 3.12、无核心库脱糖）。compileSdk、targetSdk 为 36。包名 `com.hongguotv.nativeapp`，与旧 React Native 应用 `com.hongguotv` 的数据独立。
 
 功能介绍见 [项目主页](../README.md)，工作约定见 [开发流程](../CONTRIBUTING.md)。
 

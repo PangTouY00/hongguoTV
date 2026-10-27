@@ -120,3 +120,14 @@ API 23/26 的播放器接口替身测试检查追加/领取资源、无需重启
 同时按参考实现把身份收敛成进程内单例 `PlaybackDeviceSession.shared`：首页试播、正式播放、预热与换剧切集共用一份 `device_id`/`iid`/`cdid`，不再每个 `ContentRepository` 各自注册一次。注册请求本身不带任何 Cookie（`CookieJar.NO_COOKIES`），并跟随调用方的 `RequestScope` 取消；注册成功后才缓存，并发调用只会注册一次。
 
 验证边界：本轮在本机跑通 core 单测 229 项（新增 `PlaybackDeviceSessionTest` 5 项：注册一次跨 repository 复用、并发只注册一次、拒绝注册时绝不用随机身份取流、注册失败可重试且成功后不轮换、取消的作用域不发也不缓存注册），并用本机构建脚本产出 4.4 调试 APK。**没有实机播放验证**，首帧、整集解码与平台是否对本机网络另有拦截都仍未证明；如果实机仍失败，播放面板「查看原因」里的「设备注册」一行会直接说明注册是否完成。
+
+### 4.4 分支的播放后端换成 Media3 1.4.1（2026-10-27）
+
+实机上 `android44-support` 这条线始终播不起来，而系统 `MediaPlayer` 路线还额外缺两样 main 分支有的能力：它不报告已缓冲位置，也没有变速。本轮按「换开源播放器」的方向重做这条线的播放后端。
+
+- **版本只能钉在 1.4.1。** androidx.media3 自己的 `constants.gradle` 在 1.4.1 写的是 `minSdkVersion = 19`，1.5.0 起抬到 21；Android 4.4 能用的最后一版就是 1.4.1。main 分支用的较新版本与它不是同一套 API（`Player.Listener` 在 1.4.1 是接口不是抽象类、`VideoSize` 在 `androidx.media3.common` 而不是 `Player` 的内嵌类型、`AnalyticsListener.onRenderedFirstFrame` 带三个参数），这些差异都是本机编译直接暴露出来的。
+- **media3 是拆模块的。** `media3-common` 里只有 `androidx.media3.common`，`datasource` / `extractor` / `decoder` 各自是独立 artifact，`@OptIn` 又来自 `androidx.annotation:annotation-experimental`。本机构建没有 Gradle 的依赖解析，这五份 `classes.jar` 加 annotation-experimental 要自己收齐。
+- **取流不再经过本机 HTTP 代理。** 新增 `VideoDataSource`：把 `RemoteVideo` 的「按字节范围给出解密字节」直接实现成 media3 的 `DataSource`，播放器照旧分段读、随机 seek。删掉 `MediaPlayerPlayer` 与 `LocalVideoServer`。`ExoPlayerPlayer` 保持旧播放器的对外接口（`PlaybackState` / `PlaybackListener` / `PlaybackSource` / `PlaybackFailure`），界面层因此没有分支；`PlaybackSource` 从「本机 URL + 代理」改成直接携带 `RemoteVideo`。
+- **诊断换掉。** `probeStream` 原来靠 `MediaMetadataRetriever` 读本机代理地址，代理没了它就没有输入。现在直接列出三件真正相关的事：服务端给了哪一档、容器里实际是什么编码、本机解码器能接哪些。三者对不上才是播放失败的真正原因。
+- **本机构建受单 dex 限制。** API 19 没有 multidex，全量 bouncycastle（4322 个类）加 media3 与 guava 后 d8 报 `80934 > 65536`。这条分支只用得到 `SM3Digest` 与 `Base64` 两条链，于是 bouncycastle 改为只收 `org/bouncycastle/crypto/`、`org/bouncycastle/util/`，其余照旧（guava 33.0.0-android 是 media3 的运行时依赖，全量保留）。
+- **验证边界。** 本机完成的是：完整 media3 classpath 下的 Kotlin 编译、单 dex 打包与签名。**没有实机播放验证。** 想在本机先确认「服务端对 `os_api=19` 的设备档案下发什么编码」没有成功——匿名身份下清晰度接口回 `101000`，两种档案得到同样的结果，这条只能等实机播放面板里的「流探测」文本来说。

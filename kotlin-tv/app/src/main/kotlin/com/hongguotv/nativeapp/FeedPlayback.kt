@@ -129,22 +129,21 @@ internal interface TrialPlayback {
     fun release()
 }
 /**
- * 4.4 的首页试播：没有 media3 的预加载管理器，一次只播一条。
- * 下一条的地址与索引仍由上层预取好，这里只负责「切到这一条并播起来」，
- * 所以 canPrefetch() 直接返回 false，让上层不要按预加载节奏排队。
+ * 4.4 分支的首页试播：一次只播一条。下一条的地址与索引仍由上层预取好，
+ * 这里只负责「切到这一条并播起来」，所以 canPrefetch() 直接返回 false，
+ * 让上层不要按预加载节奏排队。
  */
-internal class MediaPlayerTrialPlayback(context: android.content.Context): TrialPlayback {
+internal class ExoPlayerTrialPlayback(private val context: android.content.Context): TrialPlayback {
     private val surface=android.view.SurfaceView(context).apply { isFocusable=false }
-    private var player: MediaPlayerPlayer?=null
-    private var proxy: LocalVideoServer?=null
+    private var player: ExoPlayerPlayer?=null
     private var activeId: String?=""
     private var startedAt=0L
     override var status: ((TrialStatus)->Unit)?=null
     override val view: android.view.View get()=surface
     private fun key(clip: TrialClip)=clip.detail.series.id+":"+clip.episodeId
-    private fun backend(): MediaPlayerPlayer {
+    private fun backend(): ExoPlayerPlayer {
         player?.let { return it }
-        val created=MediaPlayerPlayer(surface.holder, object: PlaybackListener {
+        val created=ExoPlayerPlayer(context, surface.holder, object: PlaybackListener {
             override fun onStateChanged(state: Int) {
                 status?.invoke(when(state) {
                     PlaybackState.BUFFERING->TrialStatus.BUFFERING
@@ -163,11 +162,8 @@ internal class MediaPlayerTrialPlayback(context: android.content.Context): Trial
         return created
     }
     private fun play(clip: TrialClip,position: Long,autoplay: Boolean) {
-        proxy?.close()
-        val server=LocalVideoServer(clip.video)
-        proxy=server
         activeId=key(clip);startedAt=android.os.SystemClock.elapsedRealtime()
-        backend().prepare(PlaybackSource(server.url,activeId!!,server),position,autoplay)
+        backend().prepare(PlaybackSource(clip.video,activeId!!),position,autoplay)
     }
     override fun load(clip: TrialClip,position: Long,autoplay: Boolean)=play(clip,position,autoplay)
     /** 没有预加载队列，界面层不需要为下一条提前腾位置。 */
@@ -176,6 +172,6 @@ internal class MediaPlayerTrialPlayback(context: android.content.Context): Trial
     override fun resume() { player?.play() }
     override fun restart() { player?.seekTo(0); player?.play() }
     override fun position(): Long=player?.currentPosition?.coerceAtLeast(0) ?: 0L
-    override fun clear() { activeId="";player?.stop();proxy?.close();proxy=null }
-    override fun release() { status=null;player?.release();player=null;proxy?.close();proxy=null }
+    override fun clear() { activeId="";player?.stop() }
+    override fun release() { status=null;player?.release();player=null }
 }

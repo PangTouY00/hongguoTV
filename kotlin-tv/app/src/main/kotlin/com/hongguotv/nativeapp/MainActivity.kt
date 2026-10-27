@@ -100,7 +100,6 @@ class MainActivity: Activity() {
     private val sleepTimer=SleepTimer { android.os.SystemClock.elapsedRealtime() }
     private var sleepStopped=false
     private var playerView: SurfaceView?=null
-    private var videoProxy: LocalVideoServer?=null
     private val social by lazy { TvSocial(this,{ player },{ if(screen=="player" || screen=="detail") detail?.let { data -> data.episodes.getOrNull(episodeIndex)?.let { data.series.id to it } } else null }) }
     private lateinit var favoriteMonitor: FavoriteMonitor
     private val favoriteBadges=mutableMapOf<String,TextView>()
@@ -167,7 +166,7 @@ class MainActivity: Activity() {
     private var episodeIndex=0
     private var group=0
     private var synopsisExpanded=false
-    private var player: MediaPlayerPlayer?=null
+    private var player: ExoPlayerPlayer?=null
     private var video: RemoteVideo?=null
     private var playbackReady=false
     private var pausedForLifecycle=false
@@ -526,7 +525,7 @@ class MainActivity: Activity() {
             homeFeedIdentity=cloudAccount.recommendationIdentity
             val feed=HomeFeedScreen(this,homeFeedState,nav.toList(),
                 { openDetail(it,false) },::accountFavoriteAction,cloudAccount::favoriteActionLabel,
-                PublicFeedBackend(library.maxQuality,account=cloudAccount.recommendationCredentials(),startupCache=FeedStartupCache(this)),MediaPlayerTrialPlayback(this))
+                PublicFeedBackend(library.maxQuality,account=cloudAccount.recommendationCredentials(),startupCache=FeedStartupCache(this)),ExoPlayerTrialPlayback(this))
             homeFeed=feed
             container.addView(feed,lp(-1,0).apply { weight=1f })
             feed.start(foreground,focusNav)
@@ -1346,8 +1345,8 @@ class MainActivity: Activity() {
             quality=playedQualityLabel(opened,maxQuality); attemptedQuality=opened.rendition?.quality ?: 0
             currentTrack=opened.track; currentRendition=opened.rendition; currentTiers=opened.tiers
             val surface=checkNotNull(playerView)
-            lateinit var p: MediaPlayerPlayer
-            p=MediaPlayerPlayer(surface.holder, object: PlaybackListener {
+            lateinit var p: ExoPlayerPlayer
+            p=ExoPlayerPlayer(this@MainActivity, surface.holder, object: PlaybackListener {
                 private fun active()=player===p && generation==ticket && p.currentMediaId==data.episodes.getOrNull(episodeIndex)
                 override fun onStateChanged(state: Int) {
                     if(!active()) return
@@ -1437,13 +1436,8 @@ class MainActivity: Activity() {
             }
         }
     }
-    /** 系统播放器只会自己读 http，所以把解密流挂到本机端口上，它仍能按字节范围 seek。 */
-    private fun episodeSource(remote: RemoteVideo,id: String): PlaybackSource {
-        videoProxy?.close()
-        val server=LocalVideoServer(remote)
-        videoProxy=server
-        return PlaybackSource(server.url,id,server)
-    }
+    /** 解密取流直接交给播放器：它自己会按字节范围分段读、随机 seek，不需要本机端口。 */
+    private fun episodeSource(remote: RemoteVideo,id: String)=PlaybackSource(remote,id)
     /** 4.4 的 MediaPlayer 没有播放队列，预取只保留到「地址与索引已取好」这一步，
      *  衔接由这一集结束后的 playEpisode 完成。 */
     private fun queuePreparedEpisode(key: String) {}
@@ -1573,24 +1567,19 @@ class MainActivity: Activity() {
         errorActions?.let { controls.removeView(it) }
         errorActions=null; errorProblem=null; errorQualityButton=null; errorStopButton=null; streamProbe=null
     }
-    /** 用 MediaMetadataRetriever 单独把这条流读一遍：能读出编码/尺寸说明容器没问题，
-     *  读不出就说明 4.4 的解析器根本认不出它，两者对应完全不同的修法。结果落到诊断文本里。 */
+    /** 把已经取到的这条流讲清楚：服务端给了哪一档、容器里实际是什么编码、本机解码器能接哪些。
+     *  三者对不上才是播放失败的真正原因，结果落到诊断文本里。 */
     private fun probeStream() {
-        val url=videoProxy?.url ?: return
+        val track=currentTrack; val rendition=currentRendition
         streamProbe=null
         Thread {
-            val text=try {
-                val retriever=android.media.MediaMetadataRetriever()
-                try {
-                    retriever.setDataSource(url)
-                    val width=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
-                    val height=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
-                    val duration=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
-                    val mime=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_MIMETYPE)
-                    "流探测：本机可解析 · ${width ?: "?"}x${height ?: "?"} · ${duration ?: "?"}ms · ${mime ?: "未知容器"}"
-                } finally { retriever.release() }
-            } catch (problem: Throwable) {
-                "流探测：本机解析失败 · ${problem.javaClass.simpleName}: ${problem.message.orEmpty().ifBlank { "无附加信息" }}"
+            val text=buildString {
+                append("流探测：")
+                if(rendition==null && track==null) append("这条流还没有取到容器信息") else {
+                    rendition?.let { append("服务端给出 ${it.quality}P ${it.codec.ifBlank { "未知编码" }} ${it.width ?: "?"}x${it.height ?: "?"}") }
+                    track?.let { if(rendition!=null) append(" · "); append("容器内 ${it.fourcc} ${it.width}x${it.height}") }
+                    append(" · 本机解码器：${CodecCapabilities.deviceSummary()}")
+                }
             }
             main.post { streamProbe=text; val failed=errorProblem; if(playError && failed!=null) showPlaybackFailureDetail(failed,true) }
         }.apply { isDaemon=true; name="HongguoTV-StreamProbe" }.start()
@@ -1913,7 +1902,7 @@ class MainActivity: Activity() {
         val oldPanel=episodePanel; episodePanel=null; oldPanel?.dismiss(); foreground=wasForeground
         speedDialog?.dismiss(); speedDialog=null
         main.removeCallbacks(hideHud); main.removeCallbacks(seekRunnable); pendingSeek=null
-        video?.close(); video=null; playerView=null; player?.release(); player=null; videoProxy?.close(); videoProxy=null; playbackReady=false; transportPlay=null; sleepButton=null
+        video?.close(); video=null; playerView=null; player?.release(); player=null; playbackReady=false; transportPlay=null; sleepButton=null
         pauseGlyph=null; boostSpeed=false
         closeTransport(playbackHttp); playbackHttp=null
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
