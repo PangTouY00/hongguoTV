@@ -162,5 +162,4 @@ class PlaybackDeviceSessionTest {
             Thread.interrupted()
         }
     }
-    }
 }
