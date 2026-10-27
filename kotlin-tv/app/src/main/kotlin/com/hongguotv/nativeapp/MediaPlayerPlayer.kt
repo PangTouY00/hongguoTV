@@ -18,7 +18,9 @@ internal interface PlaybackListener {
     fun onStateChanged(state: Int)
     fun onFirstFrame()
     fun onPlayingChanged(playing: Boolean)
-    fun onError(message: String, decoding: Boolean)
+    /** 第三个参数 learn 表示「这条错误值得记进设备能力记录」。只有确认是解码器本身的问题才为真：
+     *  记错一条，这一档在以后所有剧集里都会被跳过。 */
+    fun onError(message: String, decoding: Boolean, learn: Boolean)
     /** 位置跳到另一处（手动 seek 或这一集自然接上下一集）。 */
     fun onPositionMoved(positionMs: Long, autoTransition: Boolean) {}
 }
@@ -97,8 +99,8 @@ internal class MediaPlayerPlayer(
                 override fun onError(source: MediaPlayer, what: Int, extra: Int): Boolean {
                     if (released) return true
                     // 19xx 是 MediaPlayer 的解码/格式错误段，0x01xxxx 是 DRM 相关，这里只给出能行动的描述。
-                    val (message,decoding)=playbackErrorMessage(what, extra)
-                    listener.onError(message,decoding)
+                    val (message,decoding,learn)=playbackErrorMessage(what, extra)
+                    listener.onError(message,decoding,learn)
                     return true
                 }
             })
@@ -119,9 +121,9 @@ internal class MediaPlayerPlayer(
             })
             created.prepareAsync()
         } catch (problem: IOException) {
-            listener.onError(problem.message ?: "无法开始播放",false)
+            listener.onError(problem.message ?: "无法开始播放",false,false)
         } catch (problem: RuntimeException) {
-            listener.onError(problem.message ?: "无法开始播放",false)
+            listener.onError(problem.message ?: "无法开始播放",false,false)
         }
     }
 
@@ -164,23 +166,28 @@ internal class MediaPlayerPlayer(
         listener.onPlayingChanged(state == PlaybackState.READY && wantPlay)
     }
 
-    /** 第二个值表示「这是解码/格式问题」，界面层据此降清晰度而不是重试。
-     *  原始 what/extra 一律附在消息里：4.4 上这是唯一能把「网络取不到」和「解码器不接」分开的证据。 */
-    private fun playbackErrorMessage(what: Int, extra: Int): Pair<String, Boolean> {
-        val (message, decoding) = when {
+    /** 第二个值表示「这是解码/格式问题」，界面层据此降清晰度而不是重试；
+     *  第三个值表示「这一条可以记进设备能力记录」。原始 what/extra 一律附在消息里：
+     *  4.4 上这是唯一能把「网络取不到」和「解码器不接」分开的证据。 */
+    private fun playbackErrorMessage(what: Int, extra: Int): Triple<String, Boolean, Boolean> {
+        val (message, decoding, learn) = when {
+            // 标准 MediaPlayer 错误码都是正数；负值说明底层把 status_t（-errno）直接当 what 透传了，
+            // -38 就是 -ENOSYS。含义不明确，所以只沿清晰度阶梯降档，不写进设备能力记录。
+            what < 0 -> Triple("这台设备无法解码该视频", true, false)
             what == MediaPlayer.MEDIA_ERROR_UNKNOWN && extra == MediaPlayer.MEDIA_ERROR_UNSUPPORTED ->
-                "这台电视不支持该视频的编码格式" to true
+                Triple("这台电视不支持该视频的编码格式", true, true)
             what == MediaPlayer.MEDIA_ERROR_UNKNOWN && extra == MediaPlayer.MEDIA_ERROR_MALFORMED ->
-                "视频数据不完整，无法解码" to true
+                Triple("视频数据不完整，无法解码", true, true)
             what == MediaPlayer.MEDIA_ERROR_NOT_VALID_FOR_PROGRESSIVE_PLAYBACK ->
-                "该视频不支持边播边读" to true
-            what == MediaPlayer.MEDIA_ERROR_UNKNOWN -> "播放失败，可能是网络或编码不支持" to false
-            what == MediaPlayer.MEDIA_ERROR_SERVER_DIED -> "系统播放器中断，请重试" to false
-            else -> "播放失败（播放器报错）" to false
+                Triple("该视频不支持边播边读", true, false)
+            what == MediaPlayer.MEDIA_ERROR_UNKNOWN -> Triple("播放失败，可能是网络或编码不支持", false, false)
+            what == MediaPlayer.MEDIA_ERROR_SERVER_DIED -> Triple("系统播放器中断，请重试", false, false)
+            else -> Triple("播放失败（播放器报错）", false, false)
         }
-        return "$message（播放器错误 $what/$extra）" to decoding
+        return Triple("$message（播放器错误 $what/$extra）", decoding, learn)
     }
 }
 
-/** 播放失败。decoding 表示这是解码能力问题（应降清晰度），否则按网络类错误自动重试。 */
-internal class PlaybackFailure(message: String, val decoding: Boolean, val retryable: Boolean) : java.io.IOException(message)
+/** 播放失败。decoding 表示这是解码能力问题（应降清晰度）；learn 表示这条值得记进设备能力记录，
+ *  只有确定是解码器本身的问题才为真，否则会误伤这一档的以后所有剧集。 */
+internal class PlaybackFailure(message: String, val decoding: Boolean, val retryable: Boolean, val learn: Boolean=true) : java.io.IOException(message)

@@ -157,7 +157,7 @@ internal class MediaPlayerTrialPlayback(context: android.content.Context): Trial
                 android.util.Log.i("HongguoTV","Home first-frame elapsedMs=${android.os.SystemClock.elapsedRealtime()-startedAt}")
             }
             override fun onPlayingChanged(playing: Boolean) {}
-            override fun onError(message: String, decoding: Boolean) { status?.invoke(TrialStatus.ERROR) }
+            override fun onError(message: String, decoding: Boolean, learn: Boolean) { status?.invoke(TrialStatus.ERROR) }
         })
         player=created
         return created

@@ -187,6 +187,14 @@ class MainActivity: Activity() {
     private var speedDialog: AlertDialog?=null
     private var pendingSeek: Long?=null
     private var playError=false
+    // 失败面板的按钮只建一次、跨重试复用：整棵 root 或整个 controls 重建会在手指按下的瞬间
+    // 把按钮移出窗口，那次点击就作废了，屏幕上看起来正是「点不动」。
+    private var errorActions: LinearLayout?=null
+    private var errorProblem: Throwable?=null
+    private var errorQualityButton: TextView?=null
+    private var errorStopButton: TextView?=null
+    private var retryingNow=false
+    private var streamProbe: String?=null
     private var lastSaved=0L
     private var quality=""
     private var attemptedQuality=0
@@ -1248,7 +1256,11 @@ class MainActivity: Activity() {
         social.reset()
         val data=detail ?: return
         var playbackStarted=android.os.SystemClock.elapsedRealtime()
-        val reuse=screen=="player" && player!=null && playerView!=null && !recovering && !playError
+        // 重试与自动降档一律复用现有画面和面板：走 !reuse 会 removeAllViews() 把整棵界面拆掉，
+        // 正在被按下的按钮也随之移出窗口，那次点击直接作废，屏幕上看起来就是「点不动」。
+        val retrying=recovering || playError || autoDowngrade
+        retryingNow=retrying
+        val reuse=screen=="player" && player!=null && playerView!=null
         library.setWatched(data.series.id,false)
         val selectedIndex=index.coerceIn(0,data.episodes.lastIndex)
         // 4.4 的 MediaPlayer 没有播放队列：下一集在这一集结束后由 playEpisode 重新起播。
@@ -1312,9 +1324,16 @@ class MainActivity: Activity() {
             root.addView(ScrollView(this).apply { isVerticalScrollBarEnabled=false; addView(hud) },FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
         }
         playbackTitle.text="${data.series.title}  ·  第 ${episodeIndex+1} 集"
-        playbackText.text="正在获取播放地址…"; playbackReason?.text=""; playbackReason?.visibility=View.GONE
-        progressBar.progress=0; progressBar.visibility=View.VISIBLE; hidePlaybackOverlay(); pauseGlyph?.visibility=View.GONE
-        controls.removeAllViews(); controls.visibility=View.GONE; transportPlay=null; sleepButton=null
+        playbackText.text=if(retrying) "正在重新连接…" else "正在获取播放地址…"; playbackReason?.text=""; playbackReason?.visibility=View.GONE
+        progressBar.progress=0; progressBar.visibility=if(retrying) View.GONE else View.VISIBLE; pauseGlyph?.visibility=View.GONE
+        if(retrying) {
+            // 面板和按钮留在屏幕上、只是禁用：用户必须看得见「刚才那一下点到了」，
+            // 而不是屏幕一闪空白然后在同一秒里再弹回来。
+            main.removeCallbacks(hideHud); hud.visibility=View.VISIBLE; setErrorActionsEnabled(false)
+        } else {
+            hidePlaybackOverlay(); clearErrorActions()
+            controls.removeAllViews(); controls.visibility=View.GONE; transportPlay=null; sleepButton=null
+        }
         syncMediaSession()
         val requestedId=data.episodes[episodeIndex]; val maxQuality=library.maxQuality; val ticket=generation
         work({ val carried=claimWarmup(targetKey,warmupInFlight)
@@ -1332,7 +1351,7 @@ class MainActivity: Activity() {
                     if(!active()) return
                     if(state==PlaybackState.READY) {
                         if(!p.hasVideoTrack) { playerFailure(PlaybackFailure("资源没有可解码的视频轨道",true,false)); return }
-                        playbackReady=true;episodeDuration=p.duration.coerceAtLeast(0)
+                        playbackReady=true;retryingNow=false;episodeDuration=p.duration.coerceAtLeast(0)
                         if(firstReady) { firstReady=false; readySince=android.os.SystemClock.elapsedRealtime(); android.util.Log.i("HongguoTV","Playback ready episode=${episodeIndex+1} carried=$carriedOver reused=$reuse elapsedMs=${readySince-playbackStarted}") }
                         if(hud.visibility==View.VISIBLE) updatePlaybackText()
                     }
@@ -1349,7 +1368,7 @@ class MainActivity: Activity() {
                     android.util.Log.i("HongguoTV","Playback first frame episode=${episodeIndex+1} carried=$carriedOver reused=$reuse elapsedMs=${android.os.SystemClock.elapsedRealtime()-playbackStarted}")
                 }
                 override fun onPlayingChanged(playing: Boolean) { if(active()) { if(hud.visibility==View.VISIBLE) showHud(); updatePauseGlyph(); syncMediaSession() } }
-                override fun onError(message: String, decoding: Boolean) { if(active()) playerFailure(PlaybackFailure(message,decoding,!decoding)) }
+                override fun onError(message: String, decoding: Boolean, learn: Boolean) { if(active()) playerFailure(PlaybackFailure(message,decoding,!decoding,learn)) }
             })
             player=p
             p.setPlaybackSpeed(library.playbackSpeed)
@@ -1472,6 +1491,8 @@ class MainActivity: Activity() {
         appendLine("播放身份：iid=${identity?.get("iid") ?: "尚未解析"} · 服务端注册过=${repository.playerDeviceIsRegistered}")
         appendLine("设备注册：${if(repository.playerDeviceIsRegistered) "已完成（匿名，无需登录）" else "未完成或失败，播放接口会一直返回空响应"}")
         appendLine("已记录的解码失败：${CodecCapabilities.learnedCount()} 条")
+        val probe=streamProbe
+        appendLine(probe ?: "流探测：进行中")
         append("本机解码器：${CodecCapabilities.deviceSummary()}")
     }
     private fun playerFailure(problem: Throwable) {
@@ -1480,10 +1501,13 @@ class MainActivity: Activity() {
         // The device claimed support it doesn't have (MediaCodecList over-reporting): learn the
         // runtime verdict and retry one tier lower automatically instead of surfacing the panel.
         if(problem is PlaybackFailure && problem.decoding) {
-            val track=currentTrack; val rendition=currentRendition
-            when {
-                track!=null -> CodecCapabilities.learnFailure(track.fourcc,track.width,track.height)
-                rendition!=null -> CodecCapabilities.learnFailure(rendition.codec,rendition.width,rendition.height)
+            // 只有确定是解码器本身的问题才写进持久化记录：记错一条，这一档在以后所有剧集里都会被跳过。
+            if(problem.learn) {
+                val track=currentTrack; val rendition=currentRendition
+                when {
+                    track!=null -> CodecCapabilities.learnFailure(track.fourcc,track.width,track.height)
+                    rendition!=null -> CodecCapabilities.learnFailure(rendition.codec,rendition.width,rendition.height)
+                }
             }
             if(shouldAutoDowngrade(autoDowngrades,2,currentTiers,attemptedQuality)) {
                 autoDowngrades++
@@ -1492,7 +1516,10 @@ class MainActivity: Activity() {
                 return
             }
         }
-        playError=true; player?.pause(); progressBar.visibility=View.GONE; hud.visibility=View.VISIBLE; controls.removeAllViews(); controls.visibility=View.VISIBLE; panel=true
+        playError=true; retryingNow=false; player?.pause(); progressBar.visibility=View.GONE
+        hud.visibility=View.VISIBLE; main.removeCallbacks(hideHud)
+        // panel 置 true 才能让 dispatchKeyEvent 停止拦截遥控器确认键，否则按钮拿不到焦点。
+        controls.visibility=View.VISIBLE; panel=true
         val decoding=problem is PlaybackFailure && problem.decoding
         val retryable=if(problem is PlaybackFailure) problem.retryable else problem is java.io.IOException
         // 注册失败和「取不到流」不是一回事：前者的解决动作是重试注册，而不用登录或换清晰度。
@@ -1504,18 +1531,66 @@ class MainActivity: Activity() {
             else -> "播放失败，可重试或切换清晰度。"
         }
         showPlaybackFailureDetail(problem,false)
-        val actions=row(); controls.addView(actions)
-        addButton(actions,"立即重试") { playEpisode(episodeIndex,retryPosition,retryAutoplay) }.requestFocus()
-        nextLowerQuality(if(attemptedQuality>0) attemptedQuality else library.maxQuality)?.let { lower ->
-            addButton(actions,"尝试 ${lower}P") { library.maxQuality=lower; playEpisode(episodeIndex,retryPosition,retryAutoplay) }
+        // 只在面板第一次出现时探测一次：自动重试会重建本地代理，探测跟着做只会读到半路断掉的连接。
+        if(errorActions==null) probeStream()
+        errorProblem=problem
+        // 按钮只建一次、跨重试复用：每次失败都 removeAllViews() 会在手指按下的瞬间把按钮
+        // 移出窗口，那次点击就作废了——这正是「立即重试／返回选集点不动」的成因。
+        val actions=errorActions ?: row().also { errorActions=it; controls.addView(it) }
+        if(actions.childCount==0) {
+            addButton(actions,"立即重试") { cancelRecovery(); playEpisode(episodeIndex,retryPosition,retryAutoplay) }.requestFocus()
+            errorQualityButton=addButton(actions,"尝试",false) { }
+            addButton(actions,"查看原因") { errorProblem?.let { showPlaybackFailureDetail(it,true) } }
+            addButton(actions,"返回选集") { returnToDetail(true) }
+            errorStopButton=addButton(actions,"停止自动重试") { cancelRecovery(); playbackText.text="自动重试已停止，观看位置已保留。" }
         }
-        addButton(actions,"查看原因") { showPlaybackFailureDetail(problem,true) }
-        addButton(actions,"返回选集") { returnToDetail(true) }
-        if(retryable && !sleepStopped) {
-            addButton(controls,"停止自动重试") { cancelRecovery(); playbackText.text="自动重试已停止，观看位置已保留。" }
-            autoRecovery=true; scheduleRecovery()
+        // 能降的档位每轮都会变，所以文案和点击目标重算，按钮本身不重建。
+        val lower=nextLowerQuality(if(attemptedQuality>0) attemptedQuality else library.maxQuality)
+        errorQualityButton?.let { target ->
+            if(lower==null) target.visibility=View.GONE else {
+                target.visibility=View.VISIBLE; target.text="尝试 ${lower}P"
+                target.setOnClickListener { library.maxQuality=lower; playEpisode(episodeIndex,retryPosition,retryAutoplay) }
+            }
         }
+        val mayRetry=retryable && !sleepStopped
+        errorStopButton?.visibility=if(mayRetry) View.VISIBLE else View.GONE
+        setErrorActionsEnabled(true)
+        if(mayRetry) { autoRecovery=true; scheduleRecovery() }
         android.util.Log.w("HongguoTV","Playback failure: ${problem.javaClass.simpleName}: ${problem.message}")
+    }
+    /** 失败面板的按钮在这一轮重试期间整体禁用；恢复可点时用户就知道「刚才那下点到了」。 */
+    private fun setErrorActionsEnabled(value: Boolean) {
+        val actions=errorActions ?: return
+        for(index in 0 until actions.childCount) {
+            val child=actions.getChildAt(index)
+            child.isEnabled=value; child.alpha=if(value) 1f else .45f
+        }
+    }
+    private fun clearErrorActions() {
+        errorActions?.let { controls.removeView(it) }
+        errorActions=null; errorProblem=null; errorQualityButton=null; errorStopButton=null; streamProbe=null
+    }
+    /** 用 MediaMetadataRetriever 单独把这条流读一遍：能读出编码/尺寸说明容器没问题，
+     *  读不出就说明 4.4 的解析器根本认不出它，两者对应完全不同的修法。结果落到诊断文本里。 */
+    private fun probeStream() {
+        val url=videoProxy?.url ?: return
+        streamProbe=null
+        Thread {
+            val text=try {
+                val retriever=android.media.MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(url)
+                    val width=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)
+                    val height=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                    val duration=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    val mime=retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_MIMETYPE)
+                    "流探测：本机可解析 · ${width ?: "?"}x${height ?: "?"} · ${duration ?: "?"}ms · ${mime ?: "未知容器"}"
+                } finally { retriever.release() }
+            } catch (problem: Throwable) {
+                "流探测：本机解析失败 · ${problem.javaClass.simpleName}: ${problem.message.orEmpty().ifBlank { "无附加信息" }}"
+            }
+            main.post { streamProbe=text; val failed=errorProblem; if(playError && failed!=null) showPlaybackFailureDetail(failed,true) }
+        }.apply { isDaemon=true; name="HongguoTV-StreamProbe" }.start()
     }
     /** Touch entry point for phones: one tap opens the same control panel the remote opens with ↑ or
      *  MENU, and a tap while the panel is open collapses it. A double tap in the middle third toggles
@@ -1546,7 +1621,11 @@ class MainActivity: Activity() {
         private fun scheduleSingleTap() { main.postDelayed(singleTap,350) }
         /** Accessibility services and lint both expect performClick; it routes to the same single-tap path. */
         override fun performClick(): Boolean { super.performClick(); scheduleSingleTap(); return true }
-        override fun onTouchEvent(event: MotionEvent): Boolean = when(event.actionMasked) {
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            // 控制面板与失败卡片浮在画面上，触摸归它们；这一层只在纯播放画面里接手势，
+            // 否则会把按钮的 DOWN 一起吞掉，屏幕上看就是按钮点不动。
+            if(panel || playError) return false
+            return when(event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downX=event.x; downY=event.y; moved=false; longPressActive=false
                 main.postDelayed(longPress,450)
@@ -1581,6 +1660,7 @@ class MainActivity: Activity() {
                 true
             }
             else -> false
+            }
         }
     }
     /** Temporary 3× while the finger is held down; the stored default speed is restored on release. */
@@ -1628,7 +1708,11 @@ class MainActivity: Activity() {
         sleepButton?.text="定时 ${sleepTimer.label()}"
         if(screen!="player" || playError) return
         if(sleepStopped) { playbackText.text="定时停止已生效 · 观看位置已保存 · 按播放可继续"; return }
-        if(!playbackReady) { playbackText.text=(if(!requestedAutoplay) "准备后保持暂停 · " else "")+if(video==null) "正在获取播放地址…" else "正在缓冲…"; return }
+        if(!playbackReady) {
+            val lead=if(!requestedAutoplay) "准备后保持暂停 · " else ""
+            playbackText.text=lead+when { retryingNow -> "正在重新连接…"; video==null -> "正在获取播放地址…"; else -> "正在缓冲…" }
+            return
+        }
         val p=player ?: return
         val duration=p.duration.coerceAtLeast(0); val position=pendingSeek ?: p.currentPosition
         val state=when { p.playbackState==PlaybackState.BUFFERING -> "缓冲中"; p.playbackState==PlaybackState.ENDED -> "本集已结束"; !p.playWhenReady -> "已暂停"; else -> "正在播放" }
@@ -1820,7 +1904,7 @@ class MainActivity: Activity() {
         cloudAccount.upload(CloudProgress(progress.series,progress.episodeId,progress.episodeIndex,progress.position,progress.duration,progress.updatedAt),data.episodes.size,completed || !p.isPlaying || !foreground)
     }
     private fun releasePlayer() {
-        social.reset()
+        social.reset(); clearErrorActions()
         cancelRecovery(); cancelPrefetch(); mediaSession.deactivate(); tvTools.close()
         val wasForeground=foreground; foreground=false
         val oldPanel=episodePanel; episodePanel=null; oldPanel?.dismiss(); foreground=wasForeground
