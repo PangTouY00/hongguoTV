@@ -33,7 +33,9 @@ internal class PublicFeedBackend(
     private val quality: Int,
     private val http: OkHttpClient=OkHttpClient.Builder().connectionPool(feedPool).connectTimeout(12,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).callTimeout(35,TimeUnit.SECONDS).build(),
     account: AccountCredentials?=null,
-    private val startupCache: FeedStartupCache?=null
+    private val startupCache: FeedStartupCache?=null,
+    // 首页试播与全屏播放共用同一份匿名播放身份，避免各自注册、互不认可。
+    playbackSession: PlaybackDeviceSession=PlaybackDeviceSession.shared
 ): FeedBackend {
     companion object {
         // Reuse idle public TLS connections across homepage visits. Dispatchers remain per backend,
@@ -41,7 +43,7 @@ internal class PublicFeedBackend(
         private val feedPool=okhttp3.ConnectionPool(3,2,TimeUnit.MINUTES)
     }
     private val closed=java.util.concurrent.atomic.AtomicBoolean(false)
-    private val repository=ContentRepository(http)
+    private val repository=ContentRepository(http,playbackSession=playbackSession)
     private val recommendationAccount=account
     private val cacheIdentity=account?.let {
         java.security.MessageDigest.getInstance("SHA-256").digest(it.cookie.toByteArray(Charsets.UTF_8)).joinToString("") { b -> "%02x".format(b.toInt() and 255) }

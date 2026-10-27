@@ -83,7 +83,7 @@ Release 构建读取 `kotlin-tv/keystore.properties`（已忽略）或对应环�
 
 自动连播开启时，当前集仍在播放就提前打开下一集：解析播放地址、按解码能力选档、读取 MP4 索引，再预热 2 MiB 媒体样本（移动数据 1 MiB），完成后直接加入播放器的媒体队列，本集结束即接续到下一集，不再重新取址。开始时机：Wi-Fi 在剩余 30 秒内、移动数据在剩余 60 秒内；两者都要求当前集已稳定播放 1.5 秒以上且缓冲领先足够（Wi-Fi 5 秒、移动数据 2.5 秒），以免预热抢占正在播放的一集。失败时按冷却重试（Wi-Fi 15 秒、移动数据 8 秒），每集至多 3 次（移动数据 4 次）。切到下一集时若该集的预热仍在进行，最多等 1.5 秒复用它，而不是再取一次地址；Wi-Fi 与移动数据之间切换不会丢弃已经预热好的下一集，只有网络真正断开才取消。logcat 搜索 `Next episode opening`、`Episode transition`、`Playback queue transition`、`Playback ready episode`（`carried=` 表示复用了预热）与 `Playback first frame episode` 可确认走的是哪条路径。队列里的下一集可能在本集切换生效之前就渲染出首帧，此时日志是 `Next episode rendered its first frame before the queue switch`，它属于下一集，不代表当前一集卡住。预热没落地时日志区分两种情况：`Next episode warmup cancelled by an episode change`（被切集或导航取消）与 `Next episode warmup failed: 异常类型`（真的取址失败）。实际衔接速度受网络与设备影响，仍需设备实测。
 
-播放地址接口偶发返回 HTTP 200 空响应，与榜单页被 CDN 软拦截是同一类现象。`streamLadder` 对空响应、超时与 5xx 先做至多两次同一查询的重试，仍然失败才报成播放失败；logcat 出现 `Playback failure: EmptyContentException` 说明重试之后仍没取到地址。
+播放信息接口对匿名设备身份有校验：只认通过 `POST /service/2/device_register/` 注册下发的 `device_id` / `iid`，随机编造的 ID 会被回成 HTTP 200 空响应，界面上就是整集播不了。客户端在首次播放前注册一次，把身份留在进程内（`PlaybackDeviceSession.shared`），全屏、首页试播与下一集预热共用同一份；并发注册会合并，注册失败单独报「播放设备注册失败」，不与网络错误共用同一档重试。空响应时换新的 `_rticket` 重新签名重读，至多三次，仍空才报播放失败；logcat 出现 `Playback failure: EmptyPlaybackResponseException` 说明重读之后仍然没取到地址。
 
 触屏设备（手机或带触控的电视）在播放页增加轻点显示／隐藏控制层、双击画面中间暂停／继续、双击左右两侧快退／快进 10 秒、按住画面任意区域临时 3 倍速（松手恢复默认倍速）和拖动进度条跳转；用户暂停时画面中央绘制暂停图标（选集面板打开、定时停止和播放失败时不显示）。面板按钮合并为一行——暂停、上一集、下一集、选集、防误触锁、播放设置、弹幕设置、评论，窄屏时该行可横向滑动——并新增防误触锁按钮：锁定后双击、长按倍速与进度条拖动都不再生效，仅保留面板开关以便解锁；状态行会显示"已锁定"。进度条仅在触屏设备使用可拖动的 SeekBar，电视上的进度条外观与焦点顺序不变。遥控器暂停改为确认键按两次（第一下只唤出控制层，600ms 内第二下生效），其余按键路径未改动。该触屏路径按系统是否声明触屏能力开启。双击判定、长按倍速、面板按钮布局和进度条拖动的手感仍需手机实测。
 

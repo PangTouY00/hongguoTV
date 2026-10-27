@@ -32,7 +32,7 @@ class MainActivity: Activity() {
     private val accent=TvStyle.accent; private val white=TvStyle.text; private val muted=TvStyle.muted
     private val main=Handler(Looper.getMainLooper())
     private val io=Executors.newFixedThreadPool(3)
-    private val repository=ContentRepository()
+    private val repository=ContentRepository(playbackSession=PlaybackDeviceSession.shared)
     // 榜单专用并行加载通道：最多四榜各自在途、互不取消，与全局单飞 work() 隔离。
     private val rankWorker=Executors.newFixedThreadPool(3)
     private val networkCleanup=Executors.newSingleThreadExecutor()
@@ -1441,7 +1441,7 @@ class MainActivity: Activity() {
         cancelPrefetch(); prefetchedFor=key; prefetchAttemptAt=now; prefetchAttempts++
         val ticket=preparedNext.begin(key)
         val http=okhttp3.OkHttpClient.Builder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).callTimeout(20,java.util.concurrent.TimeUnit.SECONDS).build()
-        val source=ContentRepository(http); prefetchHttp=http
+        val source=ContentRepository(http,playbackSession=PlaybackDeviceSession.shared); prefetchHttp=http
         val scope=RequestScope(); prefetchScope=scope
         prefetchJob=prefetchWorker.submit {
             var remote: RemoteVideo?=null
@@ -1565,7 +1565,13 @@ class MainActivity: Activity() {
         playError=true; player?.pause(); progressBar.visibility=View.GONE; hud.visibility=View.VISIBLE; controls.removeAllViews(); controls.visibility=View.VISIBLE; panel=true
         val decoding=problem is PlaybackException && problem.errorCode in 3000..4999
         val retryable=if(problem is PlaybackException) problem.errorCode in 2000..2999 || problem.errorCode==PlaybackException.ERROR_CODE_TIMEOUT else problem is java.io.IOException
-        playbackText.text=if(decoding) "电视无法解码当前视频，可尝试更低清晰度。" else "播放失败，可重试或切换清晰度。"
+        // 播放身份拿不到，和取不到播放地址是两件事：分开说清楚，别让人反复换清晰度。
+        val registrationFailed=generateSequence(problem) { it.cause }.any { it is PlaybackDeviceRegistrationException }
+        playbackText.text=when {
+            decoding -> "电视无法解码当前视频，可尝试更低清晰度。"
+            registrationFailed -> "播放设备注册失败，请检查网络后重试。"
+            else -> "播放失败，可重试或切换清晰度。"
+        }
         val actions=row(); controls.addView(actions)
         addButton(actions,"立即重试") { playEpisode(episodeIndex,retryPosition,retryAutoplay) }.requestFocus()
         nextLowerQuality(if(attemptedQuality>0) attemptedQuality else library.maxQuality)?.let { lower ->
