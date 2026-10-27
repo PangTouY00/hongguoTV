@@ -28,9 +28,11 @@ jobs:
       - name: Cache Gradle dependencies
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
+          # ~/.m2 存的是 Robolectric 拉取的 android-all 镜像；不缓存它，每次跑 :app:testDebugUnitTest 都要重新下载一遍。
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper/dists
+            ~/.m2
           key: ${{ runner.os }}-gradle-${{ hashFiles('kotlin-tv/gradle/wrapper/gradle-wrapper.properties', 'kotlin-tv/gradle.properties', 'kotlin-tv/**/*.gradle.kts', 'kotlin-tv/**/libs.versions.toml') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
