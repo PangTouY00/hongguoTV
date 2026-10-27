@@ -1948,7 +1948,7 @@ class MainActivity: Activity() {
             val dispatcher = javaClass.getMethod("getOnBackInvokedDispatcher").invoke(this) ?: return
             val listener = Class.forName("android.window.OnBackInvokedCallback")
             val priority = Class.forName("android.window.OnBackInvokedDispatcher").getField("PRIORITY_DEFAULT").getInt(null)
-            val callback = java.lang.reflect.Proxy.newProxyInstance(listener.classLoader, arrayOf(listener)) { _, _, _ -> goBack(); null }
+            val callback = java.lang.reflect.Proxy.newProxyInstance(listener.classLoader, arrayOf(listener), backCallbackHandler { goBack() })
             dispatcher.javaClass.getMethod("registerOnBackInvokedCallback", Int::class.javaPrimitiveType, listener).invoke(dispatcher, priority, callback)
         } catch (problem: Throwable) {
             android.util.Log.w("HongguoTV", "Back callback registration failed: $problem")
