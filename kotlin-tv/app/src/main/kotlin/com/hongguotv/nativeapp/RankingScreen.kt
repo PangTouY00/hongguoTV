@@ -123,6 +123,14 @@ internal class RankingScreen(
             }
         }
     }
+    /** 后台预取完成时调用：正在看这个榜就立刻把数据补上，不让界面停在「正在准备榜单」。
+     *  其他榜的完成只更新按钮状态，用户切过去时 TTL 内零请求。 */
+    fun boardUpdated(board: RankBoard) {
+        if(board!=state.board) { markControls(); return }
+        refreshButton.text="刷新"
+        render()
+        if(state.snapshots[board]==null) subtitle.text="后台预取未成功 · 按右上方刷新重试"
+    }
     private fun chooseTopic() {
         val snapshot=state.snapshots[state.board] ?: return
         val values=listOf("")+snapshot.topics

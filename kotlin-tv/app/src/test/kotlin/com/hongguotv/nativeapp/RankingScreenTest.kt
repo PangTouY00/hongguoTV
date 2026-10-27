@@ -231,6 +231,51 @@ class RankingScreenTest {
     }
 
     @Test
+    fun aBoardAlreadyPrefetchedInBackgroundRendersAsSoonAsItLands() {
+        val controller = Robolectric.buildActivity(Activity::class.java).setup()
+        val activity = controller.get()
+        val tools = TvTools(activity)
+        try {
+            val state = RankBrowserState()
+            val nav =
+                (0..7).map {
+                    TextView(activity).apply {
+                        id = View.generateViewId()
+                        isFocusable = true
+                    }
+                }
+            // 启动后的后台预取先占住了这个榜。
+            assertTrue(state.beginRefresh(RankBoard.ALL))
+            val screen =
+                RankingScreen(
+                    activity,
+                    state,
+                    nav,
+                    tools,
+                    { _, _ -> },
+                    {},
+                    { _, _ -> },
+                ) { _, _ -> fail("a board already in flight must not be fetched a second time") }
+            activity.setContentView(FrameLayout(activity).apply { addView(screen) })
+            screen.start(true, true)
+            layout(screen)
+            assertNull(screen.findViewWithTag<View>("1")) // 还没落地，界面不重复拉取
+
+            // 预取完成：数据写入状态后界面立刻补上，用户既不用等也不用手动刷新。
+            state.endRefresh(
+                RankBoard.ALL,
+                RankSnapshot(RankBoard.ALL, listOf(Series("1", "综合")), ComicRanking(emptyMap(), 1, "")),
+            )
+            screen.boardUpdated(RankBoard.ALL)
+            layout(screen)
+            assertNotNull(screen.findViewWithTag<View>("1"))
+        } finally {
+            tools.destroy()
+            controller.pause().stop().destroy()
+        }
+    }
+
+    @Test
     fun expiredCacheShowsOldDataWhileRenewingInBackground() {
         var now = 0L
         val state = RankBrowserState(clock = { now }, ttlMillis = 10 * 60_000)

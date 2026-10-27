@@ -161,6 +161,9 @@ class MainActivity: Activity() {
     private var catalogFocus=""
     private data class CatalogState(val page: Int,val items: List<Series>,val hasMore: Boolean,val ranking: ComicRanking?)
     private val rankBrowser=RankBrowserState()
+    private var rankScreen: RankingScreen?=null
+    private val rankPrefetchTask=Runnable { prefetchRankBoards() }
+    private var rankPrefetched=false
     private var ranking: ComicRanking?=null
     private var rankRefresh: View?=null
     private var rankSubtitle: TextView?=null
@@ -293,7 +296,40 @@ class MainActivity: Activity() {
         library.loadAsync(onFailure={ problem ->
             if(!isDestroyed) { libraryLoadError=problem; if(foreground) showLibraryError(problem) }
         }) {
-            if(!isDestroyed && foreground) { showCatalog(load=true); favoriteMonitor.check() }
+            if(!isDestroyed && foreground) { showCatalog(load=true); favoriteMonitor.check(); scheduleRankPrefetch() }
+        }
+    }
+    /** 首屏出现后把榜单读进会话缓存：用户走到排行榜时直接有内容，不用现场等五页。
+     *  延迟几秒是为了让本机记录和首页先完成，后台预取不抢首屏的带宽。 */
+    private fun scheduleRankPrefetch(delay: Long=4_000) {
+        main.removeCallbacks(rankPrefetchTask)
+        main.postDelayed(rankPrefetchTask,delay)
+    }
+    private fun prefetchRankBoards() {
+        if(isDestroyed || rankPrefetched) return
+        // 不在前台或没有网络时不跑，也不放弃这一轮：稍后重新安排，回到前台或网络恢复时照常预取。
+        if(!foreground || !networkAvailable()) { scheduleRankPrefetch(15_000); return }
+        // 蜂窝网络下只预热当前默认榜，其余榜单留给用户真正打开时再读，避免后台跑掉二十页流量。
+        val metered=connectivity.isActiveNetworkMetered
+        val boards=if(metered) listOf(rankBrowser.board) else RankBoard.entries.toList()
+        android.util.Log.i("HongguoTV","Rank prefetch starting boards=${boards.size} metered=$metered")
+        boards.forEach { board -> warmRankBoard(board) }
+    }
+    /** 与排行榜页共用同一个状态机：同榜在途自动去重，所以预取和手动刷新不会互相重复。 */
+    private fun warmRankBoard(board: RankBoard) {
+        if(rankBrowser.isFresh(board) || !rankBrowser.beginRefresh(board)) return
+        rankWorker.submit {
+            val result=runCatching { repository.rankSnapshot(board) }
+            main.post {
+                if(isDestroyed) return@post
+                val snapshot=result.getOrNull()
+                rankBrowser.endRefresh(board,snapshot)
+                // 读到过一次就够了：TTL 内的后续进入零请求，过期后由页面自己静默续期，不在后台反复重跑。
+                if(snapshot!=null) rankPrefetched=true
+                // 预取完成时用户可能已经停在这个榜上：把已经拿到的数据补进界面，而不是让他继续等。
+                if(board==rankBrowser.board) rankScreen?.boardUpdated(board)
+                android.util.Log.i("HongguoTV","Rank prefetch board=${board.label} ok=${snapshot!=null} items=${snapshot?.items.size ?: 0} pages=${snapshot?.pagesRead ?: 0}/${snapshot?.pagesTotal ?: 0} problem=${result.exceptionOrNull()?.message ?: ""}")
+            }
         }
     }
     private fun base(title: String?=null): LinearLayout {
@@ -353,6 +389,7 @@ class MainActivity: Activity() {
         homeScreen=null; selectionPreview=null; catalogScroll=null
         nav.clear(); sourceButtons.clear(); typeButtons.clear(); searchInput=null; searchButton=null; searchActions.clear()
         historyManage=null; rankRefresh=null; rankSubtitle=null; collectionBack=null; favoriteBadges.clear()
+        rankScreen=null
         favoriteStatus=null; favoriteCheck=null; homeUpdates=null; resumeCards.clear()
         catalogCards.clear(); cardImages.clear()
     }
@@ -519,6 +556,7 @@ class MainActivity: Activity() {
                     }
                 })
             container.addView(ranks,lp(-1,0).apply { weight=1f })
+            rankScreen=ranks
             ranks.start(load,focusNav)
             return
         }
