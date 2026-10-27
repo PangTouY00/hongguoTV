@@ -135,6 +135,7 @@ internal interface TrialPlayback {
  */
 internal class ExoPlayerTrialPlayback(private val context: android.content.Context): TrialPlayback {
     private val surface=android.view.SurfaceView(context).apply { isFocusable=false }
+    private val main=android.os.Handler(android.os.Looper.getMainLooper())
     private var player: ExoPlayerPlayer?=null
     private var activeId: String?=""
     private var startedAt=0L
@@ -152,6 +153,10 @@ internal class ExoPlayerTrialPlayback(private val context: android.content.Conte
                     else->TrialStatus.ERROR
                 })
             }
+            override fun onVideoSize(width: Int, height: Int) {
+                // 首页试播固定「完整画面」，与 main 分支 PlayerView 的 RESIZE_MODE_FIT 一致。
+                main.post { FrameFit.apply(surface,width,height,VideoFrameMode.FIT) }
+            }
             override fun onFirstFrame() {
                 android.util.Log.i("HongguoTV","Home first-frame elapsedMs=${android.os.SystemClock.elapsedRealtime()-startedAt}")
             }
@@ -163,6 +168,8 @@ internal class ExoPlayerTrialPlayback(private val context: android.content.Conte
     }
     private fun play(clip: TrialClip,position: Long,autoplay: Boolean) {
         activeId=key(clip);startedAt=android.os.SystemClock.elapsedRealtime()
+        // 先按已经读到的视频头排好画面，再开始播：中途改尺寸会让 Surface 重新分配、白闪一下。
+        clip.video.trackInfo()?.let { frame-> main.post { FrameFit.apply(surface,frame.width,frame.height,VideoFrameMode.FIT) } }
         backend().prepare(PlaybackSource(clip.video,activeId!!),position,autoplay)
     }
     override fun load(clip: TrialClip,position: Long,autoplay: Boolean)=play(clip,position,autoplay)

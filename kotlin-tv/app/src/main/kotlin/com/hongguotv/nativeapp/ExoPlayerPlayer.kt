@@ -33,6 +33,9 @@ internal interface PlaybackListener {
     fun onError(message: String, decoding: Boolean, learn: Boolean)
     /** 位置跳到另一处（手动 seek 或这一集自然接上下一集）。 */
     fun onPositionMoved(positionMs: Long, autoTransition: Boolean) {}
+    /** 解码器报出的画面尺寸（像素）。4.4 分支靠它把 Surface 排成正确的比例，
+     *  否则系统解码器会把帧直接拉伸填满 Surface，画面就变形。 */
+    fun onVideoSize(width: Int, height: Int) {}
 }
 
 /** 一次播放的输入：解密取流对象，加上用来核对「这是哪一集」的标识。 */
@@ -52,8 +55,8 @@ internal class ExoPlayerPlayer(
 ) {
     private val player = ExoPlayer.Builder(context).build()
     private var state = PlaybackState.IDLE
-    private var videoWidth = 0
-    private var videoHeight = 0
+    private var frameWidth = 0
+    private var frameHeight = 0
     private var released = false
 
     private val stateListener = object : Player.Listener {
@@ -67,18 +70,15 @@ internal class ExoPlayerPlayer(
             val (message, decoding, learn) = describeError(error)
             listener.onError("$message（播放器错误 ${error.errorCodeName}）", decoding, learn)
         }
-        override fun onVideoSizeChanged(size: VideoSize) {
-            videoWidth = size.width; videoHeight = size.height
-        }
+        override fun onVideoSizeChanged(size: VideoSize) = reportVideoSize(size.width, size.height)
     }
 
     private val frameListener = object : AnalyticsListener {
         override fun onRenderedFirstFrame(eventTime: AnalyticsListener.EventTime, dummy: Any, timeUs: Long) {
             if (!released) listener.onFirstFrame()
         }
-        override fun onVideoSizeChanged(eventTime: AnalyticsListener.EventTime, size: VideoSize) {
-            videoWidth = size.width; videoHeight = size.height
-        }
+        override fun onVideoSizeChanged(eventTime: AnalyticsListener.EventTime, size: VideoSize) =
+            reportVideoSize(size.width, size.height)
         override fun onPlaybackStateChanged(eventTime: AnalyticsListener.EventTime, value: Int) = setState(mapState(value))
     }
 
@@ -94,7 +94,9 @@ internal class ExoPlayerPlayer(
     val duration: Long get() = player.duration.coerceAtLeast(0L)
     val currentPosition: Long get() = player.currentPosition.coerceAtLeast(0L)
     /** 解码器实际给出的画面尺寸；0 表示还没有视频轨道。 */
-    val hasVideoTrack: Boolean get() = videoWidth > 0 && videoHeight > 0
+    val hasVideoTrack: Boolean get() = frameWidth > 0 && frameHeight > 0
+    val videoFrameWidth: Int get() = frameWidth
+    val videoFrameHeight: Int get() = frameHeight
     val currentMediaId: String get() = player.currentMediaItem?.mediaId ?: ""
 
     fun setPlayWhenReady(value: Boolean) {
@@ -106,7 +108,7 @@ internal class ExoPlayerPlayer(
         val mediaSource = ProgressiveMediaSource.Factory { VideoDataSource(source.video) }
             .createMediaSource(MediaItem.Builder().setMediaId(source.mediaId)
                 .setUri("hongguotv://episode/${source.mediaId}").setMimeType(MimeTypes.VIDEO_MP4).build())
-        videoWidth = 0; videoHeight = 0
+        frameWidth = 0; frameHeight = 0
         player.setMediaSource(mediaSource)
         if (position > 0) player.seekTo(position.coerceAtLeast(0))
         player.playWhenReady = autoplay
@@ -123,7 +125,7 @@ internal class ExoPlayerPlayer(
     fun stop() {
         player.stop()
         player.clearMediaItems()
-        videoWidth = 0; videoHeight = 0
+        frameWidth = 0; frameHeight = 0
         setState(PlaybackState.IDLE)
     }
 
@@ -148,6 +150,15 @@ internal class ExoPlayerPlayer(
         if (state == value) return
         state = value
         listener.onStateChanged(value)
+    }
+
+    /** 只在尺寸真的变化时上报一次。界面层据此把 Surface 排成正确比例，
+     *  所以它必须发生在第一帧渲染之前——两个回调都在解码器开始输出之前到达。 */
+    private fun reportVideoSize(width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
+        if (frameWidth == width && frameHeight == height) return
+        frameWidth = width; frameHeight = height
+        listener.onVideoSize(width, height)
     }
 
     /** 错误码分段沿用 media3 自己的划分（与 main 分支同一套判断）：

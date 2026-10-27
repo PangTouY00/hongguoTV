@@ -1297,8 +1297,10 @@ class MainActivity: Activity() {
         if(!reuse) {
             root.removeAllViews(); root.setBackgroundColor(Color.BLACK)
             // 4.4 上没有 media3 的 PlayerView：画面直接落在 SurfaceView 上，比例与放大由 applyFrameScale 负责。
-            val view=SurfaceView(this).apply { isFocusable=false; setBackgroundColor(Color.BLACK) }
-            playerView=view; root.addView(view,FrameLayout.LayoutParams(-1,-1)); applyFrameScale()
+            // 这里不能给 SurfaceView 设背景：它的画面在窗口下方，靠「把自己这一块挖空」露出来。背景一旦不透明，
+            // 系统就不再挖空，画面被自己这块黑底整个盖住——声音照播，画面全黑。黑边由 root 的背景提供。
+            val view=SurfaceView(this).apply { isFocusable=false }
+            playerView=view; root.addView(view,FrameLayout.LayoutParams(-1,-1,Gravity.CENTER)); applyFrameScale()
             social.attach(root)
             hud=column().apply { setPadding(dp(widthDp()*.05f),dp(20),dp(widthDp()*.05f),(resources.displayMetrics.heightPixels*.05f).toInt()); background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.TRANSPARENT,Color.argb(240,11,15,21))) }
             playbackTitle=text("",23f).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setTypeface(null,Typeface.BOLD) }; hud.addView(playbackTitle)
@@ -1364,6 +1366,10 @@ class MainActivity: Activity() {
                         else { requestedAutoplay=false; p.pause(); playbackText.text="本集已结束"; showPanel() }
                     }
                 }
+                override fun onVideoSize(width: Int, height: Int) {
+                    // 解码器报的尺寸比容器更权威：按它把 Surface 排好，第一帧才不会先变形一下。
+                    if(player===p && generation==ticket) main.post { applyFrameScale() }
+                }
                 override fun onFirstFrame() {
                     if(player!==p || generation!=ticket) return
                     android.util.Log.i("HongguoTV","Playback first frame episode=${episodeIndex+1} carried=$carriedOver reused=$reuse elapsedMs=${android.os.SystemClock.elapsedRealtime()-playbackStarted}")
@@ -1373,6 +1379,9 @@ class MainActivity: Activity() {
             })
             player=p
             p.setPlaybackSpeed(library.playbackSpeed)
+            // 先把画面排成这一集的比例再开始播：播放中途改尺寸会让 Surface 重新分配、白闪一下。
+            // 此刻容器尺寸已知，视频宽高来自已经读到的 mp4 头，不需要等解码器报。
+            applyFrameScale()
             p.prepare(episodeSource(remote,requestedId),position,foreground && requestedAutoplay && !pausedForLifecycle && episodePanel==null)
         }, { problem -> playerFailure(problem) })
     }
@@ -1764,21 +1773,14 @@ class MainActivity: Activity() {
             if(anchor.tag!="playback-settings") anchor.text="定时 ${sleepTimer.label()}"; updatePlaybackText(); showHud()
         })
     }
-    /** 画面放大只作用在播放器上：弹幕、进度条与面板仍按原尺寸排布，遥控器焦点图也不受影响。
-     *  4.4 上没有 media3 的 resizeMode：系统播放器总是按比例 letterbox，「拉伸铺满」就是把被
-     *  letterbox 掉的那部分用缩放补回来。 */
+    /** 画面比例与放大只作用在播放器上：弹幕、进度条与面板仍按原尺寸排布，遥控器焦点图也不受影响。
+     *  4.4 上没有 media3 的 resizeMode，而且缩放 View 也动不了 Surface 里的画面——这里改的是
+     *  Surface 自己的像素尺寸：它按视频比例排好，把帧拉伸填满它的效果就等于没有拉伸。 */
     private fun applyFrameScale() {
         val view=playerView ?: return
-        var scale=library.frameMode.frameScale
-        val track=currentTrack
-        if(library.frameMode==VideoFrameMode.FILL && track!=null && track.width>0 && track.height>0) {
-            val screenW=resources.displayMetrics.widthPixels.toFloat()
-            val screenH=resources.displayMetrics.heightPixels.toFloat()
-            val fitW=minOf(screenW,screenH*track.width/track.height)
-            val fitH=minOf(screenH,screenW*track.height/track.width)
-            if(fitW>0 && fitH>0) scale*=maxOf(screenW/fitW,screenH/fitH)
-        }
-        view.scaleX=scale; view.scaleY=scale
+        var width=player?.videoFrameWidth ?: 0; var height=player?.videoFrameHeight ?: 0
+        if(width<=0||height<=0) { val track=currentTrack; if(track!=null) { width=track.width; height=track.height } }
+        FrameFit.apply(view,width,height,library.frameMode)
     }
     private fun showFramePicker(anchor: TextView,inPlayer: Boolean) {
         tvTools.choose("全局画面模式",listOf("完整画面 · 保留比例与全部内容","放大 1.36 倍 · 减少黑边，会裁掉画面边缘","拉伸铺满 · 画面比例会改变"),anchor,{ index ->
