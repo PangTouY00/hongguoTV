@@ -172,6 +172,8 @@ class MainActivity: Activity() {
     private var pausedForLifecycle=false
     private lateinit var hud: LinearLayout
     private lateinit var playbackText: TextView
+    /** 播放失败时把具体原因写在屏幕上：这台电视没有 logcat 可看，这一行就是唯一的证据。 */
+    private var playbackReason: TextView? = null
     private lateinit var progressBar: ProgressBar
     private lateinit var controls: LinearLayout
     private var panel=false
@@ -1288,6 +1290,7 @@ class MainActivity: Activity() {
             hud=column().apply { setPadding(dp(widthDp()*.05f),dp(20),dp(widthDp()*.05f),(resources.displayMetrics.heightPixels*.05f).toInt()); background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.TRANSPARENT,Color.argb(240,11,15,21))) }
             playbackTitle=text("",23f).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setTypeface(null,Typeface.BOLD) }; hud.addView(playbackTitle)
             playbackText=text("",15f,muted).apply { setPadding(0,dp(10),0,dp(9)) }; hud.addView(playbackText)
+            playbackReason=text("",13f,muted).apply { setPadding(0,0,0,dp(9)); visibility=View.GONE }; hud.addView(playbackReason)
             progressBar=(if(touchInput) SeekBar(this).apply { max=1000; TvStyle.progressTint(this,accent,surface); isFocusable=false; isFocusableInTouchMode=false; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 // Dragging is the phone equivalent of the remote's left/right seek.
                 setOnSeekBarChangeListener(object: SeekBar.OnSeekBarChangeListener {
@@ -1309,14 +1312,14 @@ class MainActivity: Activity() {
             root.addView(ScrollView(this).apply { isVerticalScrollBarEnabled=false; addView(hud) },FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
         }
         playbackTitle.text="${data.series.title}  ·  第 ${episodeIndex+1} 集"
-        playbackText.text="正在获取播放地址…"; progressBar.progress=0; progressBar.visibility=View.VISIBLE; hidePlaybackOverlay(); pauseGlyph?.visibility=View.GONE
+        playbackText.text="正在获取播放地址…"; playbackReason?.text=""; playbackReason?.visibility=View.GONE
+        progressBar.progress=0; progressBar.visibility=View.VISIBLE; hidePlaybackOverlay(); pauseGlyph?.visibility=View.GONE
         controls.removeAllViews(); controls.visibility=View.GONE; transportPlay=null; sleepButton=null
         syncMediaSession()
         val requestedId=data.episodes[episodeIndex]; val maxQuality=library.maxQuality; val ticket=generation
         work({ val carried=claimWarmup(targetKey,warmupInFlight)
             carried.first?.let { OpenedStream(it,null,emptyList(),it.trackInfo(),carried.second) }
-                ?: openStream(repository.http,repository,requestedId,maxQuality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) }
-                ?: throw java.io.IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集") }, { opened ->
+                ?: openStream(repository.http,repository,requestedId,maxQuality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) } }, { opened ->
             val remote=opened.video; video=remote; val carriedOver=opened.http!=null
             if(carriedOver) playbackHttp=opened.http
             quality=playedQualityLabel(opened,maxQuality); attemptedQuality=opened.rendition?.quality ?: 0
@@ -1391,7 +1394,7 @@ class MainActivity: Activity() {
         val warmBytes=PrefetchPolicy.warmBytes(metered)
         cancelPrefetch(); prefetchedFor=key; prefetchAttemptAt=now; prefetchAttempts++
         val ticket=preparedNext.begin(key)
-        val http=okhttp3.OkHttpClient.Builder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).build()
+        val http=newHttpClientBuilder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).build()
         val source=ContentRepository(http); prefetchHttp=http
         val scope=RequestScope(); prefetchScope=scope
         prefetchJob=prefetchWorker.submit {
@@ -1399,7 +1402,6 @@ class MainActivity: Activity() {
             try {
                 val prepared=scope.run {
                     val opened=openStream(http,source,id,quality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) }
-                        ?: throw java.io.IOException("没有电视可播放的清晰度")
                     opened.video.also { remote=it; it.warm(warmBytes) }
                 }
                 if(preparedNext.complete(ticket,key,prepared)) {
@@ -1450,6 +1452,27 @@ class MainActivity: Activity() {
         val ideal=opened.tiers.filter { it.quality in 1..maxQuality }.maxOfOrNull { it.quality }
         return if(ideal!=null && rendition.quality<ideal) label+"（自动降清）" else label
     }
+    /** 失败原因直接落在屏幕上。这台电视没有 logcat 可读，界面上这一行就是唯一的证据。 */
+    private fun showPlaybackFailureDetail(problem: Throwable, full: Boolean) {
+        val reason=playbackReason ?: return
+        val text=(if(full) playbackDiagnostics(problem) else "${problem.javaClass.simpleName}: ${problem.message.orEmpty().ifBlank { "无附加信息" }}")
+            .replace(Regex("https?://\\S+"),"[地址]")
+        reason.text=text; reason.visibility=View.VISIBLE
+    }
+    /** 完整诊断：接口给了哪些清晰度、每一档本机能不能接、本机到底有哪些解码器。 */
+    private fun playbackDiagnostics(problem: Throwable): String = buildString {
+        appendLine("失败原因：${problem.javaClass.simpleName}: ${problem.message.orEmpty().ifBlank { "无附加信息" }}")
+        if(currentTiers.isEmpty()) appendLine("播放接口没有给出清晰度") else {
+            appendLine("接口给出的清晰度：")
+            currentTiers.forEach { appendLine("  ${it.quality}P ${it.codec.ifBlank { "未知编码" }} ${it.width}x${it.height} · ${if(CodecCapabilities.supports(it)) "本机可解" else "本机不支持"}") }
+        }
+        appendLine("本次尝试：${if(attemptedQuality>0) "${attemptedQuality}P" else "未取到流"} · 清晰度上限 ${library.maxQuality}P · 已自动降清 $autoDowngrades 次")
+        // 只读已解析的身份：诊断跑在主线程，读 playerDevice 会在未解析时同步发一次注册请求。
+        val identity=repository.resolvedPlayerDeviceOrNull
+        appendLine("播放身份：iid=${identity?.get("iid") ?: "尚未解析"} · 服务端注册过=${repository.playerDeviceIsRegistered}")
+        appendLine("已记录的解码失败：${CodecCapabilities.learnedCount()} 条")
+        append("本机解码器：${CodecCapabilities.deviceSummary()}")
+    }
     private fun playerFailure(problem: Throwable) {
         retryPosition=currentPosition().coerceAtLeast(0); retryAutoplay=requestedAutoplay && !sleepStopped
         saveProgress(); cancelRecovery(); cancelPrefetch()
@@ -1472,11 +1495,13 @@ class MainActivity: Activity() {
         val decoding=problem is PlaybackFailure && problem.decoding
         val retryable=if(problem is PlaybackFailure) problem.retryable else problem is java.io.IOException
         playbackText.text=if(decoding) "电视无法解码当前视频，可尝试更低清晰度。" else "播放失败，可重试或切换清晰度。"
+        showPlaybackFailureDetail(problem,false)
         val actions=row(); controls.addView(actions)
         addButton(actions,"立即重试") { playEpisode(episodeIndex,retryPosition,retryAutoplay) }.requestFocus()
         nextLowerQuality(if(attemptedQuality>0) attemptedQuality else library.maxQuality)?.let { lower ->
             addButton(actions,"尝试 ${lower}P") { library.maxQuality=lower; playEpisode(episodeIndex,retryPosition,retryAutoplay) }
         }
+        addButton(actions,"查看原因") { showPlaybackFailureDetail(problem,true) }
         addButton(actions,"返回选集") { returnToDetail(true) }
         if(retryable && !sleepStopped) {
             addButton(controls,"停止自动重试") { cancelRecovery(); playbackText.text="自动重试已停止，观看位置已保留。" }

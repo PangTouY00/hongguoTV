@@ -24,7 +24,7 @@ internal interface FeedBackend: Closeable {
 }
 internal class PublicFeedBackend(
     private val quality: Int,
-    private val http: OkHttpClient=OkHttpClient.Builder().connectionPool(feedPool).connectTimeout(12,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).build(),
+    private val http: OkHttpClient=newHttpClientBuilder().connectionPool(feedPool).connectTimeout(12,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).build(),
     account: AccountCredentials?=null,
     private val startupCache: FeedStartupCache?=null
 ): FeedBackend {
@@ -73,7 +73,6 @@ internal class PublicFeedBackend(
     override fun detail(series: Series)=timed("detail") { repository.detail(series.id) }
     private fun open(id: String): RemoteVideo {
         val opened=openStream(http,repository,id,quality,CodecCapabilities::supports,initialBytes=32*1024) { it==null || CodecCapabilities.supports(it) }
-            ?: throw java.io.IOException("该作品暂时没有可试播的剧集")
         return opened.video
     }
     override fun prepare(detail: Detail): TrialClip {

@@ -12,8 +12,8 @@ import android.os.Looper
 import android.util.LruCache
 import android.view.View
 import android.widget.ImageView
+import com.hongguotv.core.newHttpClientBuilder
 import okhttp3.Call
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -61,7 +61,7 @@ class ArtworkLoader(context: Context) {
     }
     private val disk = ArtworkCache(File(context.applicationContext.cacheDir, "artwork-v1"))
     // This client owns its dispatcher and pool; cancelling artwork never cancels video or catalog calls.
-    private val http = OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS)
+    private val http = newHttpClientBuilder().connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS).callTimeout(12, TimeUnit.SECONDS).build()
     private val workers = Executors.newFixedThreadPool(if (lowRam) 1 else 2) { runnable ->
         Thread(runnable, "hongguotv-artwork").apply { priority = Thread.NORM_PRIORITY - 1 }

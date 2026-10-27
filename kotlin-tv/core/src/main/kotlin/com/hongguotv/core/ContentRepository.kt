@@ -107,10 +107,47 @@ class ContentRepository(
     private val suggestionWebId = UUID.randomUUID().toString()
     // Compatibility approach from upstream PR #22. Keep search signing separate.
     // Identifiers remain stable for this repository's lifetime, including episode changes.
-    private val playerDevice = VendorConstants.device + mapOf(
-        "iid" to newPlayerDeviceId(), "device_id" to newPlayerDeviceId(),
-        "cdid" to UUID.randomUUID().toString()
-    )
+    private val cdid = UUID.randomUUID().toString()
+    /**
+     * 播放接口认的是「服务端注册过的 `device_id` + `iid` 这一对」：没注册过的身份它回
+     * HTTP 200 + 0 字节（本机探针实测复现，见 [DeviceRegister] 的记录）。所以游客也要先做一次
+     * 匿名注册；注册不成才退回随机身份，并且最多试两次，不让每次播放都多付一次注册请求。
+     */
+    @Volatile private var resolvedPlayerDevice: Map<String, String>? = null
+    @Volatile private var registeredIdentity = false
+    @Volatile private var registrationAttempts = 0
+    /** 当前播放请求实际使用的设备身份（界面诊断会读它）。 */
+    val playerDevice: Map<String, String> get() = resolvedPlayerDevice ?: resolvePlayerDevice()
+    /** 这个身份是不是服务端刚下发的。界面诊断用它区分「没注册成功」和「服务端不给流」。 */
+    val playerDeviceIsRegistered: Boolean get() = registeredIdentity
+    /** 已经解析到的身份；没解析过就是 null。诊断在 UI 线程读它，绝不能顺手发起注册请求。 */
+    val resolvedPlayerDeviceOrNull: Map<String, String>? get() = resolvedPlayerDevice
+    /** 探针与测试可以直接指定身份，或传 null 回到「自己注册」的默认路径。 */
+    internal fun usePlayerDevice(device: Map<String, String>?) { resolvedPlayerDevice = device }
+    private fun resolvePlayerDevice(): Map<String, String> {
+        resolvedPlayerDevice?.let { return it }
+        synchronized(this) {
+            resolvedPlayerDevice?.let { return it }
+            val registered = if (registrationAttempts < 2) {
+                registrationAttempts++
+                runCatching { CloudAccountClient(http).registerDevice() }.getOrNull()
+            } else null
+            registeredIdentity = registered != null
+            val random = {
+                VendorConstants.device + mapOf(
+                    "iid" to newPlayerDeviceId(), "device_id" to newPlayerDeviceId(), "cdid" to cdid
+                )
+            }
+            // 注册失败但还有重试额度：这次先用临时身份播，下一次播放再试注册。
+            // 失败就永久钉死随机身份的话，一次网络抖动会让这台电视再也注册不上。
+            if (registered == null && registrationAttempts < 2) return random()
+            val device = if (registered == null) random() else VendorConstants.device + mapOf(
+                "iid" to registered.installId, "device_id" to registered.deviceId, "cdid" to cdid
+            )
+            resolvedPlayerDevice = device
+            return device
+        }
+    }
     private fun newPlayerDeviceId() = buildString {
         append('3')
         repeat(18) { append(kotlin.random.Random.nextInt(10)) }

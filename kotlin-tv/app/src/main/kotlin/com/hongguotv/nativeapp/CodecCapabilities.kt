@@ -75,14 +75,15 @@ object CodecCapabilities {
         prefs?.edit()?.putStringSet("failures",lessons.keys())?.apply()
     }
     fun learnedCount()=lessons.size()
+    /** 4.4 上能问出来的只有「这个解码器声明支持哪些类型」。日志与界面诊断共用这一份。 */
+    fun deviceSummary(): String {
+        val infos=codecInfos() ?: return "读不到本机解码器列表"
+        val decoders=infos.filter { !it.isEncoder }
+        if(decoders.isEmpty()) return "没有枚举到任何解码器"
+        return decoders.joinToString("; ") { info -> "${info.name} supports ${info.supportedTypes.joinToString(",")}" }
+    }
     fun logDeviceCapabilities() {
         if(logged) return; logged=true
-        val lines=runCatching {
-            // 4.4 上能问出来的只有「这个解码器声明支持哪些类型」。
-            (codecInfos() ?: return).filter { !it.isEncoder }
-                .filter { info -> listOf(VIDEO_AVC,VIDEO_HEVC).any { type -> runCatching { info.getCapabilitiesForType(type) }.isSuccess } }
-                .map { info -> "${info.name} supports ${info.supportedTypes.joinToString(",")}" }
-        }.getOrNull() ?: return
-        android.util.Log.i("HongguoTV","Decoder capabilities: ${lines.joinToString("; ")}")
+        android.util.Log.i("HongguoTV","Decoder capabilities: ${deviceSummary()}")
     }
 }

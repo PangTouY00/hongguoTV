@@ -93,6 +93,11 @@ private val androidApiLevel: Int by lazy {
     }
 }
 
+/** 所有 https 客户端都从这里创建：4.x 设备上会统一启用 TLS 1.2。
+ *  app 模块也走这个入口，避免新加的客户端漏掉 compatTls（播放、试播、账号、海报
+ *  各自的客户端一旦漏掉，在 4.4 上就只剩「数据能加载、视频加载不出来」这种半残状态）。 */
+fun newHttpClientBuilder(): okhttp3.OkHttpClient.Builder = okhttp3.OkHttpClient.Builder().compatTls()
+
 /** 给 OkHttp 一个明确启用 TLS 1.2 的 socket factory；设备不支持时保持系统默认。 */
 internal fun okhttp3.OkHttpClient.Builder.compatTls(): okhttp3.OkHttpClient.Builder {
     if (androidApiLevel > 20) return this

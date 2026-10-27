@@ -56,7 +56,7 @@ internal data class ReservationState(val rows: List<CloudReservation> = emptyLis
 class AccountController(private val activity: Activity,private val play: (CloudProgress)->Unit) {
     private val main=Handler(Looper.getMainLooper())
     private val worker=Executors.newSingleThreadExecutor()
-    private val http=okhttp3.OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS)
+    private val http=newHttpClientBuilder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS)
         .followRedirects(false).followSslRedirects(false).build()
     private val client=CloudAccountClient(http)
     private val store=AccountStore(activity)

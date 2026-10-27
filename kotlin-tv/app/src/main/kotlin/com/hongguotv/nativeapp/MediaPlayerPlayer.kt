@@ -164,17 +164,21 @@ internal class MediaPlayerPlayer(
         listener.onPlayingChanged(state == PlaybackState.READY && wantPlay)
     }
 
-    /** 第二个值表示「这是解码/格式问题」，界面层据此降清晰度而不是重试。 */
-    private fun playbackErrorMessage(what: Int, extra: Int): Pair<String, Boolean> = when {
-        what == MediaPlayer.MEDIA_ERROR_UNKNOWN && extra == MediaPlayer.MEDIA_ERROR_UNSUPPORTED ->
-            "这台电视不支持该视频的编码格式" to true
-        what == MediaPlayer.MEDIA_ERROR_UNKNOWN && extra == MediaPlayer.MEDIA_ERROR_MALFORMED ->
-            "视频数据不完整，无法解码" to true
-        what == MediaPlayer.MEDIA_ERROR_NOT_VALID_FOR_PROGRESSIVE_PLAYBACK ->
-            "该视频不支持边播边读" to true
-        what == MediaPlayer.MEDIA_ERROR_UNKNOWN -> "播放失败，可能是网络或编码不支持" to false
-        what == MediaPlayer.MEDIA_ERROR_SERVER_DIED -> "系统播放器中断，请重试" to false
-        else -> "播放失败（播放器错误 $what/$extra）" to false
+    /** 第二个值表示「这是解码/格式问题」，界面层据此降清晰度而不是重试。
+     *  原始 what/extra 一律附在消息里：4.4 上这是唯一能把「网络取不到」和「解码器不接」分开的证据。 */
+    private fun playbackErrorMessage(what: Int, extra: Int): Pair<String, Boolean> {
+        val (message, decoding) = when {
+            what == MediaPlayer.MEDIA_ERROR_UNKNOWN && extra == MediaPlayer.MEDIA_ERROR_UNSUPPORTED ->
+                "这台电视不支持该视频的编码格式" to true
+            what == MediaPlayer.MEDIA_ERROR_UNKNOWN && extra == MediaPlayer.MEDIA_ERROR_MALFORMED ->
+                "视频数据不完整，无法解码" to true
+            what == MediaPlayer.MEDIA_ERROR_NOT_VALID_FOR_PROGRESSIVE_PLAYBACK ->
+                "该视频不支持边播边读" to true
+            what == MediaPlayer.MEDIA_ERROR_UNKNOWN -> "播放失败，可能是网络或编码不支持" to false
+            what == MediaPlayer.MEDIA_ERROR_SERVER_DIED -> "系统播放器中断，请重试" to false
+            else -> "播放失败（播放器报错）" to false
+        }
+        return "$message（播放器错误 $what/$extra）" to decoding
     }
 }
 

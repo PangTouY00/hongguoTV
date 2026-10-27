@@ -15,7 +15,7 @@ import java.util.concurrent.Executors
 /** Owns only anonymous social reads. Playback and account writes are independent. */
 internal class TvSocial(private val activity: Activity,private val player: ()->MediaPlayerPlayer?,private val identity: ()->Pair<String,String>?,
     private val readComments: (String,String,String)->JSONObject = AppCommentPages()::read,
-    private val readReviews: (String,String)->JSONObject = PublicComments(okhttp3.OkHttpClient())::read
+    private val readReviews: (String,String)->JSONObject = PublicComments(newHttpClientBuilder().build())::read
 ) {
     private val emoji=CommentEmoji(activity)
     private val main=Handler(Looper.getMainLooper())

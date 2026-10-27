@@ -92,7 +92,7 @@ class ContentRepositoryTest {
             assertTrue(request.header("User-Agent").orEmpty().contains("tt-ok/"))
             for(key in listOf("iid","device_id")) {
                 val value=request.url.queryParameter(key)!!
-                assertTrue(value.matches(Regex("3[0-9]{18}")))
+                assertTrue("$key=$value url=${request.url}",value.matches(Regex("3[0-9]{18}")))
                 assertNotEquals(VendorConstants.device[key],value)
                 assertEquals(requests.first().url.queryParameter(key),value)
             }
@@ -166,7 +166,13 @@ class ContentRepositoryTest {
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
                 .code(200).message("OK").body(respond(chain.request()).toResponseBody()).build()
         }.build(),clock
-    )
+    ).apply {
+        // 播放接口认的是「服务端注册过的身份」：这里钉一份固定身份，测试不会真去注册，
+        // 请求计数也就不受注册请求干扰。验证注册本身的用例自己造仓库。
+        usePlayerDevice(VendorConstants.device + mapOf(
+            "iid" to "3000000000000000001","device_id" to "3000000000000000002","cdid" to "test-cdid"
+        ))
+    }
 
     private fun rankPayload(page: Int = 1, totalPages: Int = 2) = JSONObject()
         .put("isSuccess",true)
@@ -417,5 +423,46 @@ class ContentRepositoryTest {
         }
         assertEquals("456",repo.search("短剧",1,ContentType.SHORT).items.single().id)
         assertEquals(2,paths.size)
+    }
+
+    /** 播放接口只认服务端注册过的身份：注册成功就用下发的这对 id，并且只注册一次。 */
+    @Test fun playerDeviceUsesRegisteredIdentityAndRegistersOnlyOnce() {
+        var registrations=0
+        val repo=ContentRepository(
+            OkHttpClient.Builder().addInterceptor { chain ->
+                val body=if(chain.request().url.encodedPath=="/service/2/device_register/") {
+                    registrations++
+                    """{"device_id":"7512300000000000001","install_id":"7512300000000000002","new_user":1}"""
+                } else """{"code":0}"""
+                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                    .body(body.toResponseBody()).build()
+            }.build(),System::currentTimeMillis
+        )
+        assertEquals("7512300000000000002",repo.playerDevice["iid"])
+        assertEquals("7512300000000000001",repo.playerDevice["device_id"])
+        assertTrue(repo.playerDeviceIsRegistered)
+        assertEquals("7512300000000000002",repo.playerDevice["iid"])
+        assertEquals(1,registrations)
+    }
+
+    /** 注册失败不能把随机身份永久钉死：第一次失败先临时播，下一次播放还留一次重试。 */
+    @Test fun playerDeviceKeepsRetryingRegistrationBeforePinningRandomIdentity() {
+        var registrations=0
+        val repo=ContentRepository(
+            OkHttpClient.Builder().addInterceptor { chain ->
+                registrations++
+                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                    .body("""{"device_id":0,"install_id":0}""".toResponseBody()).build()
+            }.build(),System::currentTimeMillis
+        )
+        assertTrue(repo.playerDevice["iid"]!!.startsWith("3"));assertFalse(repo.playerDeviceIsRegistered)
+        assertNull("第一次失败不缓存，留一次重试",repo.resolvedPlayerDeviceOrNull)
+        repo.playerDevice
+        assertEquals(2,registrations)
+        assertFalse(repo.playerDeviceIsRegistered)
+        assertNotNull("两次都失败才固定随机身份",repo.resolvedPlayerDeviceOrNull)
+        val pinned=repo.playerDevice["iid"]
+        assertEquals(pinned,repo.playerDevice["iid"])
+        assertEquals(2,registrations)
     }
 }

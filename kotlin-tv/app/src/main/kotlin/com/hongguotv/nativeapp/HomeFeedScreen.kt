@@ -225,8 +225,9 @@ internal class HomeFeedScreen(
                 main.post {
                     if(closed || token!=generation || !active) return@post
                     loading=false;failed=true;status.visibility=View.VISIBLE
-                    val message=error.message.orEmpty().replace(Regex("https?://\\S+"),"[地址]").take(90)
-                    status.text="暂时无法加载 · ${message.ifBlank { "请重试或换一部" }}";paintActions()
+                    val message=error.message.orEmpty().replace(Regex("https?://\\S+"),"[地址]").take(120)
+                    // 类名一起显示：这台电视没有 logcat，「哪一步失败」只能靠界面上这一行区分。
+                    status.text="暂时无法加载 · ${message.ifBlank { "请重试或换一部" }}（${error.javaClass.simpleName}）";paintActions()
                 }
             }
         }
