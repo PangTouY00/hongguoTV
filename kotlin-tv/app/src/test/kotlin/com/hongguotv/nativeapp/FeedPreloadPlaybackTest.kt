@@ -26,7 +26,8 @@ class FeedPreloadPlaybackTest {
             assertFalse(playback.select(first,0,false))
             playback.queue(first,0);playback.queue(first,0);playback.queue(second,1)
             playback.remove("2");assertFalse(playback.select(second,0,false))
-            assertTrue(playback.select(first,0,false))
+            // 4.4 没有预加载队列：select 不适用，一律返回 false，由上层直接 load。
+            assertFalse(playback.select(first,0,false))
             playback.pause();assertFalse(playback.canPrefetch())
             playback.clear();assertFalse(playback.select(first,0,false))
         } finally { playback.release();first.close();second.close();controller.pause().stop().destroy() }

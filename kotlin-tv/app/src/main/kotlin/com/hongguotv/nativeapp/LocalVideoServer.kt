@@ -57,14 +57,17 @@ internal class LocalVideoServer(private val video: RemoteVideo) : Closeable {
                 if (at > 0) headers[line.substring(0, at).trim().lowercase()] = line.substring(at + 1).trim()
             }
             val method = request.substringBefore(' ')
-            if (method != "GET" && method != "HEAD") { status(output, 405, 0); output.flush(); return }
+            // 只服务这一条视频：本机任何其它程序都别想借这个端口读别的路径。
+            val target = request.substringAfter(' ', "").substringBefore(' ')
+            if (method != "GET" && method != "HEAD") { status(output, 405, 0); output.endHeaders(); output.flush(); return }
+            if (target.substringBefore('?') != "/video.mp4") { status(output, 404, 0); output.endHeaders(); output.flush(); return }
             val range = parseRange(headers["range"])
             if (headers["range"] != null && range == null) {
                 // 播放器要分段，但我们给不出它要的那一段：用 416 明确拒绝，而不是悄悄给整份。
-                status(output, 416, 0); output.header("Content-Range", "bytes */$total"); output.flush(); return
+                status(output, 416, 0); output.header("Content-Range", "bytes */$total"); output.endHeaders(); output.flush(); return
             }
             val (start, end) = range ?: (0L to total - 1)
-            if (start > end || start >= total) { status(output, 416, 0); output.header("Content-Range", "bytes */$total"); output.flush(); return }
+            if (start > end || start >= total) { status(output, 416, 0); output.header("Content-Range", "bytes */$total"); output.endHeaders(); output.flush(); return }
             val length = end - start + 1
             status(output, if (range == null) 200 else 206, length)
             output.header("Content-Type", "video/mp4")
