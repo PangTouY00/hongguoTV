@@ -328,7 +328,7 @@ class MainActivity: Activity() {
                 if(snapshot!=null) rankPrefetched=true
                 // 预取完成时用户可能已经停在这个榜上：把已经拿到的数据补进界面，而不是让他继续等。
                 if(board==rankBrowser.board) rankScreen?.boardUpdated(board)
-                android.util.Log.i("HongguoTV","Rank prefetch board=${board.label} ok=${snapshot!=null} items=${snapshot?.items.size ?: 0} pages=${snapshot?.pagesRead ?: 0}/${snapshot?.pagesTotal ?: 0} problem=${result.exceptionOrNull()?.message ?: ""}")
+                android.util.Log.i("HongguoTV","Rank prefetch board=${board.label} ok=${snapshot!=null} items=${snapshot?.items?.size ?: 0} pages=${snapshot?.pagesRead ?: 0}/${snapshot?.pagesTotal ?: 0} problem=${result.exceptionOrNull()?.message ?: ""}")
             }
         }
     }
