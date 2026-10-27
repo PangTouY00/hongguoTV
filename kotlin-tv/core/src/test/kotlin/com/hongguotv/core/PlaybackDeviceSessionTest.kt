@@ -124,6 +124,7 @@ class PlaybackDeviceSessionTest {
         assertEquals(0, registrations)
         session.profile(http)
         assertEquals(1, registrations)
+    }
 
     @Test
     fun registrationFailureKeepsItsOwnSafeCategory() {
