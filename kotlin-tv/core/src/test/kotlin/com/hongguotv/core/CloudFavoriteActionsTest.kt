@@ -1,7 +1,6 @@
 package com.hongguotv.core
 
 import okhttp3.*
-import okhttp3.ResponseBody.Companion.toResponseBody
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test

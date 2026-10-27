@@ -8,13 +8,12 @@ import android.os.Handler
 import android.os.Looper
 import android.view.*
 import android.widget.*
-import androidx.media3.common.Player
 import com.hongguotv.core.*
 import org.json.JSONObject
 import java.util.concurrent.Executors
 
 /** Owns only anonymous social reads. Playback and account writes are independent. */
-class TvSocial(private val activity: Activity,private val player: ()->Player?,private val identity: ()->Pair<String,String>?,
+internal class TvSocial(private val activity: Activity,private val player: ()->MediaPlayerPlayer?,private val identity: ()->Pair<String,String>?,
     private val readComments: (String,String,String)->JSONObject = AppCommentPages()::read,
     private val readReviews: (String,String)->JSONObject = PublicComments(okhttp3.OkHttpClient())::read
 ) {
@@ -156,7 +155,8 @@ class TvSocial(private val activity: Activity,private val player: ()->Player?,pr
         load=button("加载更多评论") { read() };body.addView(load)
         body.addView(label("上下浏览，到底继续加载。发送、回复未接入。",13f))
         body.addView(button("关闭") { d.dismiss() })
-        scroll.setOnScrollChangeListener { _: View, _: Int,y: Int,_: Int,_: Int -> if(!reviewMode && y>0 && y+scroll.height>=list.height-dp(80)) read() }
+        // setOnScrollChangeListener 是 API 23；4.4 上听 ViewTreeObserver 的滚动事件。
+        scroll.viewTreeObserver.addOnScrollChangedListener { if(!reviewMode && scroll.scrollY>0 && scroll.scrollY+scroll.height>=list.height-dp(80)) read() }
         d.setContentView(body);d.setOnDismissListener { disposed=true;commentScope?.cancel();if(dialog===d) dialog=null;if(anchor.isAttachedToWindow) anchor.requestFocus() }
         d.show();d.window?.apply { setBackgroundDrawableResource(android.R.color.transparent);setGravity(Gravity.END);setDimAmount(0f);setLayout(minOf(dp(500),(activity.resources.displayMetrics.widthPixels*.65).toInt()),-1) }
         tabs.getChildAt(0).requestFocus();read()

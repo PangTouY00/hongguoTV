@@ -52,7 +52,9 @@ class ArtworkLoader(context: Context) {
     }
 
     private val main = Handler(Looper.getMainLooper())
-    private val lowRam = context.applicationContext.getSystemService(ActivityManager::class.java)?.isLowRamDevice == true
+    // isLowRamDevice() 是 API 21；4.4 上按系统给单个应用的内存预算判断，预算小即低配机型。
+    private val lowRam = (context.applicationContext.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)
+        ?.let { it.memoryClass < 64 } == true
     private val cacheBytes = (if (lowRam) 4 else 8) * 1024 * 1024
     private val cache = object : LruCache<Key, Bitmap>(cacheBytes) {
         override fun sizeOf(key: Key, value: Bitmap) = value.allocationByteCount
@@ -207,7 +209,7 @@ class ArtworkLoader(context: Context) {
         Thread({
             http.dispatcher.cancelAll()
             http.connectionPool.evictAll()
-            http.dispatcher.executorService.shutdown()
+            http.dispatcher.executorService?.shutdown()
         }, "hongguotv-artwork-cleanup").start()
     }
 

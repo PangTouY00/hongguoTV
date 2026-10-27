@@ -50,7 +50,7 @@ class HomeScreen(
     private fun dp(n: Int)=(n*resources.displayMetrics.density).toInt()
     private fun shape(focus: Boolean)=TvStyle.card(context,focus)
     private fun label(value: String,size: Float,color: Int=TvStyle.text)=TextView(context).apply { text=value; textSize=size; setTextColor(color); includeFontPadding=false }
-    private val scroll=ScrollView(context).apply { isVerticalScrollBarEnabled=false; clipToPadding=false }
+    private val scroll=ScrollView(context).apply { isVerticalScrollBarEnabled=false; setClipToPadding(false) }
     private val contents=LinearLayout(context).apply { orientation=VERTICAL }
     private val rows=mutableListOf<Row>()
     private val cards=linkedMapOf<String,Card>()
@@ -103,13 +103,13 @@ class HomeScreen(
         contents.removeAllViews(); rows.clear(); cards.clear(); moreButton=null; lastRow=null
         shelves.filter { it.entries.isNotEmpty() || it.more!=null }.forEach { shelf ->
             val block=LinearLayout(context).apply { orientation=VERTICAL }
-            val heading=LinearLayout(context).apply { orientation=HORIZONTAL; gravity=Gravity.CENTER_VERTICAL; setPadding(dp(2),dp(4),dp(2),dp(9)) }
+            val heading=LinearLayout(context).apply { orientation=HORIZONTAL; setGravity(Gravity.CENTER_VERTICAL); setPadding(dp(2),dp(4),dp(2),dp(9)) }
             heading.addView(View(context).apply { background=TvStyle.shape(context,accent,radius=2) },LayoutParams(dp(3),dp(14)).apply { rightMargin=dp(8) })
             heading.addView(label(shelf.title,16f).apply { setTypeface(null,Typeface.BOLD) },LayoutParams(0,-2,1f))
             heading.addView(label("左右选剧  ·  上下切换分区",10f,TvStyle.muted))
             block.addView(heading)
-            val horizontal=HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled=false; clipToPadding=false; setPadding(dp(2),dp(2),dp(2),dp(2)) }
-            val line=LinearLayout(context).apply { orientation=HORIZONTAL; gravity=Gravity.TOP }
+            val horizontal=HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled=false; setClipToPadding(false); setPadding(dp(2),dp(2),dp(2),dp(2)) }
+            val line=LinearLayout(context).apply { orientation=HORIZONTAL; setGravity(Gravity.TOP )}
             horizontal.addView(line); block.addView(horizontal)
             val rowCards=mutableListOf<Card>()
             fun addCard(entry: Entry?,moreAction: (() -> Unit)?=null) {
@@ -120,7 +120,7 @@ class HomeScreen(
                 view.addView(image ?: label("›",36f).apply { gravity=Gravity.CENTER },LayoutParams(-1,((width-dp(8))/CoverRatio.current).toInt()))
                 val title=label(entry?.series?.title ?: "查看全部",14f).apply { minLines=2; maxLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(5),dp(3),0) }
                 val badge=label(entry?.label ?: shelf.title,12f,TvStyle.muted).apply { minLines=1; maxLines=1; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(2),0,0) }
-                val progress=ProgressBar(context,null,android.R.attr.progressBarStyleHorizontal).apply { max=100; progress=entry?.progress ?: 0; visibility=if(entry?.progress==null) INVISIBLE else VISIBLE; progressTintList=android.content.res.ColorStateList.valueOf(accent) }
+                val progress=ProgressBar(context,null,android.R.attr.progressBarStyleHorizontal).apply { max=100; progress=entry?.progress ?: 0; visibility=if(entry?.progress==null) INVISIBLE else VISIBLE; TvStyle.progressTint(this,accent,TvStyle.surface) }
                 view.addView(title); view.addView(badge); view.addView(progress,LayoutParams(-1,dp(3)).apply { topMargin=dp(4) })
                 val card=Card(key,view,image,title,badge,progress,entry)
                 view.contentDescription=entry?.let { "${shelf.title}，${it.series.title}，${it.label}" } ?: "查看全部${shelf.title}"

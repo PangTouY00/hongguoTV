@@ -6,8 +6,6 @@ import android.app.AlertDialog
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
 import android.text.InputType
 import android.util.Base64
 import android.widget.EditText
@@ -17,21 +15,22 @@ import java.security.KeyStore
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import javax.crypto.Cipher
-import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
-/** Credentials stay in an Android Keystore encrypted partition, outside library exports. */
+/**
+ * 登录态仍然只以加密形式落在私有分区。Android KeyStore 的 AES/GCM 密钥是 API 23 起的能力，
+ * 4.4 上退化成由本机指纹派生的 AES 密钥：换设备读不出旧登录态这一点保持不变，
+ * 只是密钥不再受 KeyStore 保护。
+ */
 private class AccountStore(context: Context) {
     private val prefs=context.getSharedPreferences("cloud_account_secure",Context.MODE_PRIVATE)
-    private val alias="hongguotv.cloud.account.v1"
     private fun key(): SecretKey {
-        val store=KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        (store.getKey(alias,null) as? SecretKey)?.let { return it }
-        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES,"AndroidKeyStore").apply {
-            init(KeyGenParameterSpec.Builder(alias,KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM).setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE).build())
-        }.generateKey()
+        val seed=android.os.Build.SERIAL+"|"+android.os.Build.MODEL+"|hongguotv.account.v1"
+        val derived=javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1")
+            .generateSecret(javax.crypto.spec.PBEKeySpec(seed.toCharArray(),"hongguotv.account.v1".toByteArray(),4096,256))
+        return SecretKeySpec(derived.encoded,"AES")
     }
     fun read(): AccountCredentials? {
         val raw=prefs.getString("session",null) ?: return null
@@ -58,7 +57,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
     private val main=Handler(Looper.getMainLooper())
     private val worker=Executors.newSingleThreadExecutor()
     private val http=okhttp3.OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS)
-        .callTimeout(30,TimeUnit.SECONDS).followRedirects(false).followSslRedirects(false).build()
+        .followRedirects(false).followSslRedirects(false).build()
     private val client=CloudAccountClient(http)
     private val store=AccountStore(activity)
     @Volatile private var generation=0
@@ -231,7 +230,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
             }.setNegativeButton("关闭",null))
     }
     private fun input(title: String,numeric: Boolean,error: String?=null,submit: (String)->Unit) {
-        val field=EditText(activity).apply { isSingleLine=true; inputType=if(numeric) InputType.TYPE_CLASS_NUMBER else InputType.TYPE_CLASS_PHONE }
+        val field=EditText(activity).apply { setSingleLine(true); inputType=if(numeric) InputType.TYPE_CLASS_NUMBER else InputType.TYPE_CLASS_PHONE }
         val builder=AlertDialog.Builder(activity).setTitle(title).setView(field).setNegativeButton("取消",null).setPositiveButton("确认",null)
         if(error!=null) builder.setMessage(error)
         showDialog(builder)
@@ -512,7 +511,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
         closed=true; generation++; pending=null; dialog?.dismiss(); http.dispatcher.cancelAll()
         worker.execute {
             if(account!=null && final!=null) runCatching { client.upload(account,final.first,final.second) }
-            http.connectionPool.evictAll(); http.dispatcher.executorService.shutdown()
+            http.connectionPool.evictAll(); http.dispatcher.executorService?.shutdown()
         }
         worker.shutdown()
     }

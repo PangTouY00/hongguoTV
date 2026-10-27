@@ -1,8 +1,6 @@
 package com.hongguotv.core
 
 import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.ResponseBody.Companion.toResponseBody
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.*

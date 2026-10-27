@@ -6,7 +6,6 @@ import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
-import java.nio.file.Files
 import java.security.MessageDigest
 
 class AppUpdatesTest {
@@ -17,7 +16,7 @@ class AppUpdatesTest {
             .put("sha256", MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }))
     private fun update() = AppUpdate.parse(json().toString())
     private fun withFile(block: (File) -> Unit) {
-        val dir = Files.createTempDirectory("update-test").toFile()
+        val dir = File(System.getProperty("java.io.tmpdir"), "hongguotv-update-test-" + System.nanoTime()).apply { mkdirs() }
         try { block(File(dir, "update.apk")) } finally { dir.deleteRecursively() }
     }
     @Test fun latestReleaseRequiresStableTagAndManifest() {

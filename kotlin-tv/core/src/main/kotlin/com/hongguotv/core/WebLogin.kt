@@ -2,7 +2,6 @@
 package com.hongguotv.core
 
 import okhttp3.*
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONObject
 import java.io.IOException
 
@@ -31,7 +30,7 @@ class WebLogin(http: OkHttpClient) {
     private var sent=false
     data class Qr(val image: ByteArray,val expiresIn: Int)
     private fun call(path: String,data: Map<String,String>?=null,params: Map<String,String> = emptyMap()): JSONObject {
-        val url=(BASE+path).toHttpUrl().newBuilder()
+        val url=urlOf(BASE+path).newBuilder()
         (mapOf("aid" to "513755","passport_jssdk_version" to "3.4.10","passport_jssdk_type" to "normal",
             "account_sdk_source" to "web","is_from_ttaccountsdk" to "1","language" to "zh")+params).forEach { (k,v)->url.addQueryParameter(k,v) }
         val request=Request.Builder().url(url.build()).header("User-Agent",UA).header("Referer","$BASE/")
@@ -72,7 +71,7 @@ class WebLogin(http: OkHttpClient) {
     }
     /** Complete only the official site's confirmation redirect, preserving domain-scoped cookies. */
     private fun finishRedirect(value: String) {
-        var url=BASE.toHttpUrl().resolve(value) ?: throw IOException("登录确认地址无效")
+        var url=urlOf(BASE).resolve(value) ?: throw IOException("登录确认地址无效")
         repeat(5) {
             if(url.scheme!="https" || url.host!="hongguoduanju.com") throw IOException("登录确认跳转到不支持的站点")
             val next=execute(Request.Builder().url(url).header("User-Agent",UA).header("Referer","$BASE/").build()).use { response ->
@@ -96,11 +95,11 @@ class WebLogin(http: OkHttpClient) {
         checked(call("/passport/web/sms_login/",mapOf("mobile" to mix(mobile),"code" to mix(code),"login_only" to "true","mix_mode" to "1","fixed_mix_mode" to "1")))
         return credentials()
     }
-    private fun hasSession()=cookies.any { it.name in listOf("sessionid","sessionid_ss") && it.matches(BASE.toHttpUrl()) && it.expiresAt>System.currentTimeMillis() }
+    private fun hasSession()=cookies.any { it.name in listOf("sessionid","sessionid_ss") && it.matches(urlOf(BASE)) && it.expiresAt>System.currentTimeMillis() }
     fun credentials(): AccountCredentials {
         check(hasSession()) { "官网尚未下发登录态，请先在手机确认登录" }
         checked(call("/passport/account/info/v2/"))
-        return AccountCredentials(cookies.filter { it.matches(BASE.toHttpUrl()) && it.expiresAt>System.currentTimeMillis() }.joinToString("; ") { "${it.name}=${it.value}" })
+        return AccountCredentials(cookies.filter { it.matches(urlOf(BASE)) && it.expiresAt>System.currentTimeMillis() }.joinToString("; ") { "${it.name}=${it.value}" })
     }
     companion object {
         const val BASE="https://hongguoduanju.com"

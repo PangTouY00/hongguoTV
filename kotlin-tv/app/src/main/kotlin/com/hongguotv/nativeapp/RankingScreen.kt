@@ -38,7 +38,7 @@ internal class RankingScreen(
         text=value; textSize=size; setTextColor(color); includeFontPadding=false
     }
     private fun params(w: Int=-1,h: Int=-2)=LayoutParams(w,h)
-    private fun row()=LinearLayout(activity).apply { gravity=Gravity.CENTER_VERTICAL }
+    private fun row()=LinearLayout(activity).apply { setGravity(Gravity.CENTER_VERTICAL )}
     private fun button(value: String,action: ()->Unit)=label(value,15f).apply {
         id=View.generateViewId(); isFocusable=true; isClickable=true; gravity=Gravity.CENTER
         setPadding(dp(15),dp(10),dp(15),dp(10)); minHeight=dp(42)

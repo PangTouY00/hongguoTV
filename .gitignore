@@ -36,3 +36,7 @@ keystore.properties
 .externalNativeBuild/
 /ios/Pods/
 /ios/build/
+
+# 本机构建产物（APK 与其签名块）
+build-artifacts/
+*.idsig

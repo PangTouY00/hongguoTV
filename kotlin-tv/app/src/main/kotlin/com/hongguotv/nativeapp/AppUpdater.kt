@@ -16,7 +16,6 @@ import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import androidx.core.content.FileProvider
 import com.hongguotv.core.AppUpdate
 import com.hongguotv.core.AppUpdateRepository
 import com.hongguotv.core.UpdateFiles
@@ -67,7 +66,7 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         active = true; main.removeCallbacks(poll); main.postDelayed(poll, 8000)
         if (permissionRequested) {
             permissionRequested = false
-            if (Build.VERSION.SDK_INT < 26 || activity.packageManager.canRequestPackageInstalls()) install()
+            if (Build.VERSION.SDK_INT < 26 || canRequestInstalls(activity)) install()
             else { status = "安装权限未开启，可在这里再次安装"; show(anchor) }
         }
     }
@@ -173,16 +172,16 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
     private fun validateApk(update: AppUpdate) {
         if (!UpdateFiles.verify(apk, update)) throw IOException("安装包校验未通过，请重新下载")
         val pm = activity.packageManager
-        val flags = if (Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
+        val flags = if (Build.VERSION.SDK_INT >= 28) GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
         val candidate = pm.getPackageArchiveInfo(apk.path, flags) ?: throw IOException("安装包无法识别")
         val installed = pm.getPackageInfo(activity.packageName, flags)
-        val version = if (Build.VERSION.SDK_INT >= 28) candidate.longVersionCode else candidate.versionCode.toLong()
+        val version = if (Build.VERSION.SDK_INT >= 28) longVersionCode(candidate) else candidate.versionCode.toLong()
         fun signers(info: android.content.pm.PackageInfo) =
-            (if (Build.VERSION.SDK_INT >= 28) info.signingInfo?.apkContentsSigners else info.signatures)?.map { it.toCharsString() }?.toSet().orEmpty()
+            (if (Build.VERSION.SDK_INT >= 28) signingInfoSigners(info) else info.signatures)?.map { it.toCharsString() }?.toSet().orEmpty()
         // ApplicationInfo.minSdkVersion is unavailable on API 23. The system installer
         // still enforces the APK's declared minimum there; retain all hash/signature checks.
         if (candidate.packageName != activity.packageName || version != update.versionCode || candidate.versionName != update.versionName || version <= BuildConfig.VERSION_CODE ||
-            (Build.VERSION.SDK_INT >= 24 && candidate.applicationInfo?.minSdkVersion != update.minSdk) || signers(installed).isEmpty() || signers(installed) != signers(candidate))
+            (Build.VERSION.SDK_INT >= 24 && minSdkOf(candidate) != update.minSdk) || signers(installed).isEmpty() || signers(installed) != signers(candidate))
             throw IOException("新版包名、版本或签名不匹配，已阻止安装")
     }
     private fun install() {
@@ -190,15 +189,38 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
         if (busy || !active || !ready) return
         work({ validateApk(update) }) {
             try {
-                if (Build.VERSION.SDK_INT >= 26 && !activity.packageManager.canRequestPackageInstalls()) {
+                // 4.4 没有 REQUEST_INSTALL_PACKAGES 这套运行时权限，file:// 直接交给系统安装器。
+                if (Build.VERSION.SDK_INT >= 26 && !canRequestInstalls(activity)) {
                     permissionRequested = true
-                    activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}")))
+                    activity.startActivity(Intent("android.settings.MANAGE_UNKNOWN_APP_SOURCES", Uri.parse("package:${activity.packageName}")))
                 } else {
-                    val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.updates", apk)
+                    val uri = Uri.fromFile(apk)
                     activity.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
-                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).apply { clipData = ClipData.newRawUri("更新安装包", uri) })
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
                 }
             } catch (_: Exception) { permissionRequested = false; updateStatus("电视未提供安装或授权入口，请通过系统文件管理器安装新版") }
         }
     }
 }
+
+/** canRequestPackageInstalls() 是 API 26 的方法；这条分支要在 API 19 上编译，所以按名字取。 */
+/** PackageManager.GET_SIGNING_CERTIFICATES 是 API 28 的常量，值固定，直接写出来。 */
+private const val GET_SIGNING_CERTIFICATES = 0x08000000
+
+private fun longVersionCode(info: android.content.pm.PackageInfo): Long = try {
+    info.javaClass.getMethod("getLongVersionCode").invoke(info) as Long
+} catch (_: Exception) { info.versionCode.toLong() }
+
+private fun signingInfoSigners(info: android.content.pm.PackageInfo): Array<android.content.pm.Signature>? = try {
+    val signingInfo = info.javaClass.getMethod("getSigningInfo").invoke(info) ?: return null
+    signingInfo.javaClass.getMethod("getApkContentsSigners").invoke(signingInfo) as? Array<android.content.pm.Signature>
+} catch (_: Exception) { null }
+
+private fun minSdkOf(info: android.content.pm.PackageInfo): Int = try {
+    val application = info.applicationInfo ?: return -1
+    application.javaClass.getMethod("getMinSdkVersion").invoke(application) as? Int ?: -1
+} catch (_: Exception) { -1 }
+
+private fun canRequestInstalls(activity: Activity): Boolean = try {
+    activity.packageManager.javaClass.getMethod("canRequestPackageInstalls").invoke(activity.packageManager) as Boolean
+} catch (_: Exception) { true }

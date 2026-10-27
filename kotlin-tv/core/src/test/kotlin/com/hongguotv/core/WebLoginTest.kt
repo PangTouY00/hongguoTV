@@ -1,7 +1,6 @@
 package com.hongguotv.core
 
 import okhttp3.*
-import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -27,7 +26,7 @@ class WebLoginTest {
                     assertEquals("test-csrf",request.header("x-tt-passport-csrf-token"))
                     assertTrue(request.header("Cookie").orEmpty().contains("passport_csrf_token=test-csrf"))
                     val body=request.body as FormBody
-                    val values=(0 until body.size).associate { body.name(it) to body.value(it) }
+                    val values=(0 until body.size()).associate { body.name(it) to body.value(it) }
                     assertEquals(WebLogin.mix("+86 13800138000"),values["mobile"])
                     assertEquals(WebLogin.mix("24"),values["type"])
                     """{"message":"error","data":{"error_code":1105,"verify_center_decision_conf":"challenge"}}"""

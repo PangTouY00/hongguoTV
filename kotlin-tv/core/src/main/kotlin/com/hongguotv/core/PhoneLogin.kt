@@ -2,10 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.core
 
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 
 /**
@@ -250,7 +248,7 @@ class PhoneLogin(private val http: OkHttpClient) {
         val request=Request.Builder().url(signed.url)
         signed.headers.forEach { (k,v) -> request.header(k,v) }
         if(cookies.isNotEmpty()) request.header("Cookie",cookies.entries.joinToString("; ") { (name,value) -> "$name=$value" })
-        if(payload!=null) request.post(payload.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+        if(payload!=null) request.post(bodyOf(payload, "application/x-www-form-urlencoded"))
         val reply=http.newCall(request.build()).execute().use { response ->
             response.headers("Set-Cookie").forEach { line ->
                 val pair=line.substringBefore(';'); val name=pair.substringBefore('=').trim(); val value=pair.substringAfter('=',"").trim()
@@ -326,7 +324,7 @@ class PhoneLogin(private val http: OkHttpClient) {
 
     /** 取 JSON 对象的字段名（用 `keys()` 迭代，不依赖 `keySet()`，框架内置的 org.json 也认）。 */
     private fun names(json: JSONObject): List<String> {
-        val out=mutableListOf<String>(); val keys=json.keys()
+        val out=mutableListOf<String>(); val keys: Iterator<String> = jsonKeys(json)
         while(keys.hasNext()) out+=keys.next()
         return out
     }

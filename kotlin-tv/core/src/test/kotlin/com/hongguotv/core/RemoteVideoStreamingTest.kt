@@ -2,8 +2,6 @@
 package com.hongguotv.core
 
 import okhttp3.*
-import okhttp3.ResponseBody.Companion.toResponseBody
-import okio.buffer
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.IOException
@@ -18,7 +16,7 @@ class RemoteVideoStreamingTest {
             val raw=okio.Buffer().write(file,limits[0],end-limits[0]+1)
             val monitored=object: okio.ForwardingSource(raw) {
                 override fun read(sink: okio.Buffer,byteCount: Long): Long=super.read(sink,byteCount).also { if(it>0) delivered+=it }
-            }.buffer()
+            }.let { okio.Okio.buffer(it) }
             val body=object: ResponseBody() {
                 override fun contentType(): MediaType?=null
                 override fun contentLength()=(end-limits[0]+1).toLong()

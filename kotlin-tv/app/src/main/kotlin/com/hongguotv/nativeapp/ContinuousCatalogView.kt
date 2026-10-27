@@ -56,7 +56,7 @@ internal class ContinuousCatalogView(
     }.apply {
         id=View.generateViewId();numColumns=columns;stretchMode=GridView.STRETCH_COLUMN_WIDTH
         horizontalSpacing=dp(14);verticalSpacing=dp(10);isVerticalScrollBarEnabled=false
-        clipToPadding=false;setPadding(dp(3),dp(3),dp(3),dp(3))
+        setClipToPadding(false);setPadding(dp(3),dp(3),dp(3),dp(3))
         selector=android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
         descendantFocusability=FOCUS_BLOCK_DESCENDANTS
         nextFocusUpId=upper.id
@@ -134,7 +134,7 @@ internal class ContinuousCatalogView(
             }
         })
         addView(grid,LayoutParams(-1,0,1f))
-        val footer=LinearLayout(context).apply { gravity=android.view.Gravity.CENTER_VERTICAL }
+        val footer=LinearLayout(context).apply { setGravity(android.view.Gravity.CENTER_VERTICAL )}
         footer.addView(status,LayoutParams(0,-2,1f));footer.addView(next);footer.addView(top)
         addView(footer)
         listOf(next,top).forEach { it.nextFocusUpId=grid.id }

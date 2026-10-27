@@ -2,10 +2,7 @@
 package com.hongguotv.core
 
 import okhttp3.OkHttpClient
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.MediaType.Companion.toMediaType
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -53,7 +50,7 @@ class RecommendationFeed(private val http: OkHttpClient,private val account: Acc
         }
         val host="https://api5-normal-sinfonlinea.fqnovel.com"
         val request=if(category==null) {
-            val url="$host/reading/bookapi/bookmall/tab/v1/".toHttpUrl().newBuilder()
+            val url=urlOf("$host/reading/bookapi/bookmall/tab/v1/").newBuilder()
             params.forEach { (key,value)->url.addQueryParameter(key,value) }
             Request.Builder().url(url.build())
         } else {
@@ -67,7 +64,7 @@ class RecommendationFeed(private val http: OkHttpClient,private val account: Acc
             val device=VendorConstants.device+params
             val query=params.filterKeys { it !in setOf("tab_type","bottom_tab_type","landing_bottom_tab_type","offset","client_req_type","session_id") }
             val signed=Signer(device=device).sign("$host/reading/distribution/category/landpage/v/",query,body)
-            Request.Builder().url(signed.url).post(body.toRequestBody("application/json; charset=utf-8".toMediaType())).apply {
+            Request.Builder().url(signed.url).post(bodyOf(body, "application/json; charset=utf-8")).apply {
                 signed.headers.forEach { (key,value)->header(key,value) }
             }
         }

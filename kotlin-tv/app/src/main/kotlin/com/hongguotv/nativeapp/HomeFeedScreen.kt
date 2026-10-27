@@ -46,7 +46,7 @@ internal class HomeFeedScreen(
     private val intro=label("喜欢这部作品，就选择观看全集。",15f,TvStyle.muted)
     private val status=label("正在准备热门作品…",15f)
     private val tag=label("热门发现",12f,TvStyle.accent)
-    private val actions=LinearLayout(activity).apply { gravity=Gravity.CENTER_VERTICAL }
+    private val actions=LinearLayout(activity).apply { setGravity(Gravity.CENTER_VERTICAL )}
     private val buttons=mutableListOf<TextView>()
     private val pauseButton: TextView
     private val watchButton: TextView

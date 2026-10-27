@@ -4,8 +4,6 @@ package com.hongguotv.core
 
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import org.json.JSONArray
 import java.io.IOException
@@ -18,7 +16,7 @@ data class AccountCredentials(val cookie: String, val deviceId: String = "", val
         fun fromJson(value: String): AccountCredentials {
             val json=JSONObject(value); val device=json.optJSONObject("device") ?: JSONObject()
             return AccountCredentials(json.getString("cookie"),json.str("deviceId"),json.str("installId"),
-                device.keys().asSequence().associateWith { device.getString(it) })
+                jsonKeys(device).asSequence().associateWith { device.getString(it) })
         }
     }
 }
@@ -51,7 +49,7 @@ class CloudAccountClient(private val http: OkHttpClient) {
         val body=DeviceRegister.payload(VendorConstants.device)
         val request=Request.Builder().url(DeviceRegister.url())
         DeviceRegister.headers(body,VendorConstants.device).forEach { (k,v) -> request.header(k,v) }
-        request.post(body.toRequestBody("application/octet-stream".toMediaType()))
+        request.post(bodyOf(body, "application/octet-stream"))
         return http.newCall(request.build()).execute().use {
             DeviceRegister.parse(cloudResponse(it),it.headers("Set-Cookie"))
         }
@@ -68,7 +66,7 @@ class CloudAccountClient(private val http: OkHttpClient) {
         val signed=Signer(device=device).sign("https://api5-normal-sinfonlinea.fqnovel.com$path",device+params,wireBody)
         val request=Request.Builder().url(signed.url).header("Cookie",credentials.cookie)
         signed.headers.forEach { (k,v)->request.header(k,v) }
-        if(wireBody!=null) request.post(wireBody.toRequestBody("application/json; charset=utf-8".toMediaType()))
+        if(wireBody!=null) request.post(bodyOf(wireBody, "application/json; charset=utf-8"))
         if(gzip) request.header("Content-Encoding","gzip")
         val transport=if(path=="/reading/bookapi/bookshelf/video/update/v1/") http.newBuilder().retryOnConnectionFailure(false).build() else http
         return transport.newCall(request.build()).execute().use { response ->

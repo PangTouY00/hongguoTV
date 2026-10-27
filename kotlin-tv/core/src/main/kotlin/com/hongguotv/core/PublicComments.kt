@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
 
 /** Reads public website previews only. Never forwards account credentials. */
 class PublicComments(http: OkHttpClient) {
-    private val transport=http.newBuilder().followRedirects(false).followSslRedirects(false).callTimeout(20,TimeUnit.SECONDS).build()
+    private val transport=http.newBuilder().followRedirects(false).followSslRedirects(false).build()
     private val details=linkedMapOf<String,Pair<Long,String>>()
     fun read(series: String,episode: String): JSONObject {
         require(series.matches(Regex("[0-9]{6,30}")) && episode.matches(Regex("[0-9]{6,30}")))
@@ -37,7 +37,7 @@ class PublicComments(http: OkHttpClient) {
     companion object {
         fun parse(html: String,series: String,episode: String,detailHTML: String? = null): JSONObject {
             val loaders=ContentRepository.extractRouter(html).getJSONObject("loaderData")
-            val data=loaders.keys().asSequence().mapNotNull { loaders.optJSONObject(it) }
+            val data=jsonKeys(loaders).asSequence().mapNotNull { loaders.optJSONObject(it) }
                 .firstOrNull { it.has("seriesDetail") && it.optBoolean("isSuccess",true) } ?: throw IOException("公开评论格式已变化")
             require(data.getJSONObject("seriesDetail").optString("series_id")==series) { "评论剧集不匹配" }
             require(data.optString("vid")==episode) { "评论分集不匹配" }
@@ -62,7 +62,7 @@ class PublicComments(http: OkHttpClient) {
             }
             val detailData=if(detailHTML==null) data else {
                 val values=ContentRepository.extractRouter(detailHTML).getJSONObject("loaderData")
-                values.keys().asSequence().mapNotNull { values.optJSONObject(it) }.firstOrNull { it.has("seriesDetail") && it.optBoolean("isSuccess",true) }
+                jsonKeys(values).asSequence().mapNotNull { values.optJSONObject(it) }.firstOrNull { it.has("seriesDetail") && it.optBoolean("isSuccess",true) }
                     ?: throw IOException("公开剧评格式已变化")
             }
             require(detailData.getJSONObject("seriesDetail").optString("series_id")==series) { "剧评剧集不匹配" }

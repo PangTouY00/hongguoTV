@@ -4,6 +4,7 @@ package com.hongguotv.nativeapp
 import android.content.Context
 import android.content.SharedPreferences
 import android.media.MediaCodecList
+import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import com.hongguotv.core.Rendition
 import com.hongguotv.core.VideoTracks
@@ -23,11 +24,24 @@ object CodecCapabilities {
         prefs=store
         lessons.restore(store.getStringSet("failures",emptySet()) ?: emptySet())
     }
+    // MediaFormat.MIMETYPE_VIDEO_* 是 API 21 的常量，值本身从 API 18 起就是这两个字符串。
+    private const val VIDEO_AVC = "video/avc"
+    private const val VIDEO_HEVC = "video/hevc"
+
     fun mime(codec: String): String? = when(codec.lowercase()) {
-        "h264","avc","avc1","avc3" -> MediaFormat.MIMETYPE_VIDEO_AVC
-        "bytevc1","hvc1","hev1","h265","hevc" -> MediaFormat.MIMETYPE_VIDEO_HEVC
+        "h264","avc","avc1","avc3" -> VIDEO_AVC
+        "bytevc1","hvc1","hev1","h265","hevc" -> VIDEO_HEVC
         else -> null
     }
+    /** MediaCodecList 的构造函数在 API 19 上不是 public，REGULAR_CODECS 也还不存在，按名字取。 */
+    private fun codecInfos(): List<MediaCodecInfo>? = try {
+        val constructor=MediaCodecList::class.java.getConstructor(Int::class.javaPrimitiveType).apply { setAccessible(true) }
+        val flags=try { MediaCodecList::class.java.getField("REGULAR_CODECS").getInt(null) } catch (_: Exception) { -1 }
+        val list=constructor.newInstance(flags) as MediaCodecList
+        @Suppress("UNCHECKED_CAST")
+        val infos=MediaCodecList::class.java.getMethod("getCodecInfos").invoke(list) as Array<MediaCodecInfo>
+        infos.toList()
+    } catch (_: Exception) { null }
     fun supports(codec: String,width: Int?,height: Int?): Boolean {
         if(lessons.fails(codec,width,height)) return false
         val type=mime(codec) ?: return true
@@ -35,11 +49,13 @@ object CodecCapabilities {
         val key="$type $width $height"
         synchronized(verdicts) { verdicts[key]?.let { return it } }
         val verdict=runCatching {
-            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
-                !info.isEncoder && runCatching {
-                    info.getCapabilitiesForType(type).videoCapabilities.isSizeSupported(width,height)
-                }.getOrDefault(false)
-            }
+            codecInfos()?.any { info ->
+                // API 19 的 CodecCapabilities 只有 colorFormats／profileLevels，没有任何尺寸查询
+                // （isSizeSupported 与 videoCapabilities 都是 API 21）。这里只回答「这台机器上有没有
+                // 解码器声明支持这种格式」；尺寸能不能解由 MediaPlayer 自己回答，真失败会被 learnFailure
+                // 记下来，同一档尺寸不会再试第二次。
+                !info.isEncoder && runCatching { info.getCapabilitiesForType(type) }.isSuccess
+            } ?: true
         }.getOrDefault(true)   // A broken ROM probe must not block playback.
         synchronized(verdicts) { verdicts[key]=verdict }
         return verdict
@@ -62,14 +78,10 @@ object CodecCapabilities {
     fun logDeviceCapabilities() {
         if(logged) return; logged=true
         val lines=runCatching {
-            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter { !it.isEncoder }.flatMap { info ->
-                listOf(MediaFormat.MIMETYPE_VIDEO_AVC,MediaFormat.MIMETYPE_VIDEO_HEVC)
-                    .filter { type -> runCatching { info.getCapabilitiesForType(type) }.isSuccess }
-                    .map { type ->
-                        val video=info.getCapabilitiesForType(type).videoCapabilities
-                        "${info.name} $type up to ${video.supportedWidths.upper}x${video.supportedHeights.upper}"
-                    }
-            }
+            // 4.4 上能问出来的只有「这个解码器声明支持哪些类型」。
+            (codecInfos() ?: return).filter { !it.isEncoder }
+                .filter { info -> listOf(VIDEO_AVC,VIDEO_HEVC).any { type -> runCatching { info.getCapabilitiesForType(type) }.isSuccess } }
+                .map { info -> "${info.name} supports ${info.supportedTypes.joinToString(",")}" }
         }.getOrNull() ?: return
         android.util.Log.i("HongguoTV","Decoder capabilities: ${lines.joinToString("; ")}")
     }

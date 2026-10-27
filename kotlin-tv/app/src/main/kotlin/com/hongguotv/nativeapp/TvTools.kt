@@ -5,8 +5,8 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.content.Context
 import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -101,7 +101,11 @@ class TvTools(private val activity: Activity) {
             keys.forEach { key ->
                 val button=Button(activity).apply {
                     id=View.generateViewId(); text=key; minHeight=dp(42)
-                    backgroundTintList=android.content.res.ColorStateList(arrayOf(intArrayOf(android.R.attr.state_focused),intArrayOf()),intArrayOf(Color.rgb(255,99,76),Color.rgb(31,36,47)))
+                    // backgroundTintList 是 API 21；4.4 上直接给一条同样配色的状态背景。
+                    background=android.graphics.drawable.StateListDrawable().apply {
+                        addState(intArrayOf(android.R.attr.state_focused),TvStyle.shape(activity,TvStyle.accent))
+                        addState(intArrayOf(),TvStyle.shape(activity,Color.rgb(31,36,47)))
+                    }
                     setOnClickListener { when(key) { "清空"->{ digits="";replace=false;value.text="—" }; "退格"->erase(); else->digit(key) } }
                 }
                 buttons+=button
@@ -141,7 +145,7 @@ class TvTools(private val activity: Activity) {
         contentDescription="二维码"
     }
     fun phoneInput(anchor: View?,submit: (String)->Unit) {
-        val addresses=runCatching { LanInputAddresses.find(activity.getSystemService(ConnectivityManager::class.java)) }.getOrDefault(emptyList())
+        val addresses=runCatching { LanInputAddresses.find(activity.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager) }.getOrDefault(emptyList())
         if(addresses.isEmpty()) {
             info("手机输入","未找到可用的 Wi-Fi 或网线局域网地址。请检查电视网络；手机和电视需要在可互通的局域网内。",anchor); return
         }
@@ -171,7 +175,7 @@ class TvTools(private val activity: Activity) {
                 main.post {
                     if(dialog!==next) { session.close(); return@post }
                     phone=session; content.removeAllViews()
-                    val row=LinearLayout(activity).apply { gravity=Gravity.CENTER_VERTICAL }
+                    val row=LinearLayout(activity).apply { setGravity(Gravity.CENTER_VERTICAL )}
                     row.addView(qr(session.url),LinearLayout.LayoutParams(dp(185),dp(185)))
                     val instructions=column()
                     instructions.addView(label("${selected.label} · ${selected.address}\n手机扫码后，用浏览器打开并发送剧名。\n需要同一局域网；二维码有效 5 分钟。",16f))
@@ -183,10 +187,10 @@ class TvTools(private val activity: Activity) {
         }
     }
     fun libraryTransfer(backup: String,anchor: View?,restore: (BackupData,Boolean)->Unit) {
-        val connectivity=activity.getSystemService(ConnectivityManager::class.java)
-        val network=connectivity.activeNetwork; val capabilities=connectivity.getNetworkCapabilities(network)
-        val address=connectivity.getLinkProperties(network)?.linkAddresses?.map { it.address }?.firstOrNull { it is Inet4Address && it.isSiteLocalAddress }?.hostAddress
-        if(address==null || capabilities==null || !(capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
+        val connectivity=activity.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        // 4.4 上没有 NetworkCapabilities／LinkProperties，能给出的判断就是「本机有没有局域网地址」。
+        val address=LanInputAddresses.find(connectivity).firstOrNull()?.address
+        if(address==null) {
             info("备份与恢复","请让电视和手机连接同一局域网后重试。",anchor); return
         }
         val content=column(); val status=label("正在生成二维码…"); content.addView(status)
@@ -208,7 +212,7 @@ class TvTools(private val activity: Activity) {
                 main.post {
                     if(dialog!==next) { session.close(); return@post }
                     phone=session; content.removeAllViews()
-                    val row=LinearLayout(activity).apply { gravity=Gravity.CENTER_VERTICAL }
+                    val row=LinearLayout(activity).apply { setGravity(Gravity.CENTER_VERTICAL )}
                     row.addView(qr(session.url),LinearLayout.LayoutParams(dp(185),dp(185)))
                     val instructions=column()
                     instructions.addView(label("手机扫码，用浏览器下载备份或选择备份文件恢复。\n仅限同一局域网；关闭即失效，最长 5 分钟。恢复需在电视确认。",16f))

@@ -18,7 +18,7 @@ internal class RelatedWorksView(context: Context,private val upper: List<View>,p
     init { orientation=VERTICAL; setPadding(0,dp(14),0,dp(12)); loading() }
     private fun reset(status: String) {
         removeAllViews(); labels.clear()
-        val heading=LinearLayout(context).apply { orientation=HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
+        val heading=LinearLayout(context).apply { orientation=HORIZONTAL; setGravity(Gravity.CENTER_VERTICAL )}
         heading.addView(label("相关作品",22f),LayoutParams(0,-2,1f))
         val refresh=label("刷新",15f).apply {
             id=View.generateViewId(); isFocusable=true; isFocusableInTouchMode=true; setPadding(dp(14),dp(10),dp(14),dp(10))
@@ -36,7 +36,7 @@ internal class RelatedWorksView(context: Context,private val upper: List<View>,p
     fun show(rows: List<RelatedWork>) {
         reset(if(rows.isEmpty()) "暂无相关剧集" else "左右选择其他季；待上线作品可预约")
         if(rows.isEmpty()) return
-        val scroll=HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled=false; clipToPadding=false }
+        val scroll=HorizontalScrollView(context).apply { isHorizontalScrollBarEnabled=false; setClipToPadding(false) }
         val line=LinearLayout(context).apply { orientation=HORIZONTAL }; scroll.addView(line); addView(scroll)
         val cards=rows.map { work ->
             val card=LinearLayout(context).apply {

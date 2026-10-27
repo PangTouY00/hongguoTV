@@ -24,7 +24,7 @@ class EpisodePanel(
     private fun label(value: String,size: Float=17f)=TextView(activity).apply { text=value; textSize=size; setTextColor(TvStyle.text); setPadding(dp(8),dp(6),dp(8),dp(6)) }
     private fun button(value: String,active: Boolean=false,action: ()->Unit)=label(value,16f).apply {
         id=View.generateViewId(); gravity=Gravity.CENTER; minHeight=dp(46); isFocusable=true; isFocusableInTouchMode=true
-        fun paint(focus: Boolean) { background=GradientDrawable().apply { setColor(if(focus) TvStyle.accent else if(active) Color.rgb(61,39,34) else TvStyle.surface); cornerRadius=dp(6).toFloat() } }
+        fun paint(focus: Boolean) { background=GradientDrawable().apply { setColor(if(focus) TvStyle.accent else if(active) Color.rgb(61,39,34) else TvStyle.surface); setCornerRadius(dp(6).toFloat()) } }
         paint(false); setOnFocusChangeListener { _,hasFocus -> paint(hasFocus) }; setOnClickListener { action() }
     }
     fun show() {

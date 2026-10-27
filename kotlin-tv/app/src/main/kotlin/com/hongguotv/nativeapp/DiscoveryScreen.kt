@@ -17,7 +17,7 @@ internal class DiscoveryScreen(
     private val fetch: (DiscoverySelection,DiscoveryCursor?,(FilteredDiscoveryPage?,Throwable?)->Unit)->Unit
 ): LinearLayout(context) {
     private val types=LinearLayout(context)
-    private val bar=LinearLayout(context).apply { gravity=android.view.Gravity.CENTER_VERTICAL }
+    private val bar=LinearLayout(context).apply { setGravity(android.view.Gravity.CENTER_VERTICAL )}
     private val groups=LinearLayout(context).apply { orientation=VERTICAL }
     private val scroll=ScrollView(context).apply { isFillViewport=false;isVerticalScrollBarEnabled=false;addView(groups) }
     private val summary=TextView(context).apply { textSize=12f;setTextColor(TvStyle.muted);maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END }
@@ -116,7 +116,7 @@ internal class DiscoveryScreen(
         controls.clear();strips.clear();types.removeAllViews();groups.removeAllViews()
         val available=state.groups.ifEmpty { listOf(DiscoveryGroup("genre","类型",emptyList())) }
         available.forEach { group ->
-            val row=LinearLayout(context).apply { gravity=android.view.Gravity.CENTER_VERTICAL }
+            val row=LinearLayout(context).apply { setGravity(android.view.Gravity.CENTER_VERTICAL )}
             if(group.type!="genre") row.addView(TextView(context).apply { text=group.label;textSize=12f;setTextColor(TvStyle.muted) },LayoutParams(dp(40),-2))
             val choices=LinearLayout(context)
             val all=DiscoveryFilter("","全部")

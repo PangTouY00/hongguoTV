@@ -78,6 +78,6 @@ class FasterBrowsingTest {
             assertEquals(warmedRequests,ranges.size)
             assertThrows(IllegalArgumentException::class.java) { remote.warm(5*1024*1024) }
             remote.close(); assertThrows(java.io.IOException::class.java) { remote.read(0,1) }
-        } finally { server.stop(0); client.connectionPool.evictAll(); client.dispatcher.executorService.shutdownNow() }
+        } finally { server.stop(0); client.connectionPool.evictAll(); client.dispatcher.executorService?.shutdownNow() }
     }
 }

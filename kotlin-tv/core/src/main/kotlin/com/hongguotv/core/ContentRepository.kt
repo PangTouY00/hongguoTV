@@ -10,10 +10,8 @@ import java.util.concurrent.TimeUnit
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import org.json.JSONArray
 
@@ -29,7 +27,8 @@ internal class MemoryCookies : CookieJar {
 
     override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
         if (cookies.isEmpty()) return
-        store.compute(url.host) { _, kept -> kept.orEmpty().replacedBy(cookies) }
+        // Android 4.4 的 java.util.Map 没有 compute()：在同一把锁里读改写。
+        synchronized(store) { store[url.host] = store[url.host].orEmpty().replacedBy(cookies) }
     }
 
     override fun loadForRequest(url: HttpUrl): List<Cookie> {
@@ -87,7 +86,7 @@ class ContentRepository(
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
-            .callTimeout(45, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
             .cookieJar(MemoryCookies())
             .build(),
     private val clock: () -> Long = System::currentTimeMillis,
@@ -100,7 +99,7 @@ class ContentRepository(
         http.newBuilder()
             .connectTimeout(8, TimeUnit.SECONDS)
             .readTimeout(12, TimeUnit.SECONDS)
-            .callTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(12, TimeUnit.SECONDS)
             .build()
     }
     private val site = "https://hongguoduanju.com"
@@ -120,7 +119,7 @@ class ContentRepository(
     private fun text(url: String, signed: Signer.Request? = null, retryTransient: Boolean = false, retries: Int = 1, client: OkHttpClient = http): String {
         val request = Request.Builder().url(url).header("User-Agent",VendorConstants.VIDEO_UA).header("Accept-Language","zh-CN,zh;q=0.9")
         signed?.headers?.forEach { (k,v) -> request.header(k,v) }
-        signed?.body?.let { request.post(it.toRequestBody("application/json; charset=utf-8".toMediaType())) }
+        signed?.body?.let { request.post(bodyOf(it, "application/json; charset=utf-8")) }
         // 榜单用收紧超时的专用客户端，其余请求沿用默认客户端。
         fun fetch() = RequestScope.execute(client.newCall(request.build())) { response ->
             if (!response.isSuccessful) throw ContentHttpException(response.code)
@@ -354,7 +353,7 @@ class ContentRepository(
         val code=data.optInt("Code",data.optInt("code",0))
         if(code!=0) throw IOException("播放接口暂不可用（错误码 $code）")
         val map=data.optJSONObject("data") ?: throw IOException("播放信息为空")
-        val entry=map.optJSONObject(id) ?: map.keys().asSequence().mapNotNull { map.optJSONObject(it) }.firstOrNull() ?: throw IOException("播放信息为空")
+        val entry=map.optJSONObject(id) ?: jsonKeys(map).asSequence().mapNotNull { map.optJSONObject(it) }.firstOrNull() ?: throw IOException("播放信息为空")
         val model=entry.optJSONObject("video_model") ?: JSONObject(entry.str("video_model"))
         // The current model already carries plain media URLs, dimensions and CENC keys.
         // Only use the legacy fallback endpoint when this shape has no usable rendition.
@@ -378,7 +377,7 @@ class ContentRepository(
         val videoList=info.optJSONObject("video_list") ?: throw IOException("没有可用清晰度")
         // ByteVC2 resources can expose playable audio but no video track in Android's MP4 extractor.
         // Keep missing legacy codec labels usable, but never select a known incompatible variant.
-        val rows=videoList.keys().asSequence().mapNotNull { k -> videoList.optJSONObject(k)?.let { k to it } }.filter {
+        val rows=jsonKeys(videoList).asSequence().mapNotNull { k -> videoList.optJSONObject(k)?.let { k to it } }.filter {
             it.second.str("main_url").isNotEmpty() && it.second.str("codec_type").lowercase() !in setOf("bytevc2","bvc2")
         }.map { (k,o) -> Triple(qualityNumber(o.str("quality_desc").ifEmpty { o.str("height").ifEmpty { o.str("vheight").ifEmpty { o.str("quality").ifEmpty { k } } } }),k,o) }.sortedByDescending { it.first }.toList()
         val seed=info.str("key_seed")

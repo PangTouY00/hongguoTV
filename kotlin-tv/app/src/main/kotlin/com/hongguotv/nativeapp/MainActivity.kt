@@ -13,20 +13,11 @@ import android.view.*
 import android.view.inputmethod.InputMethodManager
 import android.content.Context
 import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
 import android.widget.*
 import android.text.TextUtils
-import androidx.media3.common.*
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.analytics.AnalyticsListener
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
-import androidx.media3.ui.PlayerView
 import com.hongguotv.core.*
 import java.util.concurrent.Executors
 
-@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class MainActivity: Activity() {
     private val bg=TvStyle.background; private val surface=TvStyle.surface
     private val accent=TvStyle.accent; private val white=TvStyle.text; private val muted=TvStyle.muted
@@ -58,7 +49,6 @@ class MainActivity: Activity() {
     private var libraryLoadError: Throwable?=null
     private var workScope: RequestScope?=null
     private var workJob: java.util.concurrent.Future<*>?=null
-    private var playerListener: Player.Listener?=null
     private lateinit var playbackTitle: TextView
     private var directPlayback=false
     private var collection: String?=null
@@ -108,7 +98,8 @@ class MainActivity: Activity() {
     private lateinit var mediaSession: TvMediaSession
     private val sleepTimer=SleepTimer { android.os.SystemClock.elapsedRealtime() }
     private var sleepStopped=false
-    private var playerView: PlayerView?=null
+    private var playerView: SurfaceView?=null
+    private var videoProxy: LocalVideoServer?=null
     private val social by lazy { TvSocial(this,{ player },{ if(screen=="player" || screen=="detail") detail?.let { data -> data.episodes.getOrNull(episodeIndex)?.let { data.series.id to it } } else null }) }
     private lateinit var favoriteMonitor: FavoriteMonitor
     private val favoriteBadges=mutableMapOf<String,TextView>()
@@ -127,14 +118,10 @@ class MainActivity: Activity() {
     private var foreground=false
     private lateinit var connectivity: ConnectivityManager
     private var networkRegistered=false
-    private val networkCallback=object: ConnectivityManager.NetworkCallback() {
-        // Only a lost connection drops the warm-up. Switching Wi-Fi to mobile data mid-episode must
-        // not throw away the next episode that was already paid for by an address lookup and index.
-        private fun changed() { main.post { if(!networkAvailable()) cancelPrefetch(); if(foreground && screen=="player" && playError && autoRecovery) scheduleRecovery() } }
-        override fun onAvailable(network: Network) { changed() }
-        override fun onLost(network: Network) { changed() }
-        override fun onCapabilitiesChanged(network: Network,capabilities: NetworkCapabilities) { changed() }
-        override fun onBlockedStatusChanged(network: Network,blocked: Boolean) { changed() }
+    // API 19 没有 ConnectivityManager.NetworkCallback（那是 API 21 起的），只能听系统连接变化广播。
+    private val onNetworkChanged=Runnable { main.post { if(!networkAvailable()) cancelPrefetch(); if(foreground && screen=="player" && playError && autoRecovery) scheduleRecovery() } }
+    private val networkCallback=object: android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: android.content.Intent?) { onNetworkChanged.run() }
     }
     private val retryRunnable=Runnable {
         retryPending=false
@@ -179,7 +166,7 @@ class MainActivity: Activity() {
     private var episodeIndex=0
     private var group=0
     private var synopsisExpanded=false
-    private var player: ExoPlayer?=null
+    private var player: MediaPlayerPlayer?=null
     private var video: RemoteVideo?=null
     private var playbackReady=false
     private var pausedForLifecycle=false
@@ -226,7 +213,7 @@ class MainActivity: Activity() {
     private fun rounded(color: Int,border: Int=Color.TRANSPARENT)=TvStyle.shape(this,color,border)
     private fun text(value: String,size: Float=16f,color: Int=white)=TextView(this).apply { text=value; textSize=size; setTextColor(color); includeFontPadding=false }
     private fun column()=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
-    private fun row()=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
+    private fun row()=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; setGravity(Gravity.CENTER_VERTICAL )}
     private fun focusStyle(view: View,selected: Boolean=false) {
         view.id=View.generateViewId(); view.isSelected=selected; view.isFocusable=true; view.isFocusableInTouchMode=true
         fun paint(focused: Boolean) { view.background=rounded(if(focused) TvStyle.raised else if(selected) Color.rgb(61,39,34) else surface,if(focused) accent else Color.TRANSPARENT) }
@@ -277,10 +264,9 @@ class MainActivity: Activity() {
             }
         }
         updater=AppUpdater(this) { foreground && library.isLoaded && screen=="catalog" && homeFeed==null && !tvTools.showing && !cloudAccount.showing }
-        connectivity=getSystemService(ConnectivityManager::class.java)
+        connectivity=getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         runCatching {
-            if(android.os.Build.VERSION.SDK_INT>=24) connectivity.registerDefaultNetworkCallback(networkCallback)
-            else connectivity.registerNetworkCallback(android.net.NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(),networkCallback)
+            registerReceiver(networkCallback, android.content.IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION))
             networkRegistered=true
         }
         favoriteMonitor=FavoriteMonitor(library,repository) { refreshFavoriteLabels() }
@@ -328,7 +314,7 @@ class MainActivity: Activity() {
                 if(snapshot!=null) rankPrefetched=true
                 // 预取完成时用户可能已经停在这个榜上：把已经拿到的数据补进界面，而不是让他继续等。
                 if(board==rankBrowser.board) rankScreen?.boardUpdated(board)
-                android.util.Log.i("HongguoTV","Rank prefetch board=${board.label} ok=${snapshot!=null} items=${snapshot?.items.size ?: 0} pages=${snapshot?.pagesRead ?: 0}/${snapshot?.pagesTotal ?: 0} problem=${result.exceptionOrNull()?.message ?: ""}")
+                android.util.Log.i("HongguoTV","Rank prefetch board=${board.label} ok=${snapshot!=null} items=${snapshot?.items?.size ?: 0} pages=${snapshot?.pagesRead ?: 0}/${snapshot?.pagesTotal ?: 0} problem=${result.exceptionOrNull()?.message ?: ""}")
             }
         }
     }
@@ -528,7 +514,7 @@ class MainActivity: Activity() {
             homeFeedIdentity=cloudAccount.recommendationIdentity
             val feed=HomeFeedScreen(this,homeFeedState,nav.toList(),
                 { openDetail(it,false) },::accountFavoriteAction,cloudAccount::favoriteActionLabel,
-                PublicFeedBackend(library.maxQuality,account=cloudAccount.recommendationCredentials(),startupCache=FeedStartupCache(this)),Media3TrialPlayback(this))
+                PublicFeedBackend(library.maxQuality,account=cloudAccount.recommendationCredentials(),startupCache=FeedStartupCache(this)),MediaPlayerTrialPlayback(this))
             homeFeed=feed
             container.addView(feed,lp(-1,0).apply { weight=1f })
             feed.start(foreground,focusNav)
@@ -578,7 +564,7 @@ class MainActivity: Activity() {
             nav.forEach { it.nextFocusDownId=typeButtons.getValue(library.contentType).id }
         }
         if(tab==1) {
-            val searchRow=row(); val input=EditText(this).apply { id=View.generateViewId(); hint="输入剧名、关键词或拼音"; setText(searchDraft ?: query); textSize=16f; setTextColor(white); setHintTextColor(muted); isSingleLine=true; maxLines=1; filters=arrayOf(android.text.InputFilter.LengthFilter(80)); imeOptions=android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
+            val searchRow=row(); val input=EditText(this).apply { id=View.generateViewId(); hint="输入剧名、关键词或拼音"; setText(searchDraft ?: query); textSize=16f; setTextColor(white); setHintTextColor(muted); setSingleLine(true); maxLines=1; filters=arrayOf(android.text.InputFilter.LengthFilter(80)); imeOptions=android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
             searchRow.addView(input,lp(0,dp(45)).apply { weight=1f; rightMargin=dp(10) })
             fun search() { val next=input.text.toString().trim(); if(next.isBlank()) { returnToDiscovery();return }; runSearch(next) }
             searchInput=input; searchButton=addButton(searchRow,"搜索") { search() }; input.nextFocusUpId=nav[tab].id; searchButton?.nextFocusUpId=input.nextFocusUpId
@@ -748,7 +734,7 @@ class MainActivity: Activity() {
             return
         }
         val preview=SeriesPreview(this); selectionPreview=preview; body.addView(preview)
-        val scroll=ScrollView(this).apply { isFillViewport=false; isVerticalScrollBarEnabled=false; clipToPadding=false }; catalogScroll=scroll
+        val scroll=ScrollView(this).apply { isFillViewport=false; isVerticalScrollBarEnabled=false; setClipToPadding(false) }; catalogScroll=scroll
         val list=column(); scroll.addView(list); body.addView(scroll,lp(-1,0).apply { weight=1f })
         var restoringScroll=true
         val displayed=if(localCatalog()) catalog.drop((page-1)*pageSize).take(pageSize) else if(tab==0) catalog.filterNot { it.id in library.hidden() } else catalog.take(30)
@@ -774,7 +760,7 @@ class MainActivity: Activity() {
         }
         val cards=mutableListOf<View>(); val count=6; val gap=dp(14); val width=((resources.displayMetrics.widthPixels*.9f-gap*(count-1))/count).toInt(); val coverAspect= CoverRatio.current
         displayed.chunked(count).forEach { items ->
-            val line=row(); line.gravity=Gravity.TOP
+            val line=row(); line.setGravity(Gravity.TOP)
             items.forEachIndexed { columnIndex,item ->
                 val card=column(); card.setPadding(dp(4),dp(4),dp(4),dp(9)); focusStyle(card); card.contentDescription=item.title; card.tag=item.id; catalogCards[item.id]=card
                 val position=if(tab==2) ranking?.positions?.get(item.id) else null
@@ -810,7 +796,7 @@ class MainActivity: Activity() {
             }
             list.addView(line,lp(-1,-2).apply { bottomMargin=dp(10) })
         }
-        val paging=row(); paging.gravity=Gravity.CENTER
+        val paging=row(); paging.setGravity(Gravity.CENTER)
         var prev: View?=null; var next: View?=null
         if(tab<=2 || localCatalog()) {
             prev=addButton(paging,"上一页") { if(page>1) { page--; catalogFocus=""; showCatalog(!localCatalog()) } }.apply { isEnabled=page>1; isFocusable=page>1; alpha=if(page>1) 1f else .4f }
@@ -861,9 +847,11 @@ class MainActivity: Activity() {
                 firstRow.forEachIndexed { index,card -> card.nextFocusUpId=if(value) nav[tab].id else restoredUp[index] }
                 nav.forEachIndexed { index,item -> item.nextFocusDownId=if(value) cards.first().id else restoredDown[index] }
             }
-            scroll.setOnScrollChangeListener { _,_,scrollY,_,_ ->
+            // setOnScrollChangeListener 是 API 23；4.4 上听 ViewTreeObserver 的滚动事件。
+            scroll.viewTreeObserver.addOnScrollChangedListener {
+                if(catalogScroll!==scroll) return@addOnScrollChangedListener
                 if(rowHeight==0) rowHeight=list.getChildAt(0)?.height ?: 0
-                if(rowHeight>0) fold(scrollY>=rowHeight)
+                if(rowHeight>0) fold(scroll.scrollY>=rowHeight)
             }
         }
         if(focusType) typeButtons[library.contentType]?.requestFocus() else if(focusNav) nav[tab].requestFocus()
@@ -1062,7 +1050,7 @@ class MainActivity: Activity() {
     private fun settings(parent: LinearLayout) {
         parent.addView(text("按你的习惯播放",25f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL); setPadding(0,dp(15),0,dp(7)) })
         parent.addView(text("偏好自动保存，下一部剧继续使用。",13f,muted).apply { setPadding(0,0,0,dp(18)) })
-        val groups=row().apply { gravity=Gravity.TOP }
+        val groups=row().apply { setGravity(Gravity.TOP )}
         val playback=column(); val device=column()
         listOf(playback,device).forEachIndexed { i,group ->
             group.setPadding(dp(16),dp(16),dp(16),dp(16)); group.background=rounded(surface)
@@ -1164,7 +1152,7 @@ class MainActivity: Activity() {
         invalidatePage(); releaseCatalogViews(); screen="detail"; val data=detail ?: return showCatalog()
         val body=base("剧集详情")
         val scroll=ScrollView(this).apply { isVerticalScrollBarEnabled=false }; val content=column(); scroll.addView(content); body.addView(scroll,lp(-1,0).apply { weight=1f })
-        val hero=row(); hero.gravity=Gravity.TOP; hero.setPadding(0,dp(12),0,dp(12))
+        val hero=row(); hero.setGravity(Gravity.TOP); hero.setPadding(0,dp(12),0,dp(12))
         val image=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_CENTER }; hero.addView(image,lp(((dp(174)*CoverRatio.current).toInt()).coerceAtLeast(dp(90)),dp(174)).apply { rightMargin=dp(24) }); loadCover(image,data.series.cover)
         val info=column(); hero.addView(info,lp(0,-2).apply { weight=1f })
         info.addView(text(data.series.title,26f).apply { setTypeface(null,Typeface.BOLD); maxLines=2; ellipsize=TextUtils.TruncateAt.END })
@@ -1261,11 +1249,7 @@ class MainActivity: Activity() {
         val reuse=screen=="player" && player!=null && playerView!=null && !recovering && !playError
         library.setWatched(data.series.id,false)
         val selectedIndex=index.coerceIn(0,data.episodes.lastIndex)
-        if(position==0L && autoplay && !recovering && !playError && queuedEpisode==selectedIndex &&
-            queuedNext!=null && player?.hasNextMediaItem()==true) {
-            requestedAutoplay=true;pausedForLifecycle=false
-            player?.seekToNextMediaItem();player?.play();return
-        }
+        // 4.4 的 MediaPlayer 没有播放队列：下一集在这一集结束后由 playEpisode 重新起播。
         val targetKey="${data.episodes[selectedIndex]}:${library.maxQuality}"
         // A warm-up for this very episode that is still running is worth waiting a moment for:
         // starting another one would pay for the same address lookup and index twice.
@@ -1277,8 +1261,7 @@ class MainActivity: Activity() {
             // source would auto-transition to the wrong episode when this one ends.
             cancelRecovery(); clearQueuedEpisode(); if(!warmupInFlight) cancelPrefetch(); tvTools.close()
             episodePanel?.dismiss(); episodePanel=null; speedDialog?.dismiss(); speedDialog=null
-            playerListener?.let { player?.removeListener(it) }; playerListener=null
-            player?.stop(); player?.clearMediaItems()
+            player?.stop()
             video?.close(); video=null; closeTransport(playbackHttp); playbackHttp=null
             main.removeCallbacks(hideHud); main.removeCallbacks(seekRunnable); pendingSeek=null
         } else releasePlayer()
@@ -1293,21 +1276,19 @@ class MainActivity: Activity() {
         touchLock=false; boostSpeed=false; lastRemoteOkAt=0L
         currentTrack=null; currentRendition=null; currentTiers=emptyList()
         if(!autoDowngrade) autoDowngrades=0; pausedForLifecycle=!autoplay
-        player?.playWhenReady=requestedAutoplay
+        player?.setPlayWhenReady(requestedAutoplay)
         prefetchAttempts=0; prefetchAttemptAt=0
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if(!reuse) {
             root.removeAllViews(); root.setBackgroundColor(Color.BLACK)
-            val view=PlayerView(this).apply {
-                useController=false; resizeMode=frameResizeMode(); isFocusable=false
-                setKeepContentOnPlayerReset(true); setShutterBackgroundColor(Color.BLACK); setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
-            }
+            // 4.4 上没有 media3 的 PlayerView：画面直接落在 SurfaceView 上，比例与放大由 applyFrameScale 负责。
+            val view=SurfaceView(this).apply { isFocusable=false; setBackgroundColor(Color.BLACK) }
             playerView=view; root.addView(view,FrameLayout.LayoutParams(-1,-1)); applyFrameScale()
             social.attach(root)
             hud=column().apply { setPadding(dp(widthDp()*.05f),dp(20),dp(widthDp()*.05f),(resources.displayMetrics.heightPixels*.05f).toInt()); background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.TRANSPARENT,Color.argb(240,11,15,21))) }
             playbackTitle=text("",23f).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setTypeface(null,Typeface.BOLD) }; hud.addView(playbackTitle)
             playbackText=text("",15f,muted).apply { setPadding(0,dp(10),0,dp(9)) }; hud.addView(playbackText)
-            progressBar=(if(touchInput) SeekBar(this).apply { max=1000; progressTintList=android.content.res.ColorStateList.valueOf(accent); progressBackgroundTintList=android.content.res.ColorStateList.valueOf(surface); splitTrack=false; isFocusable=false; isFocusableInTouchMode=false; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            progressBar=(if(touchInput) SeekBar(this).apply { max=1000; TvStyle.progressTint(this,accent,surface); isFocusable=false; isFocusableInTouchMode=false; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 // Dragging is the phone equivalent of the remote's left/right seek.
                 setOnSeekBarChangeListener(object: SeekBar.OnSeekBarChangeListener {
                     override fun onProgressChanged(bar: SeekBar,value: Int,fromUser: Boolean) {
@@ -1320,7 +1301,7 @@ class MainActivity: Activity() {
                         val duration=player?.duration ?: 0L; if(playbackReady && duration>0) seekTo(bar.progress.toLong()*duration/1000)
                     }
                 })
-            } else ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal).apply { max=1000; progressTintList=android.content.res.ColorStateList.valueOf(accent); progressBackgroundTintList=android.content.res.ColorStateList.valueOf(surface) }); hud.addView(progressBar,lp(-1,if(touchInput) dp(22) else dp(4)))
+            } else ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal).apply { max=1000; TvStyle.progressTint(this,accent,surface) }); hud.addView(progressBar,lp(-1,if(touchInput) dp(22) else dp(4)))
             if(!touchInput) hud.addView(text("确认两次 暂停/播放    左右 快退/快进    ↓ 选集    ↑ 更多    返回 收起 / 退出",13f,muted).apply { setPadding(0,dp(12),0,0) })
             controls=column().apply { setPadding(0,dp(12),0,0); visibility=View.GONE }; hud.addView(controls)
             if(touchInput) root.addView(PlaybackTouchLayer(this),FrameLayout.LayoutParams(-1,-1))
@@ -1340,74 +1321,42 @@ class MainActivity: Activity() {
             if(carriedOver) playbackHttp=opened.http
             quality=playedQualityLabel(opened,maxQuality); attemptedQuality=opened.rendition?.quality ?: 0
             currentTrack=opened.track; currentRendition=opened.rendition; currentTiers=opened.tiers
-            val p=player ?: run {
-                val load=DefaultLoadControl.Builder().setBufferDurationsMs(15000,30000,1000,2000).setTargetBufferBytes(12*1024*1024).build()
-                val renderers=androidx.media3.exoplayer.DefaultRenderersFactory(this).setEnableDecoderFallback(true)
-                ExoPlayer.Builder(this,renderers).setLoadControl(load).build().also {
-                    player=it; playerView?.player=it
-                    it.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),true)
-                    it.setHandleAudioBecomingNoisy(true)
-                    it.addAnalyticsListener(playbackDriftListener(it))
-                }
-            }
-            p.setPlaybackSpeed(library.playbackSpeed)
-            val listener=object: Player.Listener {
-                private fun active()=player===p && generation==ticket && p.currentMediaItem?.mediaId==data.episodes.getOrNull(episodeIndex)
-                override fun onPlaybackStateChanged(state: Int) {
+            val surface=checkNotNull(playerView)
+            lateinit var p: MediaPlayerPlayer
+            p=MediaPlayerPlayer(surface.holder, object: PlaybackListener {
+                private fun active()=player===p && generation==ticket && p.currentMediaId==data.episodes.getOrNull(episodeIndex)
+                override fun onStateChanged(state: Int) {
                     if(!active()) return
-                    if(state==Player.STATE_READY) {
-                        if(!p.currentTracks.isTypeSelected(C.TRACK_TYPE_VIDEO)) {
-                            playerFailure(PlaybackException("资源没有可解码的视频轨道",null,PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED))
-                            return
-                        }
+                    if(state==PlaybackState.READY) {
+                        if(!p.hasVideoTrack) { playerFailure(PlaybackFailure("资源没有可解码的视频轨道",true,false)); return }
                         playbackReady=true;episodeDuration=p.duration.coerceAtLeast(0)
                         if(firstReady) { firstReady=false; readySince=android.os.SystemClock.elapsedRealtime(); android.util.Log.i("HongguoTV","Playback ready episode=${episodeIndex+1} carried=$carriedOver reused=$reuse elapsedMs=${readySince-playbackStarted}") }
                         if(hud.visibility==View.VISIBLE) updatePlaybackText()
                     }
                     syncMediaSession()
-                    if(state==Player.STATE_ENDED) {
+                    if(state==PlaybackState.ENDED) {
                         saveProgress(true)
                         if(sleepTimer.episodeEnded()) stopForSleep()
                         else if(foreground && requestedAutoplay && !pausedForLifecycle && library.autoNext && episodeIndex<data.episodes.lastIndex) playEpisode(episodeIndex+1)
                         else { requestedAutoplay=false; p.pause(); playbackText.text="本集已结束"; showPanel() }
                     }
                 }
-                override fun onRenderedFirstFrame() {
+                override fun onFirstFrame() {
                     if(player!==p || generation!=ticket) return
-                    val rendered=p.currentMediaItem?.mediaId?.let { data.episodes.indexOf(it) } ?: -1
-                    if(rendered==episodeIndex) {
-                        if(!firstFrame) return
-                        firstFrame=false
-                        android.util.Log.i("HongguoTV","Playback first frame episode=${episodeIndex+1} carried=$carriedOver reused=$reuse elapsedMs=${android.os.SystemClock.elapsedRealtime()-playbackStarted}")
-                    } else if(rendered>=0) {
-                        // A queued episode renders its first frame before the queue switch is applied, so
-                        // that frame belongs to the next episode and must not be timed against this one.
-                        android.util.Log.i("HongguoTV","Next episode rendered its first frame before the queue switch episode=${rendered+1}")
-                    }
+                    android.util.Log.i("HongguoTV","Playback first frame episode=${episodeIndex+1} carried=$carriedOver reused=$reuse elapsedMs=${android.os.SystemClock.elapsedRealtime()-playbackStarted}")
                 }
-                override fun onIsPlayingChanged(playing: Boolean) { if(active()) { if(hud.visibility==View.VISIBLE) showHud(); updatePauseGlyph(); syncMediaSession() } }
-                override fun onPlaybackParametersChanged(parameters: PlaybackParameters) { if(active()) syncMediaSession() }
-                override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo,newPosition: Player.PositionInfo,reason: Int) {
-                    if(player===p && generation==ticket &&
-                        newPosition.mediaItem?.mediaId==queuedNext?.let { data.episodes.getOrNull(queuedEpisode) } &&
-                        reason in listOf(Player.DISCONTINUITY_REASON_AUTO_TRANSITION,Player.DISCONTINUITY_REASON_SEEK)) {
-                        if(advanceQueuedEpisode(oldPosition.positionMs,reason==Player.DISCONTINUITY_REASON_AUTO_TRANSITION)) {
-                            playbackStarted=android.os.SystemClock.elapsedRealtime();firstReady=true;firstFrame=true
-                        }
-                    }
-                    if(active()) syncMediaSession()
-                }
-                override fun onPlayerError(error: PlaybackException) { if(active()) playerFailure(error) }
-            }
-            playerListener=listener; p.addListener(listener)
-            val source=episodeSource(remote,requestedId)
-            p.setMediaSource(source); p.seekTo(position.coerceAtLeast(0)); p.prepare(); p.playWhenReady=foreground && requestedAutoplay && !pausedForLifecycle && episodePanel==null
+                override fun onPlayingChanged(playing: Boolean) { if(active()) { if(hud.visibility==View.VISIBLE) showHud(); updatePauseGlyph(); syncMediaSession() } }
+                override fun onError(message: String, decoding: Boolean) { if(active()) playerFailure(PlaybackFailure(message,decoding,!decoding)) }
+            })
+            player=p
+            p.setPlaybackSpeed(library.playbackSpeed)
+            p.prepare(episodeSource(remote,requestedId),position,foreground && requestedAutoplay && !pausedForLifecycle && episodePanel==null)
         }, { problem -> playerFailure(problem) })
     }
     private fun closeTransport(http: okhttp3.OkHttpClient?) {
         if(http==null) return
         // Closing an idle TLS connection can write close_notify; keep it off the UI thread.
-        networkCleanup.execute { http.dispatcher.cancelAll(); http.connectionPool.evictAll(); http.dispatcher.executorService.shutdown() }
+        networkCleanup.execute { http.dispatcher.cancelAll(); http.connectionPool.evictAll(); http.dispatcher.executorService?.shutdown() }
     }
     private fun cancelPrefetch() {
         clearQueuedEpisode()
@@ -1432,15 +1381,17 @@ class MainActivity: Activity() {
         val id=data.episodes[episodeIndex+1]; val quality=library.maxQuality; val key="$id:$quality"
         if(preparedNext.isFresh(key) || prefetchJob?.isDone==false) return
         val now=android.os.SystemClock.elapsedRealtime()
-        val metered=connectivity.isActiveNetworkMetered
-        if(readySince==0L || !PrefetchPolicy.canStart(p.currentPosition,p.duration,p.playbackParameters.speed,
-                now-readySince,p.bufferedPosition-p.currentPosition,metered)) return
+        val metered=activeNetworkMetered()
+        // 4.4 的 MediaPlayer 既不报告已缓冲位置，也没有变速：这两项按「不限制」与「原速」给出，
+        // 预取节奏的判断仍然由 PrefetchPolicy 自己掌握。
+        if(readySince==0L || !PrefetchPolicy.canStart(p.currentPosition,p.duration,1f,
+                now-readySince,(p.duration-p.currentPosition).coerceAtLeast(0),metered)) return
         if(prefetchAttempts>=PrefetchPolicy.maxAttempts(metered) ||
             (prefetchAttempts>0 && now-prefetchAttemptAt<PrefetchPolicy.retryCooldownMs(metered)) || !networkAvailable()) return
         val warmBytes=PrefetchPolicy.warmBytes(metered)
         cancelPrefetch(); prefetchedFor=key; prefetchAttemptAt=now; prefetchAttempts++
         val ticket=preparedNext.begin(key)
-        val http=okhttp3.OkHttpClient.Builder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).callTimeout(20,java.util.concurrent.TimeUnit.SECONDS).build()
+        val http=okhttp3.OkHttpClient.Builder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).build()
         val source=ContentRepository(http); prefetchHttp=http
         val scope=RequestScope(); prefetchScope=scope
         prefetchJob=prefetchWorker.submit {
@@ -1462,53 +1413,26 @@ class MainActivity: Activity() {
             }
         }
     }
-    private fun episodeSource(remote: RemoteVideo,id: String)=ProgressiveMediaSource.Factory { VideoDataSource(remote) }
-        .createMediaSource(MediaItem.Builder().setMediaId(id).setUri("hongguotv://episode/$id").setMimeType(MimeTypes.VIDEO_MP4).build())
-    private fun queuePreparedEpisode(key: String) {
-        val p=player ?: return;val data=detail ?: return
-        val next=episodeIndex+1
-        if(!foreground || screen!="player" || playError || !library.autoNext || sleepStopped ||
-            sleepTimer.episodesLeft==1 || queuedNext!=null || next !in data.episodes.indices ||
-            key!="${data.episodes[next]}:${library.maxQuality}" || p.mediaItemCount!=1 ||
-            p.currentMediaItem?.mediaId!=data.episodes[episodeIndex]) return
-        val remote=preparedNext.take(key) ?: return
-        queuedNext=remote;queuedHttp=prefetchHttp;prefetchHttp=null;queuedEpisode=next
-        p.addMediaSource(episodeSource(remote,data.episodes[next]))
-        android.util.Log.i("HongguoTV","Next episode added to playback queue target=${next+1}")
+    /** 系统播放器只会自己读 http，所以把解密流挂到本机端口上，它仍能按字节范围 seek。 */
+    private fun episodeSource(remote: RemoteVideo,id: String): PlaybackSource {
+        videoProxy?.close()
+        val server=LocalVideoServer(remote)
+        videoProxy=server
+        return PlaybackSource(server.url,id,server)
     }
+    /** 4.4 的 MediaPlayer 没有播放队列，预取只保留到「地址与索引已取好」这一步，
+     *  衔接由这一集结束后的 playEpisode 完成。 */
+    private fun queuePreparedEpisode(key: String) {}
     private fun clearQueuedEpisode() {
-        val p=player
-        if(queuedNext!=null && p!=null && p.currentMediaItemIndex+1<p.mediaItemCount)
-            p.removeMediaItems(p.currentMediaItemIndex+1,p.mediaItemCount)
         queuedNext?.close();queuedNext=null;queuedEpisode=-1
         closeTransport(queuedHttp);queuedHttp=null
     }
-    /** Queue transition only: no stop, clearMediaItems, setMediaSource or prepare. */
-    private fun advanceQueuedEpisode(oldPosition: Long,completed: Boolean): Boolean {
-        val p=player ?: return false;val data=detail ?: return false;val next=queuedNext ?: return false
-        if(queuedEpisode!=episodeIndex+1 || p.currentMediaItem?.mediaId!=data.episodes.getOrNull(queuedEpisode)) return false
-        val old=WatchProgress(data.series,data.episodes[episodeIndex],episodeIndex,oldPosition.coerceAtLeast(0),
-            maxOf(episodeDuration,oldPosition),completed,System.currentTimeMillis())
-        library.save(old)
-        cloudAccount.upload(CloudProgress(old.series,old.episodeId,old.episodeIndex,old.position,old.duration,old.updatedAt),data.episodes.size,true)
-        val previous=video;val previousHttp=playbackHttp
-        social.reset()
-        video=next;playbackHttp=queuedHttp;episodeIndex=queuedEpisode;group=episodeIndex/20
-        queuedNext=null;queuedHttp=null;queuedEpisode=-1
-        if(p.currentMediaItemIndex>0) p.removeMediaItems(0,p.currentMediaItemIndex)
-        previous?.close();closeTransport(previousHttp)
-        quality=next.info.quality;pendingSeek=null;startPosition=0
-        playbackReady=p.playbackState==Player.STATE_READY;episodeDuration=p.duration.coerceAtLeast(0)
-        readySince=android.os.SystemClock.elapsedRealtime();prefetchAttempts=0;prefetchAttemptAt=0
-        cancelRecovery();recovery.reset()
-        playbackTitle.text="${data.series.title}  ·  第 ${episodeIndex+1} 集"
-        controls.removeAllViews();controls.visibility=View.GONE;panel=false;transportPlay=null
-        saveProgress();syncMediaSession()
-        android.util.Log.i("HongguoTV","Playback queue transition episode=${episodeIndex+1}")
-        if(completed && sleepTimer.episodeEnded()) stopForSleep()
-        return true
-    }
-    private fun networkAvailable(): Boolean = connectivity.getNetworkCapabilities(connectivity.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)==true
+    /** isActiveNetworkMetered() 是 API 21；4.4 上按网络类型判断是否计费网络。 */
+    @Suppress("DEPRECATION")
+    private fun activeNetworkMetered(): Boolean = connectivity.activeNetworkInfo?.let {
+        it.type != ConnectivityManager.TYPE_WIFI && it.type != ConnectivityManager.TYPE_ETHERNET
+    } == true
+    private fun networkAvailable(): Boolean = connectivity.activeNetworkInfo?.isConnectedOrConnecting == true
     private fun currentPosition(): Long = pendingSeek ?: player?.currentPosition?.takeIf { playbackReady } ?: startPosition
     private fun cancelRecovery() { main.removeCallbacks(retryRunnable); retryPending=false; autoRecovery=false }
     private fun scheduleRecovery() {
@@ -1518,24 +1442,6 @@ class MainActivity: Activity() {
         val delay=recovery.delayMillis ?: return
         playbackText.text="${if(retryAutoplay) "准备恢复播放" else "准备恢复暂停位置"} · ${delay/1000f} 秒后重试 ${recovery.attempts+1}/3 · ${formatTime(retryPosition)}"
         retryPending=true; main.postDelayed(retryRunnable,delay)
-    }
-    /** Detects growing audio/video drift (video frame processing offset stays signed) and
-     *  re-seeks to the current position once per cooldown window: a seek flushes the audio
-     *  processors and clock basis, which users confirmed restores sync; a pause does not. */
-    private fun playbackDriftListener(p: ExoPlayer): AnalyticsListener {
-        val guard=PlaybackSyncGuard()
-        return object: AnalyticsListener {
-            override fun onVideoFrameProcessingOffset(eventTime: AnalyticsListener.EventTime,totalProcessingOffsetUs: Long,frameCount: Int) {
-                val window=guard.offer(totalProcessingOffsetUs,frameCount,p.isPlaying) ?: return
-                android.util.Log.i("HongguoTV","Video frame offset ${window.averageUs/1000}ms")
-                if(window.resync) main.post {
-                    if(player===p && playbackReady && p.isPlaying && pendingSeek==null && !playError) {
-                        android.util.Log.w("HongguoTV","Resync after audio/video drift ${window.averageUs/1000}ms at ${formatTime(p.currentPosition)}")
-                        p.seekTo(p.currentPosition)
-                    }
-                }
-            }
-        }
     }
     private fun playedQualityLabel(opened: OpenedStream,maxQuality: Int): String {
         val rendition=opened.rendition ?: return opened.video.info.quality
@@ -1549,7 +1455,7 @@ class MainActivity: Activity() {
         saveProgress(); cancelRecovery(); cancelPrefetch()
         // The device claimed support it doesn't have (MediaCodecList over-reporting): learn the
         // runtime verdict and retry one tier lower automatically instead of surfacing the panel.
-        if(problem is PlaybackException && problem.errorCode in PlaybackException.ERROR_CODE_DECODER_INIT_FAILED..PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED) {
+        if(problem is PlaybackFailure && problem.decoding) {
             val track=currentTrack; val rendition=currentRendition
             when {
                 track!=null -> CodecCapabilities.learnFailure(track.fourcc,track.width,track.height)
@@ -1563,8 +1469,8 @@ class MainActivity: Activity() {
             }
         }
         playError=true; player?.pause(); progressBar.visibility=View.GONE; hud.visibility=View.VISIBLE; controls.removeAllViews(); controls.visibility=View.VISIBLE; panel=true
-        val decoding=problem is PlaybackException && problem.errorCode in 3000..4999
-        val retryable=if(problem is PlaybackException) problem.errorCode in 2000..2999 || problem.errorCode==PlaybackException.ERROR_CODE_TIMEOUT else problem is java.io.IOException
+        val decoding=problem is PlaybackFailure && problem.decoding
+        val retryable=if(problem is PlaybackFailure) problem.retryable else problem is java.io.IOException
         playbackText.text=if(decoding) "电视无法解码当前视频，可尝试更低清晰度。" else "播放失败，可重试或切换清晰度。"
         val actions=row(); controls.addView(actions)
         addButton(actions,"立即重试") { playEpisode(episodeIndex,retryPosition,retryAutoplay) }.requestFocus()
@@ -1576,7 +1482,7 @@ class MainActivity: Activity() {
             addButton(controls,"停止自动重试") { cancelRecovery(); playbackText.text="自动重试已停止，观看位置已保留。" }
             autoRecovery=true; scheduleRecovery()
         }
-        android.util.Log.w("HongguoTV","Playback failure: ${problem.javaClass.simpleName}"+(if(problem is PlaybackException) " code=${problem.errorCodeName}" else ""))
+        android.util.Log.w("HongguoTV","Playback failure: ${problem.javaClass.simpleName}: ${problem.message}")
     }
     /** Touch entry point for phones: one tap opens the same control panel the remote opens with ↑ or
      *  MENU, and a tap while the panel is open collapses it. A double tap in the middle third toggles
@@ -1647,7 +1553,7 @@ class MainActivity: Activity() {
     /** Temporary 3× while the finger is held down; the stored default speed is restored on release. */
     private fun startBoost() {
         val p=player ?: return
-        if(!playbackReady || playError || boostSpeed || p.playbackState==Player.STATE_ENDED) return
+        if(!playbackReady || playError || boostSpeed || p.playbackState==PlaybackState.ENDED) return
         boostSpeed=true
         p.setPlaybackSpeed(3f)
         showHud(); updatePlaybackText()
@@ -1662,7 +1568,7 @@ class MainActivity: Activity() {
     private fun updatePauseGlyph() {
         val p=player
         val show=p!=null && screen=="player" && playbackReady && !playError && !sleepStopped &&
-            episodePanel==null && !p.playWhenReady && p.playbackState!=Player.STATE_ENDED
+            episodePanel==null && !p.playWhenReady && p.playbackState!=PlaybackState.ENDED
         pauseGlyph?.visibility=if(show) View.VISIBLE else View.GONE
     }
     private class PauseGlyph(context: Context): View(context) {
@@ -1671,8 +1577,8 @@ class MainActivity: Activity() {
             val w=width.toFloat(); val h=height.toFloat()
             val bar=w*0.2f; val gap=w*0.16f; val radius=bar/3f
             paint.color=Color.argb(210,255,255,255)
-            canvas.drawRoundRect(w/2f-gap/2f-bar,h*0.28f,w/2f-gap/2f,h*0.72f,radius,radius,paint)
-            canvas.drawRoundRect(w/2f+gap/2f,h*0.28f,w/2f+gap/2f+bar,h*0.72f,radius,radius,paint)
+            canvas.drawRoundRect(android.graphics.RectF(w/2f-gap/2f-bar,h*0.28f,w/2f-gap/2f,h*0.72f),radius,radius,paint)
+            canvas.drawRoundRect(android.graphics.RectF(w/2f+gap/2f,h*0.28f,w/2f+gap/2f+bar,h*0.72f),radius,radius,paint)
         }
     }
     private fun hidePlaybackOverlay() {
@@ -1692,8 +1598,9 @@ class MainActivity: Activity() {
         if(!playbackReady) { playbackText.text=(if(!requestedAutoplay) "准备后保持暂停 · " else "")+if(video==null) "正在获取播放地址…" else "正在缓冲…"; return }
         val p=player ?: return
         val duration=p.duration.coerceAtLeast(0); val position=pendingSeek ?: p.currentPosition
-        val state=when { p.playbackState==Player.STATE_BUFFERING -> "缓冲中"; p.playbackState==Player.STATE_ENDED -> "本集已结束"; !p.playWhenReady -> "已暂停"; else -> "正在播放" }
-        val speed=if(boostSpeed) "3x 长按倍速" else PlaybackSpeed.label(p.playbackParameters.speed)
+        val state=when { p.playbackState==PlaybackState.BUFFERING -> "缓冲中"; p.playbackState==PlaybackState.ENDED -> "本集已结束"; !p.playWhenReady -> "已暂停"; else -> "正在播放" }
+        // 4.4 的 MediaPlayer 没有变速能力，界面上不再假装可以倍速。
+        val speed="原速"
         playbackText.text="$state  ·  ${formatTime(position)} / ${formatTime(duration)}  ·  $quality  ·  $speed"+(if(touchLock) "  ·  已锁定" else "")+(if(sleepTimer.active) "  ·  定时 ${sleepTimer.label()}" else "")
         progressBar.progress=if(duration>0) (position*1000/duration).toInt().coerceIn(0,1000) else 0
     }
@@ -1702,7 +1609,7 @@ class MainActivity: Activity() {
         if(play) sleepStopped=false
         if(!play) { player?.pause(); retryAutoplay=false; saveProgress() }
         else if(playError) { playEpisode(episodeIndex,retryPosition,true); return }
-        else if(episodePanel==null) { if(player?.playbackState==Player.STATE_ENDED) player?.seekTo(0); player?.play() }
+        else if(episodePanel==null) { if(player?.playbackState==PlaybackState.ENDED) player?.seekTo(0); player?.play() }
         if(!play) window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         else window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         showHud(); updatePlaybackText(); updatePauseGlyph(); syncMediaSession(); if(panel && episodePanel==null) showPanel()
@@ -1723,12 +1630,12 @@ class MainActivity: Activity() {
         if(!foreground || screen!="player") { mediaSession.deactivate(); return }
         val data=detail ?: return; val p=player
         val state=when {
-            playError -> android.media.session.PlaybackState.STATE_ERROR
-            sleepStopped || !requestedAutoplay || (p!=null && !p.playWhenReady) -> android.media.session.PlaybackState.STATE_PAUSED
-            p==null || !playbackReady || p.playbackState==Player.STATE_BUFFERING -> android.media.session.PlaybackState.STATE_BUFFERING
-            p.playbackState==Player.STATE_ENDED -> android.media.session.PlaybackState.STATE_STOPPED
-            p.isPlaying -> android.media.session.PlaybackState.STATE_PLAYING
-            else -> android.media.session.PlaybackState.STATE_PAUSED
+            playError -> MediaSessionState.STATE_ERROR
+            sleepStopped || !requestedAutoplay || (p!=null && !p.playWhenReady) -> MediaSessionState.STATE_PAUSED
+            p==null || !playbackReady || p.playbackState==PlaybackState.BUFFERING -> MediaSessionState.STATE_BUFFERING
+            p.playbackState==PlaybackState.ENDED -> MediaSessionState.STATE_STOPPED
+            p.isPlaying -> MediaSessionState.STATE_PLAYING
+            else -> MediaSessionState.STATE_PAUSED
         }
         mediaSession.update(data.series.title,episodeIndex,p?.duration?.coerceAtLeast(0) ?: 0,currentPosition(),library.playbackSpeed,state,episodeIndex>0,episodeIndex<data.episodes.lastIndex)
     }
@@ -1748,20 +1655,25 @@ class MainActivity: Activity() {
             if(anchor.tag!="playback-settings") anchor.text="定时 ${sleepTimer.label()}"; updatePlaybackText(); showHud()
         })
     }
-    private fun frameResizeMode()=when(library.frameMode) {
-        // 放大模式同样保持视频比例，超出屏幕的部分由放大本身裁掉，不再用 ZOOM 把画面撑满。
-        VideoFrameMode.FIT, VideoFrameMode.ZOOM -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
-        VideoFrameMode.FILL -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
-    }
-    /** 画面放大只作用在播放器上：弹幕、进度条与面板仍按原尺寸排布，遥控器焦点图也不受影响。 */
+    /** 画面放大只作用在播放器上：弹幕、进度条与面板仍按原尺寸排布，遥控器焦点图也不受影响。
+     *  4.4 上没有 media3 的 resizeMode：系统播放器总是按比例 letterbox，「拉伸铺满」就是把被
+     *  letterbox 掉的那部分用缩放补回来。 */
     private fun applyFrameScale() {
         val view=playerView ?: return
-        val scale=library.frameMode.frameScale
+        var scale=library.frameMode.frameScale
+        val track=currentTrack
+        if(library.frameMode==VideoFrameMode.FILL && track!=null && track.width>0 && track.height>0) {
+            val screenW=resources.displayMetrics.widthPixels.toFloat()
+            val screenH=resources.displayMetrics.heightPixels.toFloat()
+            val fitW=minOf(screenW,screenH*track.width/track.height)
+            val fitH=minOf(screenH,screenW*track.height/track.width)
+            if(fitW>0 && fitH>0) scale*=maxOf(screenW/fitW,screenH/fitH)
+        }
         view.scaleX=scale; view.scaleY=scale
     }
     private fun showFramePicker(anchor: TextView,inPlayer: Boolean) {
         tvTools.choose("全局画面模式",listOf("完整画面 · 保留比例与全部内容","放大 1.36 倍 · 减少黑边，会裁掉画面边缘","拉伸铺满 · 画面比例会改变"),anchor,{ index ->
-            library.frameMode=VideoFrameMode.entries[index]; playerView?.resizeMode=frameResizeMode(); applyFrameScale()
+            library.frameMode=VideoFrameMode.entries[index]; applyFrameScale()
             if(anchor.tag!="playback-settings") anchor.text=(if(inPlayer) "画面 " else "画面模式  ·  ")+library.frameMode.label
         })
     }
@@ -1870,7 +1782,7 @@ class MainActivity: Activity() {
     private fun formatTime(millis: Long): String { val seconds=(millis.coerceAtLeast(0)/1000); return "%02d:%02d".format(seconds/60,seconds%60) }
     private fun saveProgress(completed: Boolean=false) {
         val p=player ?: return; val data=detail ?: return; if(!playbackReady || episodeIndex !in data.episodes.indices) return
-        val progress=WatchProgress(data.series,data.episodes[episodeIndex],episodeIndex,p.currentPosition.coerceAtLeast(0),p.duration.coerceAtLeast(0),completed || p.playbackState==Player.STATE_ENDED,System.currentTimeMillis())
+        val progress=WatchProgress(data.series,data.episodes[episodeIndex],episodeIndex,p.currentPosition.coerceAtLeast(0),p.duration.coerceAtLeast(0),completed || p.playbackState==PlaybackState.ENDED,System.currentTimeMillis())
         library.save(progress)
         cloudAccount.upload(CloudProgress(progress.series,progress.episodeId,progress.episodeIndex,progress.position,progress.duration,progress.updatedAt),data.episodes.size,completed || !p.isPlaying || !foreground)
     }
@@ -1881,8 +1793,7 @@ class MainActivity: Activity() {
         val oldPanel=episodePanel; episodePanel=null; oldPanel?.dismiss(); foreground=wasForeground
         speedDialog?.dismiss(); speedDialog=null
         main.removeCallbacks(hideHud); main.removeCallbacks(seekRunnable); pendingSeek=null
-        playerListener?.let { player?.removeListener(it) }; playerListener=null
-        video?.close(); video=null; playerView?.player=null; playerView=null; player?.release(); player=null; playbackReady=false; transportPlay=null; sleepButton=null
+        video?.close(); video=null; playerView=null; player?.release(); player=null; videoProxy?.close(); videoProxy=null; playbackReady=false; transportPlay=null; sleepButton=null
         pauseGlyph=null; boostSpeed=false
         closeTransport(playbackHttp); playbackHttp=null
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1998,12 +1909,12 @@ class MainActivity: Activity() {
     }
     override fun onDestroy() {
         generation++; cancelWork()
-        if(networkRegistered) connectivity.unregisterNetworkCallback(networkCallback)
+        if(networkRegistered) unregisterReceiver(networkCallback)
         social.destroy()
         favoriteMonitor.destroy(); tvTools.destroy(); updater.destroy(); saveProgress(); cloudAccount.destroy(); releasePlayer(); library.close()
         artwork.close(); releaseCatalogViews(); mediaSession.release(); main.removeCallbacksAndMessages(null)
         io.shutdownNow(); rankWorker.shutdownNow(); prefetchWorker.shutdownNow(); networkCleanup.shutdown()
-        Thread({ repository.http.dispatcher.cancelAll(); repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown() },"hongguotv-network-cleanup").start()
+        Thread({ repository.http.dispatcher.cancelAll(); repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService?.shutdown() },"hongguotv-network-cleanup").start()
         super.onDestroy()
     }
 }

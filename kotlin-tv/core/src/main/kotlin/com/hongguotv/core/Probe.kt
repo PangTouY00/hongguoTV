@@ -20,7 +20,7 @@ fun main(args: Array<String>) {
                 }
                 println("category=${category.name}; first=${first.items.size}; second=${second.items.size}; new=$fresh; detailEpisodes=${detail.episodes.size}")
             }
-        } finally { repository.http.connectionPool.evictAll();repository.http.dispatcher.executorService.shutdown() }
+        } finally { repository.http.connectionPool.evictAll();repository.http.dispatcher.executorService?.shutdown() }
         return
     }
     if(args.contains("--recommendations")) {
@@ -34,7 +34,7 @@ fun main(args: Array<String>) {
             if(hint!=null) { val detail=repository.detail(initial.id);check(hint.episodeId==detail.episodes.first());check(hint.episodeCount==detail.episodes.size) }
             println("recommendationDirectTrialHints=${first.trialHints.size}")
             println("officialFeed=true; first=${first.items.size}; second=${second.items.size}; new=$new; firstMore=${first.hasMore}; secondMore=${second.hasMore}; refreshed=${refreshed.items.size}; authenticated=false")
-        } finally { repository.http.connectionPool.evictAll();repository.http.dispatcher.executorService.shutdown() }
+        } finally { repository.http.connectionPool.evictAll();repository.http.dispatcher.executorService?.shutdown() }
         return
     }
     if(args.contains("--discovery")) {
@@ -51,7 +51,7 @@ fun main(args: Array<String>) {
                 println("category=${category.route}; topics=${info.topics.joinToString { it.label }}; first=${first.items.size}; filtered=${filtered.items.size}; secondPage=${second.items.size}; totalPages=${info.totalPages}")
             }
         } finally {
-            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService?.shutdown()
         }
         return
     }
@@ -63,7 +63,7 @@ fun main(args: Array<String>) {
                 println("board=${board.name}; items=${snapshot.items.size}; topics=${snapshot.topics.joinToString(",")}; ranks=${snapshot.ranking.positions.values.mapNotNull { it.rank }.minOrNull()}..${snapshot.ranking.positions.values.mapNotNull { it.rank }.maxOrNull()}")
             }
         } finally {
-            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService?.shutdown()
         }
         return
     }
@@ -91,7 +91,7 @@ fun main(args: Array<String>) {
             println("qrExpired=true")
         } catch(error: Exception) { println("loginTestFailed=${error.message?.take(180)}") }
         finally {
-            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService?.shutdown()
         }
         return
     }
@@ -101,7 +101,7 @@ fun main(args: Array<String>) {
             check(registered!=null) { "Account device registration rejected" }
             println("accountDeviceRegistered=true; credentialsRequested=false; smsSent=false")
         } finally {
-            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService?.shutdown()
         }
         return
     }
@@ -114,7 +114,7 @@ fun main(args: Array<String>) {
                 if(!result.hasMore) break
             }
         } finally {
-            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService?.shutdown()
         }
         return
     }
@@ -136,7 +136,7 @@ fun main(args: Array<String>) {
                 println("rankingPage=$pageNumber/${ranking.totalPages}; items=${result.items.size}; ranks=${ranks.first()}..${ranks.last()}; firstHeat=${ranking.positions[result.items.first().id]!!.heat}; updated=${ranking.updatedText}")
             }
         } finally {
-            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+            repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService?.shutdown()
         }
         return
     }
@@ -161,5 +161,5 @@ fun main(args: Array<String>) {
         println("quality=${stream.quality}; total=${remote.total}; first=${first.size}; tail=${tail.size}; header=${String(first,4,4)}")
         if(args.contains("--save")) java.io.File("/tmp/hongguo-kotlin-first.mp4").writeBytes(first)
     }
-    repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+    repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService?.shutdown()
 }

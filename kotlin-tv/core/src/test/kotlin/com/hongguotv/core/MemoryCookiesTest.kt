@@ -1,7 +1,6 @@
 package com.hongguotv.core
 
 import okhttp3.Cookie
-import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.Assert.*
 import org.junit.Test
 

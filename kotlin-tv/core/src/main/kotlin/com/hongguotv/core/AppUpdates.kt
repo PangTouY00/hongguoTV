@@ -84,7 +84,7 @@ object UpdateFiles {
 
 class AppUpdateRepository : java.io.Closeable {
     private val http = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS)
-        .callTimeout(5, TimeUnit.MINUTES).addNetworkInterceptor { chain ->
+        .addNetworkInterceptor { chain ->
             val url = chain.request().url
             // Follow GitHub's asset CDN redirects, never cleartext or arbitrary manifest-provided hosts.
             // GitHub serves release assets from either of its two asset hosts depending on the asset.
@@ -95,9 +95,7 @@ class AppUpdateRepository : java.io.Closeable {
     private fun request(url: String) = Request.Builder().url(url).header("User-Agent", "HongguoTV-Updater")
         .header("Cache-Control", "no-cache").build()
     private fun readMetadata(url: String): String {
-        val call = http.newCall(request(url))
-        call.timeout().timeout(25, TimeUnit.SECONDS)
-        return call.execute().use { response ->
+        return withDeadline(http.newCall(request(url)), 25, TimeUnit.SECONDS) { response ->
             if (!response.isSuccessful) throw IOException(if (response.code == 404) "尚无可用的自动更新版本" else "无法检查更新，请稍后重试")
             response.body?.byteStream()?.use { input ->
                 val out = ByteArrayOutputStream(); val buffer = ByteArray(4096)
@@ -130,5 +128,5 @@ class AppUpdateRepository : java.io.Closeable {
         }
     }
     fun cancel() = http.dispatcher.cancelAll()
-    override fun close() { cancel(); http.connectionPool.evictAll(); http.dispatcher.executorService.shutdown() }
+    override fun close() { cancel(); http.connectionPool.evictAll(); http.dispatcher.executorService?.shutdown() }
 }

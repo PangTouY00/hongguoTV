@@ -3,13 +3,6 @@ package com.hongguotv.nativeapp
 
 import android.content.Context
 import android.view.View
-import androidx.media3.common.*
-import androidx.media3.exoplayer.*
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
-import androidx.media3.exoplayer.source.preload.DefaultPreloadManager
-import androidx.media3.exoplayer.source.preload.TargetPreloadStatusControl
-import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.PlayerView
 import com.hongguotv.core.*
 import okhttp3.OkHttpClient
 import java.io.Closeable
@@ -31,7 +24,7 @@ internal interface FeedBackend: Closeable {
 }
 internal class PublicFeedBackend(
     private val quality: Int,
-    private val http: OkHttpClient=OkHttpClient.Builder().connectionPool(feedPool).connectTimeout(12,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).callTimeout(35,TimeUnit.SECONDS).build(),
+    private val http: OkHttpClient=OkHttpClient.Builder().connectionPool(feedPool).connectTimeout(12,TimeUnit.SECONDS).readTimeout(20,TimeUnit.SECONDS).build(),
     account: AccountCredentials?=null,
     private val startupCache: FeedStartupCache?=null
 ): FeedBackend {
@@ -113,7 +106,7 @@ internal class PublicFeedBackend(
         Thread({
             http.dispatcher.cancelAll()
             if(http.connectionPool!==feedPool) http.connectionPool.evictAll()
-            http.dispatcher.executorService.shutdown()
+            http.dispatcher.executorService?.shutdown()
         },"hongguotv-feed-cleanup").start()
     }
 }
@@ -134,100 +127,54 @@ internal interface TrialPlayback {
     fun clear()
     fun release()
 }
-@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-internal class Media3TrialPlayback(context: Context): TrialPlayback {
-    private var currentIndex=0
-    private var preloading=false
-    private val preloadBuilder=DefaultPreloadManager.Builder(context,
-        TargetPreloadStatusControl<Int,DefaultPreloadManager.PreloadStatus> { index ->
-            // Keep parsed tracks and existing samples during hand-off; NOT_PRELOADED clears them.
-            if(!preloading || index==currentIndex) DefaultPreloadManager.PreloadStatus.PRELOAD_STATUS_TRACKS_SELECTED
-            else when(index-currentIndex) {
-                1 -> DefaultPreloadManager.PreloadStatus.specifiedRangeLoaded(1500L)
-                -1 -> DefaultPreloadManager.PreloadStatus.specifiedRangeLoaded(1000L)
-                2,3 -> DefaultPreloadManager.PreloadStatus.PRELOAD_STATUS_TRACKS_SELECTED
-                else -> DefaultPreloadManager.PreloadStatus.PRELOAD_STATUS_NOT_PRELOADED
-            }
-        })
-        .setRenderersFactory(DefaultRenderersFactory(context).setEnableDecoderFallback(true))
-        .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(2500,10000,500,1000)
-            .setTargetBufferBytes(6*1024*1024).setPlayerTargetBufferBytes("preload",4*1024*1024)
-            .setPrioritizeTimeOverSizeThresholds(false).build())
-    private val preloadManager=preloadBuilder.build()
-    private val player=preloadBuilder.buildExoPlayer()
-    private val items=linkedMapOf<String,MediaItem>()
-    private val surface=PlayerView(context).apply {
-        useController=false;isFocusable=false;resizeMode=AspectRatioFrameLayout.RESIZE_MODE_FIT
-        setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING);this.player=this@Media3TrialPlayback.player
-    }
-    override fun canPrefetch(): Boolean {
-        val allowed=player.isPlaying && player.totalBufferedDuration>=1500
-        if(allowed!=preloading) { preloading=allowed;preloadManager.invalidate() }
-        return allowed
-    }
-    override val view: View get()=surface
-    override var status: ((TrialStatus)->Unit)?=null
-    private var activeId: String?=null
+/**
+ * 4.4 的首页试播：没有 media3 的预加载管理器，一次只播一条。
+ * 下一条的地址与索引仍由上层预取好，这里只负责「切到这一条并播起来」，
+ * 所以 canPrefetch() 直接返回 false，让上层不要按预加载节奏排队。
+ */
+internal class MediaPlayerTrialPlayback(context: android.content.Context): TrialPlayback {
+    private val surface=android.view.SurfaceView(context).apply { isFocusable=false }
+    private var player: MediaPlayerPlayer?=null
+    private var proxy: LocalVideoServer?=null
+    private var activeId: String?=""
     private var startedAt=0L
-    init {
-        player.pauseAtEndOfMediaItems=true
-        player.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),true)
-        player.setHandleAudioBecomingNoisy(true)
-        player.addListener(object: Player.Listener {
-            private fun active()=activeId!=null && player.currentMediaItem?.mediaId==activeId
-            override fun onPlaybackStateChanged(value: Int) {
-                if(!active()) return
-                when(value) {
-                    Player.STATE_BUFFERING->status?.invoke(TrialStatus.BUFFERING)
-                    Player.STATE_READY->status?.invoke(if(player.currentTracks.isTypeSelected(C.TRACK_TYPE_VIDEO)) TrialStatus.READY else TrialStatus.ERROR)
-                    Player.STATE_ENDED->status?.invoke(TrialStatus.ENDED)
-                }
-            }
-            override fun onPlayWhenReadyChanged(playWhenReady: Boolean,reason: Int) {
-                if(active() && !playWhenReady && reason==Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM)
-                    status?.invoke(TrialStatus.ENDED)
-            }
-            override fun onPlayerError(error: PlaybackException) { if(active()) status?.invoke(TrialStatus.ERROR) }
-            override fun onRenderedFirstFrame() {
-                if(active()) android.util.Log.i("HongguoTV","Home first-frame elapsedMs=${android.os.SystemClock.elapsedRealtime()-startedAt}")
-            }
-        })
-    }
+    override var status: ((TrialStatus)->Unit)?=null
+    override val view: android.view.View get()=surface
     private fun key(clip: TrialClip)=clip.detail.series.id+":"+clip.episodeId
-    private fun source(clip: TrialClip)=ProgressiveMediaSource.Factory { VideoDataSource(clip.video) }.createMediaSource(
-        MediaItem.Builder().setMediaId(key(clip)).setUri("hongguotv://trial/${clip.episodeId}").setMimeType(MimeTypes.VIDEO_MP4).build())
-    override fun setCurrentIndex(index: Int) {
-        currentIndex=index;preloading=false
-        preloadManager.setCurrentPlayingIndex(index);preloadManager.invalidate()
-    }
-    private fun register(clip: TrialClip,index: Int): MediaItem = items.getOrPut(key(clip)) {
-        val source=source(clip)
-        preloadManager.add(source,index)
-        source.mediaItem
+    private fun backend(): MediaPlayerPlayer {
+        player?.let { return it }
+        val created=MediaPlayerPlayer(surface.holder, object: PlaybackListener {
+            override fun onStateChanged(state: Int) {
+                status?.invoke(when(state) {
+                    PlaybackState.BUFFERING->TrialStatus.BUFFERING
+                    PlaybackState.READY->TrialStatus.READY
+                    PlaybackState.ENDED->TrialStatus.ENDED
+                    else->TrialStatus.ERROR
+                })
+            }
+            override fun onFirstFrame() {
+                android.util.Log.i("HongguoTV","Home first-frame elapsedMs=${android.os.SystemClock.elapsedRealtime()-startedAt}")
+            }
+            override fun onPlayingChanged(playing: Boolean) {}
+            override fun onError(message: String, decoding: Boolean) { status?.invoke(TrialStatus.ERROR) }
+        })
+        player=created
+        return created
     }
     private fun play(clip: TrialClip,position: Long,autoplay: Boolean) {
-        val item=register(clip,currentIndex)
+        proxy?.close()
+        val server=LocalVideoServer(clip.video)
+        proxy=server
         activeId=key(clip);startedAt=android.os.SystemClock.elapsedRealtime()
-        player.setMediaSource(checkNotNull(preloadManager.getMediaSource(item)),position.coerceAtLeast(0))
-        player.prepare();player.playWhenReady=autoplay
+        backend().prepare(PlaybackSource(server.url,activeId!!,server),position,autoplay)
     }
     override fun load(clip: TrialClip,position: Long,autoplay: Boolean)=play(clip,position,autoplay)
-    override fun queue(clip: TrialClip,index: Int) {
-        register(clip,index);preloadManager.invalidate()
-    }
-    override fun remove(seriesId: String) {
-        val id=items.keys.firstOrNull { it.startsWith("$seriesId:") } ?: return
-        if(id!=activeId) items.remove(id)?.let { preloadManager.remove(it) }
-    }
-    override fun select(clip: TrialClip,position: Long,autoplay: Boolean): Boolean {
-        if(key(clip) !in items) return false
-        play(clip,position,autoplay)
-        return true
-    }
-    override fun pause() { player.pause();preloading=false;preloadManager.invalidate() }
-    override fun resume()=player.play()
-    override fun restart() { player.seekTo(0);player.play() }
-    override fun position()=player.currentPosition.coerceAtLeast(0)
-    override fun clear() { activeId=null;preloading=false;player.stop();player.clearMediaItems();preloadManager.reset();items.clear() }
-    override fun release() { status=null;surface.player=null;player.release();preloadManager.release();items.clear() }
+    /** 没有预加载队列，界面层不需要为下一条提前腾位置。 */
+    override fun canPrefetch(): Boolean=false
+    override fun pause() { player?.pause() }
+    override fun resume() { player?.play() }
+    override fun restart() { player?.seekTo(0); player?.play() }
+    override fun position(): Long=player?.currentPosition?.coerceAtLeast(0) ?: 0L
+    override fun clear() { activeId="";player?.stop();proxy?.close();proxy=null }
+    override fun release() { status=null;player?.release();player=null;proxy?.close();proxy=null }
 }
