@@ -235,29 +235,55 @@ class MainActivity: Activity() {
     private fun addButton(parent: LinearLayout,label: String,selected: Boolean=false,onClick: ()->Unit): TextView {
         val view=button(label,selected,onClick); parent.addView(view,lp().apply { width=LinearLayout.LayoutParams.WRAP_CONTENT; rightMargin=dp(8) }); return view
     }
+    /** 装载结果原样交给「设置 → 网络诊断」：老设备上必须能看见到底装上了没有。 */
+    private var tlsInstallStatus = "未尝试"
+    private var trustStoreStatus = "未尝试"
+
     /**
      * 部分 Android 4.x 电视的系统 JSSE 只有 SSLv3/TLSv1（实测这台 TCL 就是），而服务端只接受
      * TLS 1.2，于是每个界面都「暂时无法加载」。随包带 Conscrypt 自带实现来补上；装不上
      * （native 库与机型不兼容）就保持系统默认，不阻断启动。
      */
     private fun installTlsProvider() {
-        if (java.security.Security.getProviders().any { it.name == "Conscrypt" }) {
+        // native 库单独试一次：newProvider() 的报错里分不出是 .so 没加载上还是 Java 层失败，
+        // 而这两件事在老设备上的处理方式完全不同（前者换 ABI，后者换实现版本）。
+        val native = runCatching { System.loadLibrary("conscrypt_jni") }
+        tlsInstallStatus = if (java.security.Security.getProviders().any { it.name == "Conscrypt" }) {
             com.hongguotv.core.preferJsseProvider("Conscrypt")
-            return
-        }
-        try {
+            "Conscrypt 已在系统 Provider 列表"
+        } else try {
             val provider = org.conscrypt.Conscrypt.newProvider()
             java.security.Security.insertProviderAt(provider, 1)
             com.hongguotv.core.preferJsseProvider(provider.name)
             android.util.Log.i("HongguoTV", "JSSE provider: ${provider.name}")
+            "Conscrypt 已装载（native 库已加载）"
         } catch (t: Throwable) {
-            android.util.Log.w("HongguoTV", "JSSE provider unavailable: $t")
+            val reason = generateSequence(t) { it.cause }.joinToString(" ← ") { "${it.javaClass.name}: ${it.message}" }
+            android.util.Log.w("HongguoTV", "JSSE provider unavailable: $reason")
+            "Conscrypt 装载失败 · native ${if (native.isSuccess) "已加载" else "未加载：${native.exceptionOrNull()}"} · $reason"
+        }
+    }
+
+    /**
+     * 装载随包的根证书集合。4.x 出厂信任库停在 2013 年那一版，红果接口用的
+     * `RapidSSL → DigiCert Global Root G2` 那条根不在里面，证书这一步必然验不过。
+     */
+    private fun installTrustStore() {
+        trustStoreStatus = try {
+            val pem = assets.open("cacert.pem").use { it.readBytes().toString(Charsets.UTF_8) }
+            if (com.hongguotv.core.TrustStore.install(pem)) "内置信任库已装载 ${com.hongguotv.core.TrustStore.rootCount()} 张根"
+            else "内置信任库装载失败：${com.hongguotv.core.TrustStore.problem()}"
+        } catch (t: Throwable) {
+            val reason = generateSequence(t) { it.cause }.joinToString(" ← ") { "${it.javaClass.name}: ${it.message}" }
+            android.util.Log.w("HongguoTV", "bundled trust store unavailable: $reason")
+            "读取 assets/cacert.pem 失败：$reason"
         }
     }
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
         installTlsProvider()
+        installTrustStore()
         registerBackHandling()
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         librarySources=LibrarySources(this)
@@ -1120,9 +1146,15 @@ class MainActivity: Activity() {
         val license=setting(device,"开源许可") {
             AlertDialog.Builder(this).setTitle("开源许可").setMessage("本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：tsukiyo-zero/hongguoTV。").setPositiveButton("关闭",null).show()
         }
+        heading(device,"这台电视的网络","排查「暂时无法加载」缺的是哪一层")
+        val diagnostics=text("",12f,muted).apply {
+            visibility=View.GONE; setTextIsSelectable(true); setPadding(dp(2),dp(10),dp(2),dp(10))
+        }
+        val network=setting(device,"网络诊断") { showNetworkDiagnostics(diagnostics) }
+        parent.addView(diagnostics)
         heading(playback,"红果账户","账户收藏、历史与预约随账号同步")
         val account=setting(playback,"登录与账户管理") { cloudAccount.show() }
-        val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,account); val right=listOf(updates,license)
+        val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,account); val right=listOf(updates,license,network)
         listOf(left,right).forEach { items -> items.forEachIndexed { index,view ->
             view.nextFocusUpId=items.getOrNull(index-1)?.id ?: nav[tab].id
             view.nextFocusDownId=items.getOrNull(index+1)?.id ?: view.id
@@ -1132,6 +1164,21 @@ class MainActivity: Activity() {
         nav.forEach { it.nextFocusDownId=qualityButton.id }
         parent.addView(text("红果 TV  /  ${BuildConfig.VERSION_NAME}    ·    本机记录独立保存，账户内容随登录账号切换",12f,muted).apply { setPadding(dp(2),dp(18),0,dp(10)) })
         nav[tab].requestFocus()
+    }
+    /**
+     * 设置页里的网络诊断：本机部分不联网、瞬间出结果；联网部分在后台真走一次握手再补上。
+     * 老设备上的「暂时无法加载」分三层（没有 TLS 1.2 实现 / 信任库里没有那条根 / 服务端问题），
+     * 界面文案看不出区别，把三层状态直接打在屏幕上，一张截图就能定位。
+     */
+    private fun showNetworkDiagnostics(view: TextView) {
+        view.visibility=View.VISIBLE
+        val local=runCatching { NetworkDiagnostics.local(tlsInstallStatus,trustStoreStatus) }
+            .getOrElse { "本机诊断失败 $it" }
+        view.text=local
+        Thread {
+            val probe=runCatching { NetworkDiagnostics.probe() }.getOrElse { "联网诊断失败 $it" }
+            main.post { if(screen=="catalog") view.text="$local\n联网测试 $probe" }
+        }.start()
     }
     private fun saveDiscoveryDraft() { (searchInput as? EditText)?.let { searchDraft=it.text.toString() } }
     private fun returnToDiscovery() {

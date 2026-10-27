@@ -99,32 +99,64 @@ private val androidApiLevel: Int by lazy {
  *  各自的客户端一旦漏掉，在 4.4 上就只剩「数据能加载、视频加载不出来」这种半残状态）。 */
 fun newHttpClientBuilder(): okhttp3.OkHttpClient.Builder = okhttp3.OkHttpClient.Builder().compatTls()
 
-/** 给 OkHttp 一个明确启用 TLS 1.2 的 socket factory；设备不支持时保持系统默认。 */
+/** 给 OkHttp 一个明确启用 TLS 1.2+ 的 socket factory；设备不支持时保持系统默认。 */
 internal fun okhttp3.OkHttpClient.Builder.compatTls(): okhttp3.OkHttpClient.Builder {
     if (androidApiLevel > 20) return this
     return try {
-        val trustFactory = javax.net.ssl.TrustManagerFactory.getInstance(
-            javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
-        )
-        trustFactory.init(null as java.security.KeyStore?)
-        val trust = trustFactory.trustManagers.firstOrNull { it is javax.net.ssl.X509TrustManager }
-            as? javax.net.ssl.X509TrustManager ?: return this
-        val context = tlsContext("TLSv1.2")
-        context.init(null, trustFactory.trustManagers, null)
-        // 只给 socket factory 不够：OkHttp 先按 connectionSpecs 挑协议，默认的 MODERN_TLS 含
-        // TLS 1.3，4.4 上 isSupported() 判为不支持就整条跳过，退回 COMPATIBLE_TLS（只有 1.0/1.1），
-        // 于是服务端回 "tlsv1 alert protocol version"，表现为每个界面都「暂时无法加载」。
-        // 这里显式只保留 TLS 1.2，OkHttp 才会真的 setEnabledProtocols("TLSv1.2")。
-        val tls12Only = okhttp3.ConnectionSpec.Builder(okhttp3.ConnectionSpec.MODERN_TLS)
-            .tlsVersions(okhttp3.TlsVersion.TLS_1_2)
-            // 不写死套件名：MODERN_TLS 自带 CHACHA20 等 4.4 没有的套件，一旦逐个比对失败，
-            // 这条 spec 同样会被跳过。交给设备自己那套 enabled suites 去协商。
-            .allEnabledCipherSuites()
-            .build()
-        sslSocketFactory(context.socketFactory, trust).connectionSpecs(listOf(tls12Only))
+        val (context, trust) = newCompatTls() ?: return this
+        val spec = usableTlsSpec(context) ?: return this
+        sslSocketFactory(context.socketFactory, trust).connectionSpecs(listOf(spec))
     } catch (_: Exception) {
         this
     }
+}
+
+/**
+ * 与 [compatTls] 完全同一套 SSLContext 与 TrustManager。
+ * 诊断界面拿它复现真实握手：测的和用的必须走同一条路径，否则「诊断说通过、界面仍报错」
+ * 这种自相矛盾的结果会把排查带回猜。
+ */
+fun newCompatTls(): Pair<javax.net.ssl.SSLContext, javax.net.ssl.X509TrustManager>? = try {
+    // 证书这一层优先用随包的 [TrustStore]：4.x 设备出厂信任库里没有 DigiCert Global Root G2
+    // 这类新根，握手能谈完协议却验不过证书。内置库没装上才退回系统 truststore。
+    val trust = TrustStore.trustManager() ?: systemTrustManager() ?: return null
+    // 算法用 "TLS" 而不是写死 "TLSv1.2"：写死时自带实现装上后反而拿不到 TLS 1.3，
+    // 具体用哪个版本由下面读到的 supported protocols 决定。
+    val context = tlsContext("TLS")
+    context.init(null, arrayOf(trust), null)
+    context to trust
+} catch (_: Exception) {
+    null
+}
+
+private fun systemTrustManager(): javax.net.ssl.X509TrustManager? = try {
+    val factory = javax.net.ssl.TrustManagerFactory.getInstance(
+        javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm()
+    )
+    factory.init(null as java.security.KeyStore?)
+    factory.trustManagers.firstOrNull { it is javax.net.ssl.X509TrustManager } as? javax.net.ssl.X509TrustManager
+} catch (_: Exception) {
+    null
+}
+
+/**
+ * 只保留这台设备真的支持的 TLS 版本。
+ *
+ * 只给 socket factory 不够：OkHttp 先按 connectionSpecs 挑协议，而 `ConnectionSpec.isSupported()`
+ * 是整条判定——默认的 MODERN_TLS 里带着 TLS 1.3，设备上不支持就整条跳过，退回只有 1.0/1.1 的
+ * COMPATIBLE_TLS，服务端回 "tlsv1 alert protocol version"，表现为每个界面都「暂时无法加载」。
+ * 所以必须按设备实际的 supported protocols 现造一条 spec，OkHttp 才会真的 setEnabledProtocols。
+ */
+private fun usableTlsSpec(context: javax.net.ssl.SSLContext): okhttp3.ConnectionSpec? {
+    val supported = context.supportedSSLParameters.protocols.orEmpty().toSet()
+    val usable = listOf("TLSv1.3", "TLSv1.2").filter { it in supported }
+    if (usable.isEmpty()) return null
+    return okhttp3.ConnectionSpec.Builder(okhttp3.ConnectionSpec.MODERN_TLS)
+        .tlsVersions(*usable.map { okhttp3.TlsVersion.forJavaName(it) }.toTypedArray())
+        // 不写死套件名：MODERN_TLS 自带 CHACHA20 等老设备没有的套件，一旦逐个比对失败，
+        // 这条 spec 同样会被跳过。交给设备自己那套 enabled suites 去协商。
+        .allEnabledCipherSuites()
+        .build()
 }
 
 /**
