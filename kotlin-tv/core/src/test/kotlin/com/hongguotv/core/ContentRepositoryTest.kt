@@ -77,7 +77,7 @@ class ContentRepositoryTest {
         assertThrows(IOException::class.java) { repo.searchAll("大佬") }
     }
 
-    @Test fun playbackUsesUnsignedIndependentIdentifiersAndKeepsThemAcrossEpisodes() {
+    @Test fun playbackUsesRegisteredIdentifiersAndKeepsThemAcrossEpisodes() {
         val requests=mutableListOf<Request>()
         val repo=repository { request ->
             requests+=request
@@ -93,7 +93,8 @@ class ContentRepositoryTest {
             assertTrue(request.header("User-Agent").orEmpty().contains("tt-ok/"))
             for(key in listOf("iid","device_id")) {
                 val value=request.url.queryParameter(key)!!
-                assertTrue(value.matches(Regex("3[0-9]{18}")))
+                // 播放只认注册下发的身份，不再自己编 19 位随机数字。
+                assertEquals(if(key=="iid") "444" else "333",value)
                 assertNotEquals(VendorConstants.device[key],value)
                 assertEquals(requests.first().url.queryParameter(key),value)
             }
@@ -166,7 +167,9 @@ class ContentRepositoryTest {
         OkHttpClient.Builder().addInterceptor { chain ->
             Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
                 .code(200).message("OK").body(respond(chain.request()).toResponseBody()).build()
-        }.build(),clock
+        }.build(),clock,
+        // 播放身份固定成注册结果，测试不真的去打设备注册接口。
+        PlaybackDeviceSession { DeviceRegister.Registered("333","444") }
     )
 
     private fun rankPayload(page: Int = 1, totalPages: Int = 2) = JSONObject()

@@ -59,7 +59,7 @@ class FeedStartupCacheTest {
         }.build()
         try {
             repeat(2) {
-                val backend=PublicFeedBackend(720,http=transport(),startupCache=cache)
+                val backend=PublicFeedBackend(720,http=transport(),startupCache=cache,playbackSession=testPlaybackDeviceSession())
                 try {
                     val result=backend.recommendations(1,DramaFeedState().recommendationCursor)
                     backend.trial(result.items.single()).use { clip ->
