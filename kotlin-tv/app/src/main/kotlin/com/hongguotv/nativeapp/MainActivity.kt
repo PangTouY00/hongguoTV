@@ -235,8 +235,29 @@ class MainActivity: Activity() {
     private fun addButton(parent: LinearLayout,label: String,selected: Boolean=false,onClick: ()->Unit): TextView {
         val view=button(label,selected,onClick); parent.addView(view,lp().apply { width=LinearLayout.LayoutParams.WRAP_CONTENT; rightMargin=dp(8) }); return view
     }
+    /**
+     * 部分 Android 4.x 电视的系统 JSSE 只有 SSLv3/TLSv1（实测这台 TCL 就是），而服务端只接受
+     * TLS 1.2，于是每个界面都「暂时无法加载」。随包带 Conscrypt 自带实现来补上；装不上
+     * （native 库与机型不兼容）就保持系统默认，不阻断启动。
+     */
+    private fun installTlsProvider() {
+        if (java.security.Security.getProviders().any { it.name == "Conscrypt" }) {
+            com.hongguotv.core.preferJsseProvider("Conscrypt")
+            return
+        }
+        try {
+            val provider = org.conscrypt.Conscrypt.newProvider()
+            java.security.Security.insertProviderAt(provider, 1)
+            com.hongguotv.core.preferJsseProvider(provider.name)
+            android.util.Log.i("HongguoTV", "JSSE provider: ${provider.name}")
+        } catch (t: Throwable) {
+            android.util.Log.w("HongguoTV", "JSSE provider unavailable: $t")
+        }
+    }
+
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
+        installTlsProvider()
         registerBackHandling()
         window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         librarySources=LibrarySources(this)

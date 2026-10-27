@@ -109,7 +109,7 @@ internal fun okhttp3.OkHttpClient.Builder.compatTls(): okhttp3.OkHttpClient.Buil
         trustFactory.init(null as java.security.KeyStore?)
         val trust = trustFactory.trustManagers.firstOrNull { it is javax.net.ssl.X509TrustManager }
             as? javax.net.ssl.X509TrustManager ?: return this
-        val context = javax.net.ssl.SSLContext.getInstance("TLSv1.2")
+        val context = tlsContext("TLSv1.2")
         context.init(null, trustFactory.trustManagers, null)
         // 只给 socket factory 不够：OkHttp 先按 connectionSpecs 挑协议，默认的 MODERN_TLS 含
         // TLS 1.3，4.4 上 isSupported() 判为不支持就整条跳过，退回 COMPATIBLE_TLS（只有 1.0/1.1），
@@ -125,4 +125,28 @@ internal fun okhttp3.OkHttpClient.Builder.compatTls(): okhttp3.OkHttpClient.Buil
     } catch (_: Exception) {
         this
     }
+}
+
+/**
+ * 部分 Android 4.x 机型（实测 TCL 电视）的系统 JSSE Provider 只有 SSLv3/TLSv1，
+ * `SSLContext.getInstance("TLSv1.2")` 能建出来但 socket 的 supported protocols 里没有 1.2。
+ * 这种设备只能用随包携带的实现，[preferJsseProvider] 由 app 在启动时装好 Conscrypt 后调用。
+ */
+private var jsseProvider: String? = null
+
+/** 指定 JSSE Provider 名；之后创建的 SSLContext 都走它。 */
+fun preferJsseProvider(name: String) {
+    jsseProvider = name
+}
+
+private fun tlsContext(algorithm: String): javax.net.ssl.SSLContext {
+    val provider = jsseProvider
+    if (provider != null) {
+        try {
+            return javax.net.ssl.SSLContext.getInstance(algorithm, provider)
+        } catch (_: Exception) {
+            // Provider 没装上（例如 native 库加载失败），退回系统实现，至少不阻断启动。
+        }
+    }
+    return javax.net.ssl.SSLContext.getInstance(algorithm)
 }
