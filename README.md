@@ -2,11 +2,11 @@
 
 非官方红果短剧客户端，主要维护 Android TV 版，同时提供原生 Mac 客户端 hongguoMac。
 
-当前使用 `kotlin-tv/` 中的 Kotlin 原生客户端，支持 **Android 6.0 及以上**。安装一个 APK 即可使用，无需部署 Node 或 Docker。稳定分支为 `main`；当前 TV 正式版为 **0.1.8（versionCode 49）**，对应标签 `kotlin-v0.1.8`。源码分支合并与 APK 发布分别进行，正式包由 GitHub Actions 在 `kotlin-v*` 标签上构建并发布，下载以正式 Release 附件为准。
+当前使用 `kotlin-tv/` 中的 Kotlin 原生客户端，主包支持 **Android 6.0 及以上**，同一版本另提供 **Android 4.4** 专用包。安装一个 APK 即可使用，无需部署 Node 或 Docker。稳定分支为 `main`；当前 TV 正式版为 **0.1.12（versionCode 53）**，对应标签 `kotlin-v0.1.12`。源码分支合并与 APK 发布分别进行，正式包由 GitHub Actions 在 `kotlin-v*` 标签上构建并发布，下载以正式 Release 附件为准。
 
 ## Android TV 下载与安装
 
-首次安装请下载 **v0.1.1 或更高版本**，之后可在 App 内更新。更新源已切换至 GitCode，后续安装包仅在 GitCode 发布（如果我不偷懒的话就都发），GitHub 继续维护源码。低于 v0.1.1 的版本需手动覆盖安装一次。
+首次安装请下载 **v0.1.1 或更高版本**，之后可在 App 内更新。应用内更新读取本仓库（GitHub）的正式 Release，GitCode 是镜像。Android 6.0+ 下载 `android6` 包；Android 4.4 下载 `android44` 包（旧版 4.4 客户端这一次需手动覆盖安装，之后可自动更新）。低于 v0.1.1 的版本需手动覆盖安装一次。
 
 [GitHub 最新版与发布记录（应用内更新读取此仓库）](https://github.com/PangTouY00/hongguoTV/releases) · [GitCode 镜像发布记录](https://gitcode.com/tsukiyo-zero/hongguoTV/releases)
 

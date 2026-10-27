@@ -57,13 +57,24 @@ python3 scripts/prepare-kotlin-release.py \
     "size": 12345678,
     "sha256": "填写实际64位小写SHA256"
   },
-  "notes": "面向用户的本次更新说明"
+  "notes": "面向用户的本次更新说明",
+  "variants": [
+    {
+      "minSdk": 19,
+      "apk": {"name": "hongguotv-kotlin-0.1.12-android44.apk", "size": 12345678, "sha256": "填写实际64位小写SHA256"}
+    },
+    {
+      "minSdk": 23,
+      "apk": {"name": "hongguotv-kotlin-0.1.12-android6.apk", "size": 12345678, "sha256": "填写实际64位小写SHA256"}
+    }
+  ]
 }
 ```
 
 - versionName、versionCode 必须与 APK 内部版本完全一致，不能只改文件名或清单。
 - tag 必须以 `kotlin-v` 开头，且与 Release 标签一致。
-- APK 名称必须符合 `hongguotv-kotlin-版本标识-android6.apk`；仍兼容 `-android8.apk`。后缀表示最低系统，不是两条独立产品线。文件名和标签允许数字、英文字母、点号、加号和短横线。
+- APK 名称必须符合 `hongguotv-kotlin-版本标识-android6.apk`，或 `-android44.apk`（Android 4.4 构建）；仍兼容 `-android8.apk`。后缀表示最低系统，不是两条独立产品线。文件名和标签允许数字、英文字母、点号、加号和短横线。
+- `variants` 是可选的：同一版本同时发布多个 minSdk 构建时，每个构建一条；App 会选 minSdk ≤ 当前系统版本里最高的那个。顶层 `apk` 仍然必须是 android6 构建，供不认识 `variants` 的旧客户端使用。单构建发布可以完全不带 `variants`。
 - apk.name 与实际附件名一致；size 是字节数，sha256 是实际文件的 SHA256 小写十六进制值。
 - 发布时同时提供对应源码或源码链接，保留 GPL 许可和第三方声明。
 
@@ -75,6 +86,7 @@ python3 scripts/prepare-kotlin-release.py \
 - 相同签名和包名允许覆盖升级并保留数据。签名不匹配时不要通过卸载旧版来强行升级，否则可能丢失本机记录和登录态。
 - 仓库和 Release 必须允许电视匿名访问；App 不保存 GitCode 凭据，不支持从私有仓库下载。网络不可达不影响已有播放功能。
 - 仍指向上游更新源的旧 APK，或只接受 minSdk 26 的早期 APK，可能需要手动覆盖一次本仓库的 Android 6+ 版本。
+- 装着 0.1.12 之前 Android 4.4 构建的设备不认识 `variants`，这一次要手动安装 `android44` 包；装上后即可自动更新。
 
 本仓库不自动发布 Release；发布由维护者明确执行。在线更新仅使用本仓库，不向上游更新仓库同步。
 
