@@ -4,9 +4,17 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.junit.Assert.*
 import org.junit.Test
+import org.robolectric.annotation.Config
 import java.net.InetAddress
 import java.net.ServerSocket
 
+/**
+ * 这个测试原本没有声明 API，于是跑在 Robolectric 的默认配置上（= targetSdk 36）。
+ * OkHttp 3.12 在 SDK_INT >= 28 时会改用 Android 的 NetworkPolicyManager 判断能不能走明文，
+ * 而这里要验的只是「301 要跟着走、不要把 301 抛到界面上」，与 API 级别无关。
+ * 按本分支的统一约定钉在 API 23/26 上：那是这条分支的兼容性回归覆盖，也是明文请求真实存在的环境。
+ */
+@Config(sdk=[23,26])
 class FeedRedirectTest {
     @Test fun contentTransportFollowsRedirectInsteadOfSurfacing301() {
         val server=ServerSocket(0,2,InetAddress.getByName("127.0.0.1"))
