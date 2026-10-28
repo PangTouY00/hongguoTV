@@ -68,3 +68,10 @@ dependencies {
     // Android 4.4 的系统 JSSE 只有 SSLv3/TLSv1，TLS 1.2 这一层必须随包带（见 nativeapp/MainActivity.kt 的 installConscryptIfAvailable）。
     implementation("org.conscrypt:conscrypt-android:2.5.2")
 }
+
+
+// Robolectric 会把 classpath 上存在的 Conscrypt 装成 JSSE provider（AndroidTestEnvironment 里 new OpenSSLProvider()），
+// 而 aar 里那份 .so 是 Android ABI 的，JVM 加载不了：每个用例都会以
+// `UnsatisfiedLinkError: no conscrypt_jni in java.library.path` 开场。单元测试跑在 JVM 自己的 JSSE 上，
+// 不需要这一层，所以只把它从测试 classpath 里排除，实现与打包不受影响。
+configurations.matching { it.name.startsWith("test") }.all { exclude(group = "org.conscrypt") }
