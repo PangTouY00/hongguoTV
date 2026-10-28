@@ -13,7 +13,7 @@ import org.json.JSONObject
 import java.util.concurrent.Executors
 
 /** Owns only anonymous social reads. Playback and account writes are independent. */
-internal class TvSocial(private val activity: Activity,private val player: ()->ExoPlayerPlayer?,private val identity: ()->Pair<String,String>?,
+internal class TvSocial(private val activity: Activity,private val player: ()->VideoPlayerBackend?,private val identity: ()->Pair<String,String>?,
     private val readComments: (String,String,String)->JSONObject = AppCommentPages()::read,
     private val readReviews: (String,String)->JSONObject = PublicComments(newHttpClientBuilder().build())::read
 ) {

@@ -14,7 +14,13 @@ android {
         versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 53
         versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.1.12"
     }
-    buildFeatures { buildConfig = true }
+    buildFeatures {
+        buildConfig = true
+        // 强制软解：在硬解可用的开发机上把整条播放路切到随包 FFmpeg，用来验证软解链路本身。
+        // 正式包不带这个开关（默认 false），设备上有硬解就仍然走硬解。
+        buildConfigField("boolean", "FORCE_SOFT_DECODE",
+            (System.getenv("HONGGUOTV_FORCE_SOFT_DECODE")?.toBoolean() ?: false).toString())
+    }
     testOptions {
         unitTests.isIncludeAndroidResources = true
         unitTests.all { it.systemProperty("robolectric.dependency.repo.url","https://repo.maven.apache.org/maven2") }
@@ -48,4 +54,12 @@ dependencies {
     // 所以 Android 4.4 只能用这一版。
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-common:1.4.1")
+    // 随包的软件解码器（见 nativeapp/SoftwareDecoder.kt 与 IjkPlayerPlayer.kt）。
+    // 这台 Android 4.4 电视没有任何 H.265 解码器，而播放接口给它的每一档都是 bytevc1：
+    // 系统硬解那条路对它没有出路，能播的唯一办法是自带解码器。
+    // 这条线是 ijkplayer 0.8.8（携带 FFmpeg 4.0，内置 hevc 解码器），官方支持到 Android 4.1；
+    // 这里的坐标是腾讯 IoT 重新发布到 Maven Central 的那一份（原坐标 tv.danmaku.ijk.media 只上过 jcenter），
+    // 包名与 JNI 符号都保持 ijkplayer 原样，minSdk 9。只带 armeabi-v7a：目标电视是 32 位。
+    implementation("com.tencent.iot.thirdparty.android:ijkplayer-java:2.0.17")
+    implementation("com.tencent.iot.thirdparty.android:ijkplayer-armv7a:2.0.17")
 }

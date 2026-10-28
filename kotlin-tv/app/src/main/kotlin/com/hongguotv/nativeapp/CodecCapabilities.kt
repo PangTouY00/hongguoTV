@@ -33,15 +33,34 @@ object CodecCapabilities {
         "bytevc1","hvc1","hev1","h265","hevc" -> VIDEO_HEVC
         else -> null
     }
-    /** MediaCodecList 的构造函数在 API 19 上不是 public，REGULAR_CODECS 也还不存在，按名字取。 */
-    private fun codecInfos(): List<MediaCodecInfo>? = try {
-        val constructor=MediaCodecList::class.java.getConstructor(Int::class.javaPrimitiveType).apply { setAccessible(true) }
-        val flags=try { MediaCodecList::class.java.getField("REGULAR_CODECS").getInt(null) } catch (_: Exception) { -1 }
-        val list=constructor.newInstance(flags) as MediaCodecList
-        @Suppress("UNCHECKED_CAST")
-        val infos=MediaCodecList::class.java.getMethod("getCodecInfos").invoke(list) as Array<MediaCodecInfo>
-        infos.toList()
-    } catch (_: Exception) { null }
+    @Volatile private var cachedInfos: List<MediaCodecInfo>? = null
+    /** API 19 上 MediaCodecList 只有一个 private 构造器，getConstructor 找不到它；getCodecInfos 又要到
+     *  API 21 才存在。两条路都试：先按名字取私有构造器，失败就退回 4.4 上真正可用的静态方法
+     *  getCodecCount()/getCodecInfoAt()。之前只走第一条，结果整份列表读不到，所有档位都被当成可解。 */
+    private fun probeCodecInfos(): List<MediaCodecInfo>? {
+        val reflective=runCatching {
+            val constructor=MediaCodecList::class.java.getDeclaredConstructor(Int::class.javaPrimitiveType).apply { isAccessible=true }
+            val flags=runCatching { MediaCodecList::class.java.getField("REGULAR_CODECS").getInt(null) }.getOrDefault(-1)
+            val list=constructor.newInstance(flags) as MediaCodecList
+            @Suppress("UNCHECKED_CAST")
+            (MediaCodecList::class.java.getMethod("getCodecInfos").invoke(list) as Array<MediaCodecInfo>).toList()
+        }.getOrNull()
+        if(!reflective.isNullOrEmpty()) return reflective
+        val legacy=runCatching {
+            val count=MediaCodecList::class.java.getMethod("getCodecCount").invoke(null) as Int
+            val at=MediaCodecList::class.java.getMethod("getCodecInfoAt",Int::class.javaPrimitiveType)
+            (0 until count).map { at.invoke(null,it) as MediaCodecInfo }
+        }.getOrNull()
+        return legacy?.takeIf { it.isNotEmpty() }
+    }
+    private fun codecInfos(): List<MediaCodecInfo>? {
+        cachedInfos?.let { return it }
+        val probed=probeCodecInfos() ?: return null
+        cachedInfos=probed
+        return probed
+    }
+    /** 探测本身成不成功。界面用它区分「本机确实没有这种解码器」和「本机问不出解码器」。 */
+    fun probeAvailable(): Boolean = codecInfos()!=null
     fun supports(codec: String,width: Int?,height: Int?): Boolean {
         if(lessons.fails(codec,width,height)) return false
         val type=mime(codec) ?: return true

@@ -136,15 +136,20 @@ internal interface TrialPlayback {
 internal class ExoPlayerTrialPlayback(private val context: android.content.Context): TrialPlayback {
     private val surface=android.view.SurfaceView(context).apply { isFocusable=false }
     private val main=android.os.Handler(android.os.Looper.getMainLooper())
-    private var player: ExoPlayerPlayer?=null
+    private var player: VideoPlayerBackend?=null
     private var activeId: String?=""
     private var startedAt=0L
     override var status: ((TrialStatus)->Unit)?=null
     override val view: android.view.View get()=surface
     private fun key(clip: TrialClip)=clip.detail.series.id+":"+clip.episodeId
-    private fun backend(): ExoPlayerPlayer {
-        player?.let { return it }
-        val created=ExoPlayerPlayer(context, surface.holder, object: PlaybackListener {
+    /** 首页试播和正片用同一套选择：设备有硬解就用设备的，没有才走随包软解。
+     *  换一条 clip 时如果需要的后端变了，必须重建——把软解的实例拿去播硬解的档位，
+     *  或者反过来，都只是把同一件事换条路失败一次。 */
+    private fun backend(codec: String): VideoPlayerBackend {
+        val existing=player
+        if(existing!=null && PlaybackBackends.usesSoftwareDecode(codec)==(existing is IjkPlayerPlayer)) return existing
+        existing?.release()
+        val created=PlaybackBackends.create(context, surface.holder, codec, object: PlaybackListener {
             override fun onStateChanged(state: Int) {
                 status?.invoke(when(state) {
                     PlaybackState.BUFFERING->TrialStatus.BUFFERING
@@ -170,7 +175,7 @@ internal class ExoPlayerTrialPlayback(private val context: android.content.Conte
         activeId=key(clip);startedAt=android.os.SystemClock.elapsedRealtime()
         // 先按已经读到的视频头排好画面，再开始播：中途改尺寸会让 Surface 重新分配、白闪一下。
         clip.video.trackInfo()?.let { frame-> main.post { FrameFit.apply(surface,frame.width,frame.height,VideoFrameMode.FIT) } }
-        backend().prepare(PlaybackSource(clip.video,activeId!!),position,autoplay)
+        backend(clip.video.trackInfo()?.fourcc ?: "").prepare(PlaybackSource(clip.video,activeId!!),position,autoplay)
     }
     override fun load(clip: TrialClip,position: Long,autoplay: Boolean)=play(clip,position,autoplay)
     /** 没有预加载队列，界面层不需要为下一条提前腾位置。 */

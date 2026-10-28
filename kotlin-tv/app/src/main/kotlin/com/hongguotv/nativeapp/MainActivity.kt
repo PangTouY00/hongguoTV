@@ -166,7 +166,7 @@ class MainActivity: Activity() {
     private var episodeIndex=0
     private var group=0
     private var synopsisExpanded=false
-    private var player: ExoPlayerPlayer?=null
+    private var player: VideoPlayerBackend?=null
     private var video: RemoteVideo?=null
     private var playbackReady=false
     private var pausedForLifecycle=false
@@ -1409,14 +1409,16 @@ class MainActivity: Activity() {
         val requestedId=data.episodes[episodeIndex]; val maxQuality=library.maxQuality; val ticket=generation
         work({ val carried=claimWarmup(targetKey,warmupInFlight)
             carried.first?.let { OpenedStream(it,null,emptyList(),it.trackInfo(),carried.second) }
-                ?: openStream(repository.http,repository,requestedId,maxQuality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) } }, { opened ->
+                ?: openStream(repository.http,repository,requestedId,maxQuality,PlaybackBackends::canPlay) { PlaybackBackends.canPlay(it) } }, { opened ->
             val remote=opened.video; video=remote; val carriedOver=opened.http!=null
             if(carriedOver) playbackHttp=opened.http
             quality=playedQualityLabel(opened,maxQuality); attemptedQuality=opened.rendition?.quality ?: 0
             currentTrack=opened.track; currentRendition=opened.rendition; currentTiers=opened.tiers
             val surface=checkNotNull(playerView)
-            lateinit var p: ExoPlayerPlayer
-            p=ExoPlayerPlayer(this@MainActivity, surface.holder, object: PlaybackListener {
+            // 这一档走哪条路取决于设备：有硬解就用设备的（省 CPU），没有才用随包的 FFmpeg 软解。
+            val codec=currentRendition?.codec ?: currentTrack?.fourcc ?: ""
+            lateinit var p: VideoPlayerBackend
+            p=PlaybackBackends.create(this@MainActivity, surface.holder, codec, object: PlaybackListener {
                 private fun active()=player===p && generation==ticket && p.currentMediaId==data.episodes.getOrNull(episodeIndex)
                 override fun onStateChanged(state: Int) {
                     if(!active()) return
@@ -1499,7 +1501,7 @@ class MainActivity: Activity() {
             var remote: RemoteVideo?=null
             try {
                 val prepared=scope.run {
-                    val opened=openStream(http,source,id,quality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) }
+                    val opened=openStream(http,source,id,quality,PlaybackBackends::canPlay) { PlaybackBackends.canPlay(it) }
                     opened.video.also { remote=it; it.warm(warmBytes) }
                 }
                 if(preparedNext.complete(ticket,key,prepared)) {
@@ -1557,7 +1559,8 @@ class MainActivity: Activity() {
         appendLine("失败原因：${problem.javaClass.simpleName}: ${problem.message.orEmpty().ifBlank { "无附加信息" }}")
         if(currentTiers.isEmpty()) appendLine("播放接口没有给出清晰度") else {
             appendLine("接口给出的清晰度：")
-            currentTiers.forEach { appendLine("  ${it.quality}P ${it.codec.ifBlank { "未知编码" }} ${it.width}x${it.height} · ${if(CodecCapabilities.supports(it)) "本机可解" else "本机不支持"}") }
+            // 探测本身读不到解码器时不能谎称「可解」：这一行是界面上唯一的证据，必须区分三种情况。
+            currentTiers.forEach { appendLine("  ${it.quality}P ${it.codec.ifBlank { "未知编码" }} ${it.width}x${it.height} · ${playableWay(it)}") }
         }
         appendLine("本次尝试：${if(attemptedQuality>0) "${attemptedQuality}P" else "未取到流"} · 清晰度上限 ${library.maxQuality}P · 已自动降清 $autoDowngrades 次")
         // 只读已解析的身份：诊断跑在主线程，读 playerDevice 会在未解析时同步发一次注册请求。
@@ -1567,7 +1570,16 @@ class MainActivity: Activity() {
         appendLine("已记录的解码失败：${CodecCapabilities.learnedCount()} 条")
         val probe=streamProbe
         appendLine(probe ?: "流探测：进行中")
+        appendLine("随包软解：${SoftwareDecoder.summary()}")
         append("本机解码器：${CodecCapabilities.deviceSummary()}")
+    }
+    /** 这一档靠什么播：系统硬解、随包软解，还是两条路都不行。界面上必须能分清，
+     *  因为「软解在跑」和「硬解在跑」对这台老电视的意义完全不同。 */
+    private fun playableWay(rendition: com.hongguotv.core.Rendition): String = when {
+        !CodecCapabilities.probeAvailable() -> "本机解码器未知"
+        CodecCapabilities.supports(rendition) -> "系统硬解可播"
+        SoftwareDecoder.supports(rendition.codec) -> "随包软解可播"
+        else -> "系统没有这个解码器，随包软解也不覆盖它"
     }
     private fun playerFailure(problem: Throwable) {
         retryPosition=currentPosition().coerceAtLeast(0); retryAutoplay=requestedAutoplay && !sleepStopped
@@ -1599,8 +1611,10 @@ class MainActivity: Activity() {
         // 注册失败和「取不到流」不是一回事：前者的解决动作是重试注册，而不用登录或换清晰度。
         val registrationFailure=generateSequence(problem){ it.cause }.take(8)
             .any { it is com.hongguotv.core.PlaybackDeviceRegistrationException }
+        val softDecoding=decoding && PlaybackBackends.usesSoftwareDecode(currentRendition?.codec ?: currentTrack?.fourcc ?: "")
         playbackText.text=when {
             registrationFailure -> "播放设备注册失败，请稍后重试（无需登录）。"
+            softDecoding -> "随包的软解也解不了当前视频，可尝试更低清晰度。"
             decoding -> "电视无法解码当前视频，可尝试更低清晰度。"
             else -> "播放失败，可重试或切换清晰度。"
         }
@@ -1787,7 +1801,8 @@ class MainActivity: Activity() {
         val state=when { p.playbackState==PlaybackState.BUFFERING -> "缓冲中"; p.playbackState==PlaybackState.ENDED -> "本集已结束"; !p.playWhenReady -> "已暂停"; else -> "正在播放" }
         // 4.4 的 MediaPlayer 没有变速能力，界面上不再假装可以倍速。
         val speed="原速"
-        playbackText.text="$state  ·  ${formatTime(position)} / ${formatTime(duration)}  ·  $quality  ·  $speed"+(if(touchLock) "  ·  已锁定" else "")+(if(sleepTimer.active) "  ·  定时 ${sleepTimer.label()}" else "")
+        val backend=if(p.backendName!="系统硬解") "  ·  ${p.backendName}" else ""
+        playbackText.text="$state  ·  ${formatTime(position)} / ${formatTime(duration)}  ·  $quality  ·  $speed"+backend+(if(touchLock) "  ·  已锁定" else "")+(if(sleepTimer.active) "  ·  定时 ${sleepTimer.label()}" else "")
         progressBar.progress=if(duration>0) (position*1000/duration).toInt().coerceIn(0,1000) else 0
     }
     private fun requestPlayback(play: Boolean) {
