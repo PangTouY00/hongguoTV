@@ -16,7 +16,25 @@ import java.net.ServerSocket
  */
 @Config(sdk=[23,26])
 class FeedRedirectTest {
+    /**
+     * 清单里写的是 android:usesCleartextTraffic="true"，但 Robolectric 造出来的 ApplicationInfo 不会带上
+     * framework 判断明文流量用的那个私有标志，于是 OkHttp 在 Android 平台上会先撞在
+     * `CLEARTEXT communication not enabled for client` 上——这个用例要验的只是重定向，跟明文许可无关。
+     * 这里把清单里已经声明的同一个许可补到测试的应用信息上：低于 API 28 时框架默认允许明文，
+     * 那个私有标志则直接对应清单里的声明。两步都容错，取不到就保持原样。
+     */
+    private fun allowCleartextTraffic() {
+        val info=org.robolectric.RuntimeEnvironment.getApplication().applicationInfo
+        info.targetSdkVersion=android.os.Build.VERSION_CODES.O
+        runCatching {
+            val flag=android.content.pm.ApplicationInfo::class.java
+                .getField("PRIVATE_FLAG_ALLOW_CLEARTEXT_TRAFFIC").getInt(null)
+            info.privateFlags=info.privateFlags or flag
+        }
+    }
+
     @Test fun contentTransportFollowsRedirectInsteadOfSurfacing301() {
+        allowCleartextTraffic()
         val server=ServerSocket(0,2,InetAddress.getByName("127.0.0.1"))
         val errors=java.util.concurrent.atomic.AtomicReference<Throwable?>()
         val serving=Thread {
