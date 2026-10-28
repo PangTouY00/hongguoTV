@@ -74,8 +74,9 @@ dependencies {
 // 而 aar 里那份 .so 是 Android ABI 的，JVM 加载不了：每个用例都会以
 // `UnsatisfiedLinkError: no conscrypt_jni in java.library.path` 开场。单元测试跑在 JVM 自己的 JSSE 上，
 // 不需要这一层，所以只把它从测试 classpath 里排除，实现与打包不受影响。
-tasks.withType<Test>().configureEach {
-    // AGP 给 :app:testDebugUnitTest 用的 classpath 叫 debugUnitTestRuntimeClasspath，不叫 test*，
-    // 按 configuration 名字排除会落空；直接在测试任务的 classpath 上过滤掉这份工件。
-    classpath = classpath.filter { !it.name.contains("conscrypt", ignoreCase = true) }
+// AGP 给 :app:testDebugUnitTest 用的解析配置叫 debugUnitTestRuntimeClasspath，不以 test 开头；
+// 在 Test 任务上过滤 classpath 也拦不住 Robolectric——它从这条 configuration 自己组装 SandboxClassLoader。
+// 所以直接在依赖解析层排除，让这份工件根本不出现在任何单元测试的 classpath 上。
+configurations.configureEach {
+    if (name.contains("UnitTest")) exclude(group = "org.conscrypt", module = "conscrypt-android")
 }
