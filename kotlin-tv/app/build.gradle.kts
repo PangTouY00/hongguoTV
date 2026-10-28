@@ -13,14 +13,12 @@ android {
         targetSdk = 36
         versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 53
         versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.1.12"
-    }
-    buildFeatures {
-        buildConfig = true
         // 强制软解：在硬解可用的开发机上把整条播放路切到随包 FFmpeg，用来验证软解链路本身。
-        // 正式包不带这个开关（默认 false），设备上有硬解就仍然走硬解。
+        // 正式包不带这个开关（默认 false），设备上有硬解就仍然走设备自己的解码器。
         buildConfigField("boolean", "FORCE_SOFT_DECODE",
             (System.getenv("HONGGUOTV_FORCE_SOFT_DECODE")?.toBoolean() ?: false).toString())
     }
+    buildFeatures { buildConfig = true }
     testOptions {
         unitTests.isIncludeAndroidResources = true
         unitTests.all { it.systemProperty("robolectric.dependency.repo.url","https://repo.maven.apache.org/maven2") }

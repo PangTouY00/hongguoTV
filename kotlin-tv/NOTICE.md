@@ -25,6 +25,7 @@ https://github.com/charlie901208/HGTV/tree/feat/phone-login 。`DeviceRegister.k
 - jsoup（仅解析官网 HTML，不执行网页脚本）：https://jsoup.org/ — MIT
 - Android desugar_jdk_libs：https://github.com/google/desugar_jdk_libs — GPL-2.0 with Classpath Exception
 - Conscrypt（仅 Android 4.4 分支随包携带，补上系统里没有的 TLS 1.2/1.3 实现）：https://github.com/google/conscrypt — BSD-3-Clause
+- ijkplayer（仅 Android 4.4 分支随包携带，给没有任何 H.265 硬解的盒子补一份软件解码器）：https://github.com/bilibili/ijkplayer — GPL-3.0 with linking exception。APK 里的 java 层与 armeabi-v7a 原生库取自 Maven Central 上由腾讯 IoT 重新发布的 `com.tencent.iot.thirdparty.android:ijkplayer-java:2.0.17` 与 `ijkplayer-armv7a:2.0.17`（其 POM 声明 Tencent Binary License），对应 ijkplayer 0.8.8 一线，内含 FFmpeg 4.0（GPL-2.0+ / LGPL-2.1+）。本仓库只调用它的公开接口，未改动其源码。
 - 内置根证书集合 `app/src/main/assets/cacert.pem`（curl 项目发布的 Mozilla CA 证书包，可用 `curl -o app/src/main/assets/cacert.pem https://curl.se/ca/cacert.pem` 更新）：https://curl.se/docs/caextract.html — MPL-2.0
 - org.json（仅 JVM 工具，APK 使用 Android 内置实现）：https://github.com/stleary/JSON-java — 公有领域声明
 - JUnit（仅测试）：https://github.com/junit-team/junit4 — EPL-1.0
