@@ -74,4 +74,8 @@ dependencies {
 // 而 aar 里那份 .so 是 Android ABI 的，JVM 加载不了：每个用例都会以
 // `UnsatisfiedLinkError: no conscrypt_jni in java.library.path` 开场。单元测试跑在 JVM 自己的 JSSE 上，
 // 不需要这一层，所以只把它从测试 classpath 里排除，实现与打包不受影响。
-configurations.matching { it.name.startsWith("test") }.all { exclude(group = "org.conscrypt") }
+tasks.withType<Test>().configureEach {
+    // AGP 给 :app:testDebugUnitTest 用的 classpath 叫 debugUnitTestRuntimeClasspath，不叫 test*，
+    // 按 configuration 名字排除会落空；直接在测试任务的 classpath 上过滤掉这份工件。
+    classpath = classpath.filter { !it.name.contains("conscrypt", ignoreCase = true) }
+}
