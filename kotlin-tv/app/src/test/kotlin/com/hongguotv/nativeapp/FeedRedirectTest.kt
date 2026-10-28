@@ -4,16 +4,20 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.net.InetAddress
 import java.net.ServerSocket
 
 /**
- * 这个测试原本没有声明 API，于是跑在 Robolectric 的默认配置上（= targetSdk 36）。
- * OkHttp 3.12 在 SDK_INT >= 28 时会改用 Android 的 NetworkPolicyManager 判断能不能走明文，
- * 而这里要验的只是「301 要跟着走、不要把 301 抛到界面上」，与 API 级别无关。
- * 按本分支的统一约定钉在 API 23/26 上：那是这条分支的兼容性回归覆盖，也是明文请求真实存在的环境。
+ * 这个测试原本既没有声明 runner 也没有声明 API：它跑在裸 JVM 上，OkHttp 也就用 JVM 那一套。
+ * 而这里要验的「301 要跟着走、不要把 301 抛到界面上」用的正是应用自己的 OkHttpClient，
+ * 测试 classpath 上又存在 Robolectric 的 android-all，于是 OkHttp 会挑到 Android 那一套实现。
+ * 按本分支的统一约定补上 runner 并钉在 API 23/26（那是这条分支的兼容性回归覆盖），
+ * 让它跑在一个有应用信息、能表达清单声明的环境里。
  */
+@RunWith(RobolectricTestRunner::class)
 @Config(sdk=[23,26])
 class FeedRedirectTest {
     /**
@@ -22,6 +26,12 @@ class FeedRedirectTest {
      * `CLEARTEXT communication not enabled for client` 上——这个用例要验的只是重定向，跟明文许可无关。
      * 这里把清单里已经声明的同一个许可补到测试的应用信息上：低于 API 28 时框架默认允许明文，
      * 那个私有标志则直接对应清单里的声明。两步都容错，取不到就保持原样。
+     *
+     * 这个测试原本没有声明 runner，于是跑在裸 JVM 上；而测试 classpath 上存在 Robolectric 的 android-all，
+     * OkHttp 3.12 会挑到它的 Android platform 实现（com.android.org.conscrypt.SSLParametersImpl 在那上面），
+     * 然后去问 framework 的明文策略——裸 JVM 上那个策略读不到任何应用信息，只能回「不允许」。
+     * 按仓库的统一约定补上 @RunWith(RobolectricTestRunner::class) 之后，应用信息存在，
+     * 清单里声明的许可才有地方可以表达。
      */
     private fun allowCleartextTraffic() {
         val info=org.robolectric.RuntimeEnvironment.getApplication().applicationInfo
