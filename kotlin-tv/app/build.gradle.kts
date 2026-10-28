@@ -13,6 +13,9 @@ android {
         targetSdk = 36
         versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 53
         versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.1.12"
+        // API 19 没有自动 multidex（AGP 只在 minSdk 21 起自动开启），而这条分支的依赖总量已经超过
+        // 单个 dex 的 65536 方法上限：显式开启，并由 HongguoApplication 在 attachBaseContext 装载第二个 dex。
+        multiDexEnabled = true
         // 强制软解：在硬解可用的开发机上把整条播放路切到随包 FFmpeg，用来验证软解链路本身。
         // 正式包不带这个开关（默认 false），设备上有硬解就仍然走设备自己的解码器。
         buildConfigField("boolean", "FORCE_SOFT_DECODE",
@@ -60,4 +63,6 @@ dependencies {
     // 包名与 JNI 符号都保持 ijkplayer 原样，minSdk 9。只带 armeabi-v7a：目标电视是 32 位。
     implementation("com.tencent.iot.thirdparty.android:ijkplayer-java:2.0.17")
     implementation("com.tencent.iot.thirdparty.android:ijkplayer-armv7a:2.0.17")
+    // minSdk 19 需要显式带 multidex 支持库；minSdk 21 起系统自带，不需要这一行。
+    implementation("androidx.multidex:multidex:2.0.1")
 }
