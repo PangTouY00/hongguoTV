@@ -8,6 +8,8 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
+import androidx.annotation.OptIn
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
@@ -20,7 +22,12 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
  * 它和 main 分支用的是同一类播放器，区别只有依赖版本：这里钉在 androidx.media3 1.4.1，
  * 那是官方最后一个 minSdk 19 的版本。取流走 [VideoDataSource]：解密样本直接交给播放器，
  * 不再伪装成本地 http 地址。
+ *
+ * AnalyticsListener、ProgressiveMediaSource.Factory 与 setMediaSource 在 1.4.1 里都还标着
+ * UnstableApi，不显式认领就是 lint 的 UnsafeOptInUsageError 错误（11 个）。这里整类认领：
+ * 我们用的就是这一版钉死的接口，升级 media3 时应当重新核对这一行。
  */
+@OptIn(markerClass = [UnstableApi::class])
 internal class ExoPlayerPlayer(
     context: Context,
     private val holder: SurfaceHolder,
