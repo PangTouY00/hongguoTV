@@ -65,4 +65,6 @@ dependencies {
     implementation("com.tencent.iot.thirdparty.android:ijkplayer-armv7a:2.0.17")
     // minSdk 19 需要显式带 multidex 支持库；minSdk 21 起系统自带，不需要这一行。
     implementation("androidx.multidex:multidex:2.0.1")
+    // Android 4.4 的系统 JSSE 只有 SSLv3/TLSv1，TLS 1.2 这一层必须随包带（见 nativeapp/MainActivity.kt 的 installConscryptIfAvailable）。
+    implementation("org.conscrypt:conscrypt-android:2.5.2")
 }
