@@ -26,10 +26,12 @@ class FeedRedirectTest {
     private fun allowCleartextTraffic() {
         val info=org.robolectric.RuntimeEnvironment.getApplication().applicationInfo
         info.targetSdkVersion=android.os.Build.VERSION_CODES.O
+        // privateFlags 与那个常量在 SDK 的 android.jar 里都是 @hide，编译期引用不到，只能走反射。
         runCatching {
-            val flag=android.content.pm.ApplicationInfo::class.java
-                .getField("PRIVATE_FLAG_ALLOW_CLEARTEXT_TRAFFIC").getInt(null)
-            info.privateFlags=info.privateFlags or flag
+            val kind=Class.forName("android.content.pm.ApplicationInfo")
+            val field=kind.getDeclaredField("privateFlags")
+            val flag=kind.getField("PRIVATE_FLAG_ALLOW_CLEARTEXT_TRAFFIC").getInt(null)
+            field.setInt(info, field.getInt(info) or flag)
         }
     }
 
