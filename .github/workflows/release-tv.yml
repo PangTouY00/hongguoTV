@@ -10,7 +10,11 @@ on:
       tag:
         description: 要发布的 kotlin-v 标签（用于中断后继续同一版本）
         required: true
-        default: kotlin-v0.1.11
+        default: kotlin-v0.1.12
+      variant:
+        description: '发布哪些构建：both（Android 6.0+ 与 4.4）或 android6（只发 Android 6.0+）'
+        required: false
+        default: both
 permissions:
   contents: write
 jobs:
@@ -110,6 +114,8 @@ jobs:
   android44:
     name: Android 4.4 构建
     needs: android6
+    # 只发高版本（Android 6.0+）时跳过 4.4 构建；4.4 线保留在 android44-support 分支。
+    if: ${{ (github.event.inputs.variant || 'both') != 'android6' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -193,6 +199,8 @@ jobs:
   publish:
     name: 发布正式版
     needs: [android6, android44]
+    # android44 被跳过时 needs 里那一项是 skipped，必须用 always() 才能继续发布。
+    if: ${{ always() && needs.android6.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -231,7 +239,7 @@ jobs:
               changes="$(git log --no-merges -n 25 --pretty=format:'- %s')"
             fi
             {
-              printf '%s\n' "红果 TV ${version} 正式版（versionCode 见下方清单），同时提供 Android 6.0+ 与 Android 4.4 两个构建。"
+              printf '%s\n' "红果 TV ${version} 正式版（versionCode 见下方清单）。"
               printf '\n## %s\n%s\n' "$heading" "$changes"
               printf '\n## 检查\nGitHub Actions 已运行 :core:test、:app:testDebugUnitTest、:app:lintDebug、:app:assembleDebug、:app:assembleRelease，全部通过后才发布本包。\n'
             } > notes.md
@@ -252,8 +260,14 @@ jobs:
           build_tools="$(ls -d "$ANDROID_HOME"/build-tools/* | tail -n1)"
           if [ -x "$build_tools/aapt" ]; then aapt_tool="$build_tools/aapt"; else aapt_tool="$build_tools/aapt2"; fi
           android6="$(ls artifacts/*-android6.apk)"
-          android44="$(ls artifacts/*-android44.apk)"
-          out="$(python3 scripts/prepare-kotlin-release.py --apk "$android6" --variant-apk "$android44" \
+          variant_args=""
+          if ls artifacts/*-android44.apk >/dev/null 2>&1; then
+            variant_args="--variant-apk $(ls artifacts/*-android44.apk)"
+          else
+            echo "只发布 Android 6.0+ 构建，本次不带 4.4 变体。"
+          fi
+          # shellcheck disable=SC2086
+          out="$(python3 scripts/prepare-kotlin-release.py --apk "$android6" $variant_args \
             --aapt "$aapt_tool" --output outputs/release --tag "$RELEASE_TAG" \
             --update-notes-file update-notes.md --notes-file notes.md)"
           echo "directory=$out" >> "$GITHUB_OUTPUT"
@@ -263,8 +277,11 @@ jobs:
           from pathlib import Path
           manifest = json.loads((Path(sys.argv[1]) / "update.json").read_text(encoding="utf-8"))
           variants = manifest.get("variants", [])
-          assert len(variants) == 2, manifest
-          assert {v["minSdk"] for v in variants} == {19, 23}, manifest
+          if variants:
+              assert len(variants) == 2, manifest
+              assert {v["minSdk"] for v in variants} == {19, 23}, manifest
+          else:
+              assert manifest["minSdk"] == 23, manifest
           print("update.json:", json.dumps({k: manifest[k] for k in ("versionCode", "versionName", "minSdk")},
                                            ensure_ascii=False), "variants:", [v["minSdk"] for v in variants])
           PY
@@ -277,7 +294,7 @@ jobs:
             echo "$apk: $("$build_tools/apksigner" verify --print-certs "$apk" | sed -n 's/.*certificate SHA-256 digest: //p' | head -n1)"
           done
           fingerprints="$("$build_tools/apksigner" verify --print-certs outputs/release/*/*.apk | sed -n 's/.*certificate SHA-256 digest: //p' | sort -u | wc -l)"
-          [ "$fingerprints" -eq 1 ] || { echo "Android 6.0+ 与 Android 4.4 的签名不一致"; exit 1; }
+          [ "$fingerprints" -eq 1 ] || { echo "同一次发布的多个构建签名不一致"; exit 1; }
       - name: Publish the formal release
         env:
           GH_TOKEN: ${{ github.token }}
