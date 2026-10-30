@@ -387,7 +387,9 @@ class ContentRepositoryTest {
         val repo=repository { request ->
             requests++
             assertNotNull(request.header("x-gorgon"))
-            assertEquals(VendorConstants.device["device_id"],request.url.queryParameter("device_id"))
+            // 搜索和播放一样用注册下发的身份，不再是 VendorConstants.device 里那对写死的旧 id。
+            assertEquals("3000000000000000002",request.url.queryParameter("device_id"))
+            assertEquals("3000000000000000001",request.url.queryParameter("iid"))
             assertEquals("19",request.url.queryParameter("tab_type"))
             assertEquals(if(requests==1) "0" else "20",request.url.queryParameter("offset"))
             assertEquals("修仙",request.url.queryParameter("query"))
@@ -412,14 +414,35 @@ class ContentRepositoryTest {
         assertEquals(1,requests)
     }
 
-    @Test fun shortSearchKeepsWebsiteFallback() {
+    @Test fun shortSearchKeepsTheAppEndpointOnly() {
         val paths=mutableListOf<String>()
         val repo=repository { request ->
             paths+=request.url.encodedPath
-            if(paths.size==1) throw IOException("offline")
-            """{"searchList":[{"series_id":"456","series_name":"测试短剧"}]}"""
+            JSONObject().put("code",0).put("search_tabs",JSONArray().put(searchTab(11,"456"))).toString()
         }
         assertEquals("456",repo.search("短剧",1,ContentType.SHORT).items.single().id)
-        assertEquals(2,paths.size)
+        // 网页搜索接口已被风控关闭（503），短剧搜索也不许再回退到它。
+        assertEquals(listOf("/reading/bookapi/search/tab/v"),paths)
+    }
+
+    @Test fun shortSearchFailureIsReportedInsteadOfRetryingTheDisabledWebsiteEndpoint() {
+        val paths=mutableListOf<String>()
+        val repo=repository { request ->
+            paths+=request.url.encodedPath
+            throw IOException("offline")
+        }
+        assertThrows(IOException::class.java) { repo.search("短剧",1,ContentType.SHORT) }
+        assertEquals(listOf("/reading/bookapi/search/tab/v"),paths)
+    }
+
+    @Test fun searchReportsMissingDeviceRegistrationInsteadOfAnHttpError() {
+        val repo=ContentRepository(
+            OkHttpClient.Builder().addInterceptor { chain ->
+                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
+                    .code(200).message("OK").body("".toResponseBody()).build()
+            }.build(), { 0L },
+            PlaybackDeviceSession { throw IOException("register refused") },
+        )
+        assertThrows(SearchIdentityException::class.java) { repo.search("短剧",1,ContentType.SHORT) }
     }
 }

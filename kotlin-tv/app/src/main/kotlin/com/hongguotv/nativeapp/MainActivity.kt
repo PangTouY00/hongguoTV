@@ -691,7 +691,7 @@ class MainActivity: Activity() {
             else { message(body,"正在加载…"); if(focusType) typeButtons[library.contentType]?.requestFocus() else nav[tab].requestFocus() }
             val requestTab=tab; val requestPage=page; val requestQuery=query; val requestType=library.contentType
             work({
-                val result=when(requestTab) { 0 -> repository.home(requestPage,requestType); 2 -> repository.comicRanking(requestPage); else -> repository.searchAll(requestQuery,requestPage) }
+                val result=when(requestTab) { 0 -> repository.home(requestPage,requestType); 2 -> repository.comicRanking(requestPage); else -> repository.search(requestQuery,requestPage,ContentType.SHORT) }
                 result
             }, { result ->
                 if(requestTab==0 && requestPage==1) library.cacheHome(requestType,result.items,result.hasMore)
@@ -907,7 +907,7 @@ class MainActivity: Activity() {
         { item,anchor -> catalogFocus=item.id;quickActions(item,anchor) },{
             val nextPage=page+1
             if(nextPage>100) { hasMore=false;browser.append(emptyList(),false) }
-            else work({ repository.searchAll(requestQuery,nextPage) },{ result ->
+            else work({ repository.search(requestQuery,nextPage,ContentType.SHORT) },{ result ->
                 if(continuousCatalog===browser) {
                     val seen=catalog.mapTo(HashSet()) { it.id }
                     catalog=catalog+result.items.filter { seen.add(it.id) }

@@ -79,6 +79,8 @@ class ContentHttpException(val statusCode: Int): IOException("内容请求失败
 /** HTTP 200 with no body: the website renderer failed transiently; safe to retry. */
 internal class EmptyContentException: IOException("内容响应为空")
 class SearchSessionExpiredException: IOException("搜索结果已过期，请从第 1 页重新搜索")
+/** 搜索和播放一样只认注册下发的身份；注册失败时单独报，别显示成「网络失败」或 HTTP 5xx。 */
+class SearchIdentityException(cause: Throwable? = null): IOException("搜索需要先完成设备注册，请稍后重试", cause)
 /** 播放接口偶发 HTTP 200 空响应：换新签名重读，仍空才报成这个独立类别。 */
 class EmptyPlaybackResponseException: IOException("播放接口暂时返回空响应，请稍后重试")
 /** A board page never recovered; [partial] holds the rows that did load, labelled by pagesRead. */
@@ -215,10 +217,11 @@ class ContentRepository(
     }
     fun search(keyword: String, page: Int = 1, type: ContentType = ContentType.SHORT): CatalogPage {
         require(keyword.isNotBlank() && keyword.length<=80 && page in 1..100)
-        // The website search does not constrain content type. Never use it for comics.
-        if(type==ContentType.COMIC) return appSearch(keyword,page,type)
-        try { val result=appSearch(keyword,page,type); if(result.items.isNotEmpty() || !result.hasMore) return result } catch (e: Exception) { if(e is SearchSessionExpiredException) throw e; /* Website fallback for short dramas only. */ }
-        return searchAll(keyword,page)
+        // 网页搜索 JSON 接口（/api/search/result）2026-10-30 起被风控关闭：不带签名的请求一律回
+        // HTTP 503 {"code":"signature_configuration_unavailable","message":"Search risk control ..."}，
+        // 界面上就是「内容请求失败（HTTP 503）」。App 接口按注册身份放行（实测注册后同关键词
+        // 200 + 完整结果），所以搜索只走 App 接口，不再回退到那个已经不可用的网页接口。
+        return appSearch(keyword,page,type)
     }
     /** Anonymous first-party website suggestions; pinyin matching is provided by the server. */
     fun searchSuggestions(keyword: String): List<String> {
@@ -231,7 +234,11 @@ class ContentRepository(
             it.str("name").ifBlank { it.optJSONArray("display_words")?.optString(0).orEmpty().trim() }
         }.filter { it.isNotBlank() && it.length<=80 }.distinct().take(8)
     }
-    /** The public website now loads cross-category results through its JSON endpoint. */
+    /**
+     * 旧版网页搜索 JSON 接口。**2026-10-30 起服务端风控关闭**：不带签名的请求一律
+     * HTTP 503 `signature_configuration_unavailable`，[search] 已经不再回退到它。
+     * 保留这个入口只给诊断工具与回归测试用，App 的正常搜索不要再调用它。
+     */
     fun searchAll(keyword: String, page: Int = 1): CatalogPage {
         require(keyword.isNotBlank() && keyword.length<=80 && page in 1..100)
         val raw=text("$site/api/search/result?query=${Signer.encode(keyword)}&page=$page",retryTransient=true)
@@ -246,8 +253,17 @@ class ContentRepository(
         }
         return CatalogPage(items,items.isNotEmpty() && page<100 && more)
     }
+    /**
+     * 搜索身份：和播放共用 [PlaybackDeviceSession] 注册下来的那一套 `device_id` / `iid` / `cdid`。
+     * 用 [VendorConstants.device] 里那对写死的旧身份，接口只回 HTTP 200 + 0 字节（见 [DeviceRegister]）。
+     */
+    private fun searchIdentity(): Map<String,String> = try {
+        playbackSession.profile(http).values
+    } catch (e: PlaybackDeviceRegistrationException) {
+        throw SearchIdentityException(e)
+    }
     private fun appSearch(keyword: String, page: Int, type: ContentType): CatalogPage {
-        val values=VendorConstants.device.toMutableMap()
+        val values=searchIdentity().toMutableMap()
         for(k in listOf("version_code","manifest_version_code","update_version_code","pv_player")) values[k]="72232"
         values["version_name"]="7.2.2.32"
         values.putAll(linkedMapOf("query" to keyword,"count" to "20","offset" to ((page-1)*20).toString(),"tab_type" to type.searchTab.toString(),"bookshelf_search_plan" to "4","use_correct" to "true","user_is_login" to "0"))
@@ -263,7 +279,9 @@ class ContentRepository(
             it.offset?.takeIf { offset -> offset>=0 }?.let { offset -> values["offset"]=offset.toString() }
         }
         val signed=signer.sign("https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/search/tab/v",values)
-        val data=JSONObject(text(signed.url,signed))
+        // 身份被服务端收回时会退化成 HTTP 200 + 0 字节；单独报清楚，别显示成「搜索格式异常」。
+        val raw=try { text(signed.url,signed) } catch (e: EmptyContentException) { throw IOException("搜索接口返回空响应，请稍后重试") }
+        val data=JSONObject(raw)
         if(data.optInt("code",-1)!=0) throw IOException("搜索接口暂不可用")
         val tabs=data.optJSONArray("search_tabs") ?: data.optJSONObject("data")?.optJSONArray("search_tabs") ?: throw IOException("搜索格式异常")
         val tab=tabs.objects().firstOrNull { it.optInt("tab_type")==type.searchTab } ?: throw IOException("${type.label}搜索暂不可用")
