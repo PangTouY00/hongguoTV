@@ -388,8 +388,9 @@ class ContentRepositoryTest {
             requests++
             assertNotNull(request.header("x-gorgon"))
             // 搜索和播放一样用注册下发的身份，不再是 VendorConstants.device 里那对写死的旧 id。
-            assertEquals("3000000000000000002",request.url.queryParameter("device_id"))
-            assertEquals("3000000000000000001",request.url.queryParameter("iid"))
+            // 数值来自本测试类 repository() 里注入的 DeviceRegister.Registered("333","444")。
+            assertEquals("333",request.url.queryParameter("device_id"))
+            assertEquals("444",request.url.queryParameter("iid"))
             assertEquals("19",request.url.queryParameter("tab_type"))
             assertEquals(if(requests==1) "0" else "20",request.url.queryParameter("offset"))
             assertEquals("修仙",request.url.queryParameter("query"))
