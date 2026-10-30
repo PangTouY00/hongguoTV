@@ -224,7 +224,7 @@ jobs:
           set -euo pipefail
           tag="$RELEASE_TAG"
           version="${tag#kotlin-v}"
-          printf '%s\n' "$tag" >> "$GITHUB_OUTPUT"
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           # 仓库里带手写发布说明时优先用它：正式版的更新日志要写清改了什么、为什么、怎么安装验证。
           if [ -f "release-notes/${tag}.md" ]; then
