@@ -24,7 +24,10 @@ def main() -> int:
             for case in root.iter("testcase"):
                 for bad in list(case.iter("failure")) + list(case.iter("error")):
                     found_failure = True
-                    detail = (bad.get("message") or "").strip().replace("\n", " ")[:400]
+                    # 只有 message 时常常只是一个异常类名，真正的线索在堆栈里，两段都带上。
+                    message = (bad.get("message") or "").strip().replace("\n", " ")
+                    trace = " | ".join((bad.text or "").strip().splitlines()[:6]).replace("\n", " ")
+                    detail = (message + " || " + trace)[:900]
                     print("::error::%s.%s: %s" % (case.get("classname"), case.get("name"), detail))
     if not found_failure:
         stage = "测试都通过了" if saw_report else "没有找到测试报告"

@@ -3,7 +3,11 @@ package com.hongguotv.nativeapp
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
+import com.hongguotv.core.BackupData
+import com.hongguotv.core.BackupSettings
 import com.hongguotv.core.EpisodeCache
+import com.hongguotv.core.Library
+import com.hongguotv.core.LibraryIndex
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -21,12 +25,19 @@ class FavoritesDownloadsTest {
     private fun get(target: Any,name: String)=target.javaClass.getDeclaredField(name).apply { isAccessible=true }.get(target)
     private fun texts(view: View): List<TextView> = if(view is ViewGroup) (0 until view.childCount).flatMap { texts(view.getChildAt(it)) } else if(view is TextView) listOf(view) else emptyList()
     private fun method(activity: MainActivity,name: String,value: Int) = MainActivity::class.java.getDeclaredMethod(name,Int::class.javaPrimitiveType).apply { isAccessible=true }.invoke(activity,value)
-    private fun cacheOf(activity: MainActivity): EpisodeCache = (get(activity,"episodeCache") as Lazy<*>).value as EpisodeCache
+    /** `by lazy` 委托在字节码里叫 <属性名>$delegate。 */
+    private fun cacheOf(activity: MainActivity): EpisodeCache = (get(activity,"episodeCache$delegate") as Lazy<*>).value as EpisodeCache
+    /** 本机列表走的是持久化索引；测试里直接给一个空的，不去碰真实存储。 */
+    private fun emptyLibrary(activity: MainActivity) {
+        val library=get(activity,"library") as Library
+        Library::class.java.getDeclaredField("index").apply { isAccessible=true }.set(library,LibraryIndex(BackupData(emptyList(),emptyList(),emptySet(),emptyList(),BackupSettings())))
+    }
 
     @Test fun theLibraryTabOffersThreeSeparateSourcesUnderOneName() {
         val controller=Robolectric.buildActivity(MainActivity::class.java).create()
         val activity=controller.get()
         try {
+            emptyLibrary(activity)
             method(activity,"switchTab",3)
             val root=activity.findViewById<View>(android.R.id.content)
             assertTrue("导航与页面标题都应叫「收藏下载」",texts(root).filter { it.text.toString()=="收藏下载" }.size>=2)
@@ -40,6 +51,7 @@ class FavoritesDownloadsTest {
         val controller=Robolectric.buildActivity(MainActivity::class.java).create()
         val activity=controller.get()
         try {
+            emptyLibrary(activity)
             val cache=cacheOf(activity)
             val bytes=ByteArray(2048) { (it % 251).toByte() }
             cache.store("910",720,"avc1",2048L,read={ _,length -> bytes.copyOf(length) },seriesId="s-91",seriesTitle="已下载测试剧")
