@@ -165,4 +165,31 @@ class EpisodeCacheTest {
         assertTrue(seen.zipWithNext().all { (a, b) -> b.first > a.first })
         assertEquals((2 * chunk + 100).toLong(), seen.last().first); assertEquals(seen.last().second, seen.last().first)
     }
+
+    @Test fun storedRecordsCarryWhichSeriesTheEpisodeBelongsTo() {
+        val cache = EpisodeCache(root)
+        cache.store("71", 720, "avc1", 1024L, read = { _, length -> bytes(length) },
+            seriesId = "s-7", seriesTitle = "暗潮", cover = "https://cover/7.jpg")
+        val record = cache.cached("71")!!
+        assertEquals("s-7", record.seriesId); assertEquals("暗潮", record.seriesTitle)
+        assertEquals("https://cover/7.jpg", record.cover)
+        // 「已下载」列表读的就是这几项：列出来的必须和写进去的一致。
+        assertEquals(record, cache.records().first { it.episodeId == "71" })
+    }
+
+    @Test fun oldIndexWithoutSeriesOwnershipStillPlaysAndGetsClaimedOnTheNextStore() {
+        val cache = EpisodeCache(root)
+        File(root, "72-720.json").writeText("""{"episodeId":"72","quality":720,"codec":"avc1","bytes":1024,"savedAt":1}""")
+        File(root, "72-720.mp4").writeBytes(bytes(1024))
+        val legacy = cache.cached("72")
+        assertNotNull(legacy); assertEquals("", legacy!!.seriesId)
+        // 认不出归属不影响播放，只影响它能不能出现在按剧归类的列表里。
+        assertNotNull(cache.open("72", 1080))
+        // 再点一次缓存会补上归属，不会为此重下一遍。
+        val asked = mutableListOf<Long>()
+        val record = cache.store("72", 720, "avc1", 1024L, read = { at, length -> asked += at; bytesAt(at, length) },
+            seriesId = "s-8", seriesTitle = "夜行")
+        assertTrue(asked.isEmpty())
+        assertEquals("s-8", record.seriesId); assertEquals("s-8", cache.cached("72")!!.seriesId)
+    }
 }

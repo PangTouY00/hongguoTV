@@ -6,8 +6,23 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 
-/** 一集已经落盘的缓存。bytes 与磁盘实际大小一致，不一致的记录不会被列出来。 */
-data class CachedEpisode(val episodeId: String, val quality: Int, val codec: String, val bytes: Long, val savedAt: Long)
+/**
+ * 一集已经落盘的缓存。bytes 与磁盘实际大小一致，不一致的记录不会被列出来。
+ *
+ * seriesId / seriesTitle / cover 记下这集属于哪部剧：只有分集编号的话，「已下载」列表只能
+ * 显示一串 id，显示不出剧名。旧版本写的元数据没有这几项，读出来是空字符串——记录仍然可用，
+ * 只是认不出属于哪部剧，界面会把它们单独归到「认不出归属的缓存」里。
+ */
+data class CachedEpisode(
+    val episodeId: String,
+    val quality: Int,
+    val codec: String,
+    val bytes: Long,
+    val savedAt: Long,
+    val seriesId: String = "",
+    val seriesTitle: String = "",
+    val cover: String = "",
+)
 
 /**
  * 按集缓存的落盘层。
@@ -46,7 +61,8 @@ class EpisodeCache(private val directory: File) {
                 val row = JSONObject(index.readText())
                 val episodeId = row.getString("episodeId"); val quality = row.getInt("quality")
                 // 用元数据里声明的字节数做基准：拿实际文件大小来校验自己，永远都对得上。
-                CachedEpisode(episodeId, quality, row.optString("codec", ""), row.getLong("bytes"), row.getLong("savedAt"))
+                CachedEpisode(episodeId, quality, row.optString("codec", ""), row.getLong("bytes"), row.getLong("savedAt"),
+                    row.optString("seriesId", ""), row.optString("seriesTitle", ""), row.optString("cover", ""))
             }.getOrNull()
             val video = decoded?.let { target(it.episodeId, it.quality) }
             if (decoded == null || !decoded.episodeId.matches(ID) || video == null || !video.isFile ||
@@ -113,16 +129,32 @@ class EpisodeCache(private val directory: File) {
      * read 按绝对偏移交付解密后的字节，落盘层不关心它来自 HTTP 还是别的什么；
      * 中断（取消、异常、进程被杀）留下 .part，下次从已写的字节继续，不从头再来。
      */
+    private fun writeMeta(episodeId: String, quality: Int, codec: String, total: Long, seriesId: String, seriesTitle: String, cover: String) {
+        meta(episodeId, quality).writeText(JSONObject()
+            .put("episodeId", episodeId).put("quality", quality).put("codec", codec)
+            .put("bytes", total).put("savedAt", System.currentTimeMillis())
+            .put("seriesId", seriesId).put("seriesTitle", seriesTitle).put("cover", cover).toString())
+    }
+
     @Synchronized fun store(
         episodeId: String, quality: Int, codec: String, total: Long,
         read: (Long, Int) -> ByteArray,
         progress: (Long, Long) -> Unit = { _, _ -> },
         canceled: () -> Boolean = { false },
+        seriesId: String = "", seriesTitle: String = "", cover: String = "",
     ): CachedEpisode {
         val file = target(episodeId, quality)
         require(total > 0) { "缓存长度异常" }
-        if (file.isFile && file.length() == total)
-            return CachedEpisode(episodeId, quality, codec, total, file.lastModified())
+        if (file.isFile && file.length() == total) {
+            // 旧版本写的元数据没有剧集归属。这一集既然已经落盘、这次又知道了它属于哪部剧，就把归属补上，
+            // 别让一集已经缓存好的内容在「已下载」里认不出来。
+            val before = cached(episodeId)
+            val owner = if (seriesId.isNotEmpty()) seriesId else before?.seriesId.orEmpty()
+            val title = if (seriesId.isNotEmpty()) seriesTitle else before?.seriesTitle.orEmpty()
+            val poster = if (seriesId.isNotEmpty()) cover else before?.cover.orEmpty()
+            if (owner.isNotEmpty() && owner != before?.seriesId) writeMeta(episodeId, quality, codec, total, owner, title, poster)
+            return CachedEpisode(episodeId, quality, codec, total, file.lastModified(), owner, title, poster)
+        }
         directory.mkdirs()
         if (!hasRoom(total)) throw IOException("存储空间不足，还剩 ${freeBytes() / 1024 / 1024} MB 可用")
         val part = partial(episodeId, quality)
@@ -142,9 +174,7 @@ class EpisodeCache(private val directory: File) {
         } catch (error: Exception) { runCatching { output.close() }; throw error }
         runCatching { output.close() }
         if (!part.renameTo(file)) { part.delete(); throw IOException("缓存文件写入失败") }
-        meta(episodeId, quality).writeText(JSONObject()
-            .put("episodeId", episodeId).put("quality", quality).put("codec", codec)
-            .put("bytes", total).put("savedAt", System.currentTimeMillis()).toString())
-        return CachedEpisode(episodeId, quality, codec, total, file.lastModified())
+        writeMeta(episodeId, quality, codec, total, seriesId, seriesTitle, cover)
+        return CachedEpisode(episodeId, quality, codec, total, file.lastModified(), seriesId, seriesTitle, cover)
     }
 }
