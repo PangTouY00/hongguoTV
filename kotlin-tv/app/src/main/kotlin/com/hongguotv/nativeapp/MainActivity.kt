@@ -1908,10 +1908,11 @@ class MainActivity: Activity() {
     }
     private fun cacheSummary(): String? {
         val queue=cacheQueue ?: return null
-        val pending=queue.pendingCount()
-        if(pending==0) return null
-        return "缓存队列 · 还有 $pending 集 · 已缓存 ${queue.cachedCount()} 集 · 占用 ${queue.bytesUsed()/1024/1024} MB"
+        return cacheSummaryText(queue.pendingCount(),queue.cachedCount(),queue.bytesUsed(),queue.failures().map { it.episodeId to safeCacheError(it.message) })
     }
+    /** 还没看的分集下标：照观看进度往后算，和续播跳到下一集是同一套判断。 */
+    private fun unwatchedIndexes(data: Detail): List<Int> =
+        UnwatchedEpisodes.indexes(data.episodes.size,library.progress(data.series.id)?.episodeId?.let { data.episodes.indexOf(it) })
     /**
      * 已下载的剧集：按缓存元数据里记下的归属，把落盘的集归到各自的剧上。
      *
@@ -1950,8 +1951,11 @@ class MainActivity: Activity() {
         val queue=caches()
         val rows=queue.cached()
         val current=data?.episodes?.getOrNull(episodeIndex)
+        // 已经缓存过的未看集不必再排一遍：这一行报的是真的还会下多少集。
+        val unwatched=data?.let { d -> unwatchedIndexes(d).map { d.episodes[it] }.filter { episodeCache.cached(it)==null } } ?: emptyList()
         val labels=listOf(
             if(queue.pendingCount()>0) "停止缓存" else "缓存未缓存的 ${data?.episodes?.size ?: 0} 集",
+            if(unwatched.isEmpty()) "没有未看的集可缓存" else "缓存未看的 ${unwatched.size} 集",
             if(current!=null && episodeCache.cached(current)!=null) "删除本集缓存" else "缓存本集",
             "清空全部缓存 · ${rows.size} 集 · ${queue.bytesUsed()/1024/1024} MB",
             "剩余空间 ${queue.freeBytes()/1024/1024} MB · 缓存存在应用自己的目录，卸载即清")
@@ -1959,8 +1963,9 @@ class MainActivity: Activity() {
             if(screen!="player" && !anchor.isAttachedToWindow) return@post
             when(choice) {
                 0 -> if(queue.pendingCount()>0) queue.cancelAll() else data?.let { queue.enqueue(it.series,it.episodes,library.maxQuality) }
-                1 -> current?.let { id -> if(episodeCache.cached(id)!=null) queue.remove(id) else data?.let { queue.enqueue(it.series,listOf(id),library.maxQuality) } }
-                2 -> queue.clear()
+                1 -> data?.let { queue.enqueue(it.series,unwatched,library.maxQuality) }
+                2 -> current?.let { id -> if(episodeCache.cached(id)!=null) queue.remove(id) else data?.let { queue.enqueue(it.series,listOf(id),library.maxQuality) } }
+                3 -> queue.clear()
             }
             refreshCacheUi()
         } })
@@ -1986,7 +1991,7 @@ private fun showEpisodePanel(anchor: View) {
                     if(anchor.isAttachedToWindow) anchor.requestFocus()
                     if(overlayWasVisible) showHud() else hidePlaybackOverlay()
                 }
-            },lastWatched=library.progress(data.series.id)?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } },lastCompleted=library.progress(data.series.id)?.completed==true,cache=EpisodeCacheUi({ cacheMark(data.episodes[it]) },{ cacheSummary() },{ caches().enqueue(data.series,listOf(data.episodes[it]),library.maxQuality) },{ caches().enqueue(data.series,data.episodes,library.maxQuality) }))
+            },lastWatched=library.progress(data.series.id)?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } },lastCompleted=library.progress(data.series.id)?.completed==true,cache=EpisodeCacheUi({ cacheMark(data.episodes[it]) },{ cacheSummary() },{ caches().enqueue(data.series,listOf(data.episodes[it]),library.maxQuality) },{ caches().enqueue(data.series,data.episodes,library.maxQuality) },{ indexes -> caches().enqueue(data.series,indexes.map { data.episodes[it] },library.maxQuality) }))
         episodePanel=next; next.show(); updatePauseGlyph()
     }
     private fun hidePanel() { if(playError) return; panel=false; controls.visibility=View.GONE; controls.clearFocus(); showHud() }

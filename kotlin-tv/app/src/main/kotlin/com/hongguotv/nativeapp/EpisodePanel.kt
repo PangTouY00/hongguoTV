@@ -9,18 +9,20 @@ import android.view.Gravity
 import android.view.View
 import android.view.Window
 import android.widget.*
+import com.hongguotv.core.UnwatchedEpisodes
 
 /**
  * 选集面板看到的缓存状态。
  *
  * label 给某一集一个后缀标记（已缓存、排队中、下载中的百分比、失败），summary 给整批一个
- * 摘要行；两个动作分别对应「缓存这一集」和「缓存全部」。全部可省略，省略时面板与之前一样。
+ * 摘要行；三个动作分别对应「缓存这一集」「缓存全部」「缓存还没看的」。全部可省略，省略时面板与之前一样。
  */
 class EpisodeCacheUi(
     val label: (Int) -> String? = { null },
     val summary: () -> String? = { null },
     val cacheOne: (Int) -> Unit = {},
     val cacheAll: () -> Unit = {},
+    val cacheUnwatched: (List<Int>) -> Unit = {},
 )
 
 /** A remote-accessible side panel; selecting a number is the only action that changes episodes. */
@@ -71,6 +73,8 @@ class EpisodePanel(
         }
     }
     private fun cacheMark(index: Int): String = cache?.label?.invoke(index)?.let { " $it" }.orEmpty()
+    /** 还没看的集：上次看到的那一集之后。没有观看记录就是整部都没看过。 */
+    private fun unwatchedIndexes(): List<Int> = UnwatchedEpisodes.indexes(count,lastWatched)
     private fun cellLabel(index: Int): String = "${index+1}${cacheMark(index)}"+when {
         index==current -> " · 当前";index==lastWatched -> if(lastCompleted) " · 已看" else " · 上次";else -> ""
     }
@@ -81,19 +85,33 @@ class EpisodePanel(
         val close=button("关闭") { dismiss() }
         lateinit var jump: TextView
         jump=button("跳转集数") { locate(focused,jump) { target -> focused=target; group=target/20; render() } }
-        val controls=mutableListOf(close,jump)
+        val primary=mutableListOf(close,jump)
+        // 缓存的三个动作单独一行：四个按钮挤在一行时「缓存未看 12 集」这种带数量的文字会被截掉。
+        val cacheActions=mutableListOf<TextView>()
         if(cache!=null) {
-            controls+=button("缓存本集") { cache.cacheOne(current); render() }
-            controls+=button("缓存全部") { cache.cacheAll(); render() }
+            val unwatched=unwatchedIndexes()
+            cacheActions+=button("缓存本集") { cache.cacheOne(current); render() }
+            cacheActions+=button("缓存全部") { cache.cacheAll(); render() }
+            cacheActions+=button(if(unwatched.isEmpty()) "没有未看的集" else "缓存未看 ${unwatched.size} 集") {
+                // 都看过了就什么都不做：把已经看过的重新下一遍只是白占地方。
+                if(unwatched.isNotEmpty()) { cache.cacheUnwatched(unwatched); render() }
+            }
         }
-        controls.forEach { actions.addView(it,LinearLayout.LayoutParams(0,-2,1f).apply { setMargins(dp(3),dp(3),dp(3),dp(3)) }) }
         // 一行里的按钮按位置左右连通，遥控器从任一个都能走到相邻的那个。
-        controls.forEachIndexed { i,control ->
-            control.nextFocusLeftId=controls[if(i==0) i else i-1].id
-            control.nextFocusRightId=controls[if(i==controls.lastIndex) i else i+1].id
-            control.nextFocusUpId=control.id
+        fun link(row: List<TextView>) { row.forEachIndexed { i,control ->
+            control.nextFocusLeftId=row[if(i==0) i else i-1].id
+            control.nextFocusRightId=row[if(i==row.lastIndex) i else i+1].id
+            control.nextFocusUpId=control.id } }
+        primary.forEach { actions.addView(it,LinearLayout.LayoutParams(0,-2,1f).apply { setMargins(dp(3),dp(3),dp(3),dp(3)) }) }
+        link(primary); content.addView(actions)
+        if(cacheActions.isNotEmpty()) {
+            val cacheRow=LinearLayout(activity)
+            cacheActions.forEach { cacheRow.addView(it,LinearLayout.LayoutParams(0,-2,1f).apply { setMargins(dp(3),dp(3),dp(3),dp(3)) }) }
+            link(cacheActions)
+            cacheActions.forEachIndexed { i,control -> control.nextFocusUpId=primary[if(i<primary.size) i else primary.lastIndex].id }
+            close.nextFocusDownId=cacheActions.first().id; jump.nextFocusDownId=cacheActions[minOf(1,cacheActions.lastIndex)].id
+            content.addView(cacheRow)
         }
-        content.addView(actions)
         val summaryView=label("",14f).apply { visibility=View.GONE }
         summaryLine=summaryView
         content.addView(summaryView)
@@ -124,10 +142,16 @@ class EpisodePanel(
             cell.nextFocusUpId=if(i>=5) cells[i-5].id else if(i<3 && previous.isFocusable) previous.id else if(next.isFocusable) next.id else jump.id
             cell.nextFocusDownId=cells[if(i+5<cells.size) i+5 else if(i/5<cells.lastIndex/5) cells.lastIndex else i].id
         }
-        previous.nextFocusUpId=close.id; next.nextFocusUpId=jump.id
+        previous.nextFocusUpId=cacheActions.lastOrNull()?.id ?: close.id
+        next.nextFocusUpId=cacheActions.lastOrNull()?.id ?: jump.id
         previous.nextFocusDownId=cells.first().id; next.nextFocusDownId=cells[minOf(4,cells.lastIndex)].id
-        close.nextFocusDownId=if(previous.isFocusable) previous.id else cells.first().id
-        jump.nextFocusDownId=if(next.isFocusable) next.id else cells[minOf(4,cells.lastIndex)].id
+        if(cacheActions.isEmpty()) {
+            close.nextFocusDownId=if(previous.isFocusable) previous.id else cells.first().id
+            jump.nextFocusDownId=if(next.isFocusable) next.id else cells[minOf(4,cells.lastIndex)].id
+        } else cacheActions.forEachIndexed { i,control ->
+            control.nextFocusDownId=if(i==0) (if(previous.isFocusable) previous.id else cells.first().id)
+                else if(next.isFocusable) next.id else cells[minOf(4,cells.lastIndex)].id
+        }
         dialog.setContentView(content)
         cells[(focused-group*20).coerceIn(0,cells.lastIndex)].requestFocus()
     }
