@@ -47,7 +47,7 @@ class AccountHistoryTest {
             assertTrue(texts(root).contains("云端独有记录"))
             assertFalse(texts(root).contains("本机独有记录"))
             assertTrue(texts(root).any { it.contains("第 4 集") })
-            MainActivity::class.java.getDeclaredMethod("switchLibrarySource",Boolean::class.javaPrimitiveType).apply { isAccessible=true }.invoke(activity,false)
+            MainActivity::class.java.getDeclaredMethod("switchLibrarySource",Int::class.javaPrimitiveType).apply { isAccessible=true }.invoke(activity,0)
             assertTrue(texts(root).contains("本机独有记录"))
             assertFalse(texts(root).contains("云端独有记录"))
         } finally { controller.destroy() }

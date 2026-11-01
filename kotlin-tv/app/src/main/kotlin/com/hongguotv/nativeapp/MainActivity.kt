@@ -458,7 +458,8 @@ class MainActivity: Activity() {
     private fun isAccountHistory()=tab==4 && librarySources.accountHistory
     private fun isAccountFavorites()=tab==3 && librarySources.accountFavorites
     private fun isLocalHistory()=tab==4 && !librarySources.accountHistory
-    private fun isLocalFavorites()=tab==3 && !librarySources.accountFavorites
+    private fun isLocalFavorites()=tab==3 && librarySources.favoritesSource==0
+    private fun isLocalDownloads()=tab==3 && librarySources.localDownloads
     private fun accountCatalog()=isAccountHistory() || isAccountFavorites() || tab==5
     private fun refreshAccountSection() {
         if(isAccountHistory()) cloudAccount.refreshHistory()
@@ -475,11 +476,11 @@ class MainActivity: Activity() {
             ready=cloudAccount.historyReady,loading=cloudAccount.historyLoading,
             markedWatched=!remote && library.watched(series.id),pending=tab==5 && !reservationOnline,added=update?.added ?: 0)
     }
-    private fun switchLibrarySource(account: Boolean) {
-        if(tab==3) librarySources.accountFavorites=account else librarySources.accountHistory=account
+    private fun switchLibrarySource(source: Int) {
+        if(tab==3) librarySources.favoritesSource=source else librarySources.accountHistory=source==1
         page=1;catalogFocus="";catalog=emptyList();tabState.remove(tab);tabFocus.remove(tab)
         showCatalog()
-        sourceButtons.getOrNull(if(account) 1 else 0)?.requestFocus()
+        sourceButtons.getOrNull(source)?.requestFocus()
         refreshAccountSection()
     }
     private fun localCatalog()=tab in 3..5 || collection!=null
@@ -493,6 +494,7 @@ class MainActivity: Activity() {
             isAccountHistory() -> cloudAccount.historyRows().map { it.series }
             tab==5 -> cloudAccount.reservationState(reservationOnline).rows.map { it.series }
             isLocalFavorites() -> library.favorites()
+            isLocalDownloads() -> downloadedSeries()
             else -> library.history().map { it.series }
         }
     }
@@ -512,7 +514,7 @@ class MainActivity: Activity() {
         brand.addView(ImageView(this).apply { setImageResource(com.hongguotv.nativeapp.R.drawable.app_icon) },lp(dp(28),dp(28)).apply { rightMargin=dp(9) })
         brand.addView(text("红果",22f).apply { typeface=Typeface.create("sans-serif-medium",Typeface.NORMAL) })
         top.addView(brand,lp(dp(120),dp(44)))
-        listOf("首页","找剧","排行榜","收藏","观看历史","账户预约","设置").forEachIndexed { index,label ->
+        listOf("首页","找剧","排行榜","收藏下载","观看历史","账户预约","设置").forEachIndexed { index,label ->
             val item=addButton(top,label,index==tab) { switchTab(index) }
             item.textSize=if(widthDp()<1000) 13f else 15f
             item.setPadding(dp(9),dp(10),dp(9),dp(10))
@@ -623,7 +625,7 @@ class MainActivity: Activity() {
             val headerRows=mutableListOf<View>()
             val heading=row().apply { setPadding(0,dp(12),0,dp(6)) }
             headerRows+=heading
-            heading.addView(text(when(tab) { 3->"我的收藏";4->"观看历史";else->"账户预约" },25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
+            heading.addView(text(when(tab) { 3->"收藏下载";4->"观看历史";else->"账户预约" },25f).apply { setTypeface(null,Typeface.BOLD) },lp(0,-2).apply { weight=1f })
             if(isLocalFavorites()) favoriteCheck=addButton(heading,"检查更新") { favoriteMonitor.check(force=true) }.apply { nextFocusUpId=nav[tab].id }
             if(isLocalHistory() && library.history().isNotEmpty()) {
                 historyManage=addButton(heading,"管理本机记录") {
@@ -643,23 +645,27 @@ class MainActivity: Activity() {
             if(tab==3 || tab==4) {
                 val sources=row().apply { setPadding(0,dp(4),0,dp(8)) }
                 headerRows+=sources
-                val account=if(tab==3) librarySources.accountFavorites else librarySources.accountHistory
-                listOf(false,true).forEach { remote ->
-                    sourceButtons+=addButton(sources,if(tab==3) if(remote) "账户收藏" else "本机收藏" else if(remote) "账户历史" else "本机历史",account==remote) {
-                        if(account!=remote) switchLibrarySource(remote)
+                val labels=if(tab==3) listOf("本机收藏","账户收藏","本机下载") else listOf("本机历史","账户历史")
+                val current=if(tab==3) librarySources.favoritesSource else if(librarySources.accountHistory) 1 else 0
+                labels.forEachIndexed { index,label ->
+                    sourceButtons+=addButton(sources,label,current==index) {
+                        if(current!=index) switchLibrarySource(index)
                     }.apply { nextFocusUpId=historyManage?.id ?: favoriteCheck?.id ?: nav[tab].id }
                 }
                 sourceButtons.forEach { it.nextFocusDownId=it.id }
-                sourceButtons[0].nextFocusLeftId=sourceButtons[0].id;sourceButtons[0].nextFocusRightId=sourceButtons[1].id
-                sourceButtons[1].nextFocusLeftId=sourceButtons[0].id;sourceButtons[1].nextFocusRightId=sourceButtons[1].id
+                sourceButtons.forEachIndexed { index,button ->
+                    button.nextFocusLeftId=sourceButtons[maxOf(0,index-1)].id
+                    button.nextFocusRightId=sourceButtons[minOf(sourceButtons.lastIndex,index+1)].id
+                }
                 container.addView(sources)
-                nav.forEach { it.nextFocusDownId=sourceButtons[if(account) 1 else 0].id }
-                favoriteCheck?.nextFocusDownId=sourceButtons[if(account) 1 else 0].id
-                historyManage?.nextFocusDownId=sourceButtons[if(account) 1 else 0].id
+                nav.forEach { it.nextFocusDownId=sourceButtons[current].id }
+                favoriteCheck?.nextFocusDownId=sourceButtons[current].id
+                historyManage?.nextFocusDownId=sourceButtons[current].id
                 val note=when {
                     isAccountFavorites() -> "${cloudAccount.accountLabel} · ${cloudAccount.favoriteState().message}\n与手机红果同步；长按剧集可管理账户收藏"
                     isAccountHistory() -> "${cloudAccount.accountLabel} · ${cloudAccount.historyStatus}\n显示当前账号最近 50 部云端记录，续播使用账号进度"
                     isLocalHistory() -> "只保存在这台电视，管理和清空不影响账户历史"
+                    isLocalDownloads() -> "已经存在这台电视上的内容，没有网络也能播。长按一部剧可以删掉它的缓存。" + if(unattributedCacheCount()>0) "\n另有 ${unattributedCacheCount()} 个旧版本缓存的片段认不出属于哪部剧，可在播放界面的缓存管理里删除" else ""
                     else -> "只保存在这台电视，不自动上传或合并到账户收藏"
                 }
                 val noteView=text(note,13f,muted).apply { setPadding(0,0,0,dp(6)) }
@@ -748,7 +754,7 @@ class MainActivity: Activity() {
             body.addView(heading)
             typeButtons.values.forEach { it.nextFocusDownId=collectionBack!!.id }
         }
-        catalogPageKey="$tab:${collection.orEmpty()}:$page:$query:${if(accountCatalog()) cloudAccount.historyScope else 0}:$reservationOnline:${if(tab==3) librarySources.accountFavorites else if(tab==4) librarySources.accountHistory else false}"
+        catalogPageKey="$tab:${collection.orEmpty()}:$page:$query:${if(accountCatalog()) cloudAccount.historyScope else 0}:$reservationOnline:${if(tab==3) librarySources.favoritesSource else if(tab==4) librarySources.accountHistory else -1}"
         if(tab==1 && collection==null) {
             renderContinuousDiscovery(body,focusNav,focusType)
             return
@@ -763,6 +769,7 @@ class MainActivity: Activity() {
                 tab==1 -> if(query.isBlank()) "该分类暂无剧集，可切换题材或输入关键词搜索" else "没有找到相关剧集，换个关键词试试"
                 isAccountFavorites() -> if(!cloudAccount.signedIn) "登录红果后查看账户收藏，本机收藏仍可使用" else if(cloudAccount.favoriteState().loading) "正在读取账户收藏…" else if(!cloudAccount.favoriteState().loaded) "账户收藏读取失败，请按上方刷新重试" else "暂无已读取的账户收藏，可在手机收藏后刷新"
                 isLocalFavorites() -> "在剧集详情中加入本机收藏，喜欢的剧就会出现在这里"
+                isLocalDownloads() -> "还没有缓存过任何一集。在剧集详情点「缓存全部」，或在播放界面选「缓存本集」，之后就能离线播放"
                 isAccountHistory() -> if(!cloudAccount.signedIn) "登录红果后查看账户历史，本机历史仍可使用" else if(cloudAccount.historyLoading) "正在读取账户观看历史…" else "暂无已读取的云端记录，可按上方刷新重试"
                 isLocalHistory() -> "在这台电视播放过的剧集会自动保存在这里"
                 tab==5 -> if(!cloudAccount.signedIn) "登录红果账号后，在这里同步手机预约" else if(cloudAccount.reservationState(reservationOnline).loading) "正在读取预约记录…" else if(!cloudAccount.reservationState(reservationOnline).loaded) "预约读取失败，请按上方刷新预约重试" else if(reservationOnline) "当前没有已上线的预约" else "当前没有待上线的预约"
@@ -775,7 +782,7 @@ class MainActivity: Activity() {
                 typeButtons.values.forEach { it.nextFocusDownId=resumeCards.first().id }
                 resumeCards.forEach { it.nextFocusDownId=it.id }
             }
-            if(focusType) typeButtons[library.contentType]?.requestFocus() else if(collectionBack!=null && !focusNav) collectionBack?.requestFocus() else if(sourceButtons.isNotEmpty() && !focusNav) sourceButtons[if(isAccountHistory() || isAccountFavorites()) 1 else 0].requestFocus() else if(focusNav || resumeCards.isEmpty()) nav[tab].requestFocus() else resumeCards.first().requestFocus()
+            if(focusType) typeButtons[library.contentType]?.requestFocus() else if(collectionBack!=null && !focusNav) collectionBack?.requestFocus() else if(sourceButtons.isNotEmpty() && !focusNav) sourceButtons[if(tab==3) librarySources.favoritesSource else if(librarySources.accountHistory) 1 else 0].requestFocus() else if(focusNav || resumeCards.isEmpty()) nav[tab].requestFocus() else resumeCards.first().requestFocus()
             return
         }
         val cards=mutableListOf<View>(); val count=6; val gap=dp(14); val width=((resources.displayMetrics.widthPixels*.9f-gap*(count-1))/count).toInt(); val coverAspect= CoverRatio.current
@@ -796,12 +803,12 @@ class MainActivity: Activity() {
                 val progress=cloud?.let { WatchProgress(it.series,it.episodeId,it.episodeIndex,it.position,it.duration,false,it.updatedAt) } ?: if(isLocalHistory() || collection=="resume") library.progress(item.id) else null
                 val summary=when {
                     tab==5 -> collectionEpisodeLabel(item)+"\n"+selectionStatus(item)
-                    tab==3 -> collectionEpisodeLabel(item)
+                    tab==3 -> if(isLocalDownloads()) downloadBadge(item) else collectionEpisodeLabel(item)
                     tab==4 -> collectionEpisodeLabel(item)+(progress?.let { " · ${formatTime(it.position)}" } ?: "")
                     tab==2 -> position?.heat?.ifBlank { "热度暂无" } ?: "热度暂无"
                     else -> item.badge
                 }
-                val badge=text(summary,12f,if(tab==2 || isLocalFavorites()) accent else muted).apply {
+                val badge=text(summary,12f,if(tab==2 || isLocalFavorites() || isLocalDownloads()) accent else muted).apply {
                     maxLines=if(tab==5) 3 else if(tab==3 || tab==4) 2 else 1;minLines=maxLines
                     minHeight=dp(if(tab==5) 50 else if(tab==3 || tab==4) 34 else 19)
                     ellipsize=TextUtils.TruncateAt.END;setPadding(dp(3),0,0,0)
@@ -1034,6 +1041,16 @@ class MainActivity: Activity() {
             if(added) favoriteMonitor.check()
         }
         if(isLocalHistory()) actions+="管理观看记录" to { manageHistory(series,anchor) }
+        if(isLocalDownloads()) {
+            val cached=episodeCache.records().filter { it.seriesId==series.id }
+            if(cached.isNotEmpty()) actions+="删除本机缓存 · ${cached.size} 集" to {
+                tvTools.confirm("删除缓存","删除《${series.title}》存在这台电视上的 ${cached.size} 集缓存？观看进度与收藏都不受影响。",anchor) {
+                    cached.forEach { caches().remove(it.episodeId) }
+                    Toast.makeText(this,"已删除 ${cached.size} 集缓存",Toast.LENGTH_SHORT).show()
+                    catalog=emptyList();showCatalog()
+                }
+            }
+        }
         tvTools.choose(series.title,actions.map { it.first },anchor,{ actions[it].second() },compact=true)
     }
     private fun accountFavoriteAction(series: Series,anchor: View?) {
@@ -1209,7 +1226,7 @@ class MainActivity: Activity() {
         }
         lateinit var cacheButton: TextView
         cacheButton=addButton(secondary,detailCacheLabel()) {
-            if(caches().pendingCount()>0) caches().cancelAll() else caches().enqueue(data.episodes,library.maxQuality)
+            if(caches().pendingCount()>0) caches().cancelAll() else caches().enqueue(data.series,data.episodes,library.maxQuality)
             refreshCacheUi()
         }
         detailCacheButton=cacheButton
@@ -1895,6 +1912,27 @@ class MainActivity: Activity() {
         if(pending==0) return null
         return "缓存队列 · 还有 $pending 集 · 已缓存 ${queue.cachedCount()} 集 · 占用 ${queue.bytesUsed()/1024/1024} MB"
     }
+    /**
+     * 已下载的剧集：按缓存元数据里记下的归属，把落盘的集归到各自的剧上。
+     *
+     * 归属是缓存时写进去的，这里不联网、不查详情——离线列表不该因为网络不通就空掉。
+     * 旧版本缓存的元数据没有归属，它们不进这个列表，只在上方说明里报个数。
+     */
+    private fun downloadedSeries(): List<Series> {
+        val grouped=LinkedHashMap<String, MutableList<CachedEpisode>>()
+        episodeCache.records().forEach { row -> if(row.seriesId.isNotEmpty()) grouped.getOrPut(row.seriesId) { mutableListOf() }.add(row) }
+        val saved=library.favorites().associateBy { it.id }
+        return grouped.map { (id,cached) ->
+            val first=cached.first()
+            Series(id, first.seriesTitle.ifBlank { saved[id]?.title ?: "剧集 $id" }, first.cover.ifBlank { saved[id]?.cover ?: "" }) to cached.sumOf { it.bytes }
+        }.sortedByDescending { it.second }.map { it.first }
+    }
+    private fun downloadBadge(series: Series): String {
+        val cached=episodeCache.records().filter { it.seriesId==series.id }
+        if(cached.isEmpty()) return "缓存已不可用"
+        return "已缓存 ${cached.size} 集 · ${cached.sumOf { it.bytes }/1024/1024} MB"
+    }
+    private fun unattributedCacheCount(): Int = episodeCache.records().count { it.seriesId.isEmpty() }
     private fun detailCacheLabel(): String {
         val data=detail ?: return "缓存全部"
         val ids=data.episodes.toSet()
@@ -1920,8 +1958,8 @@ class MainActivity: Activity() {
         tvTools.choose("缓存管理",labels,anchor,{ choice -> main.post {
             if(screen!="player" && !anchor.isAttachedToWindow) return@post
             when(choice) {
-                0 -> if(queue.pendingCount()>0) queue.cancelAll() else data?.let { queue.enqueue(it.episodes,library.maxQuality) }
-                1 -> current?.let { if(episodeCache.cached(it)!=null) queue.remove(it) else queue.enqueue(listOf(it),library.maxQuality) }
+                0 -> if(queue.pendingCount()>0) queue.cancelAll() else data?.let { queue.enqueue(it.series,it.episodes,library.maxQuality) }
+                1 -> current?.let { id -> if(episodeCache.cached(id)!=null) queue.remove(id) else data?.let { queue.enqueue(it.series,listOf(id),library.maxQuality) } }
                 2 -> queue.clear()
             }
             refreshCacheUi()
@@ -1948,7 +1986,7 @@ private fun showEpisodePanel(anchor: View) {
                     if(anchor.isAttachedToWindow) anchor.requestFocus()
                     if(overlayWasVisible) showHud() else hidePlaybackOverlay()
                 }
-            },lastWatched=library.progress(data.series.id)?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } },lastCompleted=library.progress(data.series.id)?.completed==true,cache=EpisodeCacheUi({ cacheMark(data.episodes[it]) },{ cacheSummary() },{ caches().enqueue(listOf(data.episodes[it]),library.maxQuality) },{ caches().enqueue(data.episodes,library.maxQuality) }))
+            },lastWatched=library.progress(data.series.id)?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } },lastCompleted=library.progress(data.series.id)?.completed==true,cache=EpisodeCacheUi({ cacheMark(data.episodes[it]) },{ cacheSummary() },{ caches().enqueue(data.series,listOf(data.episodes[it]),library.maxQuality) },{ caches().enqueue(data.series,data.episodes,library.maxQuality) }))
         episodePanel=next; next.show(); updatePauseGlyph()
     }
     private fun hidePanel() { if(playError) return; panel=false; controls.visibility=View.GONE; controls.clearFocus(); showHud() }

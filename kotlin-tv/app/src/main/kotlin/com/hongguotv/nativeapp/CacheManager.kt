@@ -8,6 +8,7 @@ import com.hongguotv.core.ContentRepository
 import com.hongguotv.core.EpisodeCache
 import com.hongguotv.core.RemoteVideo
 import com.hongguotv.core.Rendition
+import com.hongguotv.core.Series
 import okhttp3.OkHttpClient
 import java.io.IOException
 import java.util.concurrent.Executors
@@ -29,7 +30,8 @@ class CacheManager(
 ) {
     enum class State { QUEUED, RUNNING, FAILED }
 
-    class Task(val episodeId: String, val quality: Int) {
+    /** 任务带着它属于哪部剧：落盘时把归属写进元数据，「已下载」列表才认得出剧名。 */
+    class Task(val episodeId: String, val quality: Int, val series: Series) {
         @Volatile var state = State.QUEUED
         @Volatile var percent = 0
         @Volatile var message = ""
@@ -55,12 +57,12 @@ class CacheManager(
     fun freeBytes(): Long = cache.freeBytes()
 
     /** 把一批分集排进队列。已经缓存过的、已经在队列里的直接跳过，不重复下载。 */
-    fun enqueue(episodeIds: List<String>, quality: Int) {
+    fun enqueue(series: Series, episodeIds: List<String>, quality: Int) {
         var added = false
         synchronized(this) {
             episodeIds.forEach { id ->
                 if (cache.cached(id) != null || known.containsKey(id)) return@forEach
-                val task = Task(id, quality)
+                val task = Task(id, quality, series)
                 known[id] = task; pending.addLast(task); added = true
             }
         }
@@ -143,7 +145,8 @@ class CacheManager(
                         task.percent = percent; reportedAt = now; notifyUi()
                     }
                 },
-                canceled = { task.canceled })
+                canceled = { task.canceled },
+                seriesId = task.series.id, seriesTitle = task.series.title, cover = task.series.cover)
             synchronized(this) { known.remove(task.episodeId) }
             android.util.Log.i("HongguoTV", "Episode cached episode=${task.episodeId} quality=${rendition.quality} bytes=${video.total}")
         } finally { video.close(); synchronized(this) { if (activeVideo === video) activeVideo = null } }

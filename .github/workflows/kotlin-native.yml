@@ -71,6 +71,9 @@ jobs:
           ls -l "$apk_dir"
       - name: Unit tests and Android lint
         run: ./kotlin-tv/gradlew -p kotlin-tv :core:test :app:testDebugUnitTest :app:lintDebug --console=plain
+      - name: Report which checks failed
+        if: failure()
+        run: python3 kotlin-tv/tools/report-test-failures.py
       - name: Publish this APK as a pre-release
         if: always() && github.event_name == 'push'
         env:
