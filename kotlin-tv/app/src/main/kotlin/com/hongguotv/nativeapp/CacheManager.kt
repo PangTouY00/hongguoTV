@@ -64,42 +64,41 @@ class CacheManager(
                 known[id] = task; pending.addLast(task); added = true
             }
         }
-        if (added) { notify(); pump() }
+        if (added) { notifyUi(); pump() }
     }
 
     /** 取消一集：还在排队的直接撤掉，正在下载的中断当前分段并保留已写的部分，下次接着写。 */
     fun cancel(episodeId: String) {
         val video = synchronized(this) {
             val task = known[episodeId] ?: return
-            if (running === task) task.canceled = true else { pending.remove(task); known.remove(episodeId) }
-            activeVideo
+            // 只有正在下载的那一集才需要在途请求被断掉；排队中的任务还没开始，没有可断的东西。
+            if (running === task) { task.canceled = true; activeVideo } else { pending.remove(task); known.remove(episodeId); null }
         }
-        video?.cancel()
-        notify()
+        video?.close()
+        notifyUi()
     }
 
     fun cancelAll() {
         val video = synchronized(this) {
             pending.toList().forEach { known.remove(it.episodeId) }
             pending.clear()
-            running?.canceled = true
-            activeVideo
+            if (running != null) { running?.canceled = true; activeVideo } else null
         }
-        video?.cancel()
-        notify()
+        video?.close()
+        notifyUi()
     }
 
     /** 删除已缓存的文件。正在下载的那一集同时取消。 */
     fun remove(episodeId: String): Int {
         cancel(episodeId)
         val removed = cache.remove(episodeId)
-        notify(); return removed
+        notifyUi(); return removed
     }
 
     fun clear(): Int {
         cancelAll()
         val removed = cache.clear()
-        notify(); return removed
+        notifyUi(); return removed
     }
 
     private fun pump() {
@@ -108,7 +107,7 @@ class CacheManager(
             while (true) {
                 val task = synchronized(this) { pending.removeFirstOrNull() } ?: break
                 synchronized(this) { running = task }
-                notify()
+                notifyUi()
                 try { download(task); failures = 0 }
                 catch (error: Exception) {
                     synchronized(this) { task.state = State.FAILED; task.percent = 0
@@ -117,7 +116,7 @@ class CacheManager(
                     android.util.Log.w("HongguoTV", "Episode cache failed episode=${task.episodeId}: ${error.javaClass.simpleName} ${error.message}")
                 }
                 synchronized(this) { running = null; if (task.canceled) known.remove(task.episodeId) }
-                notify()
+                notifyUi()
                 // 连续三次都失败说明不是某一集的问题，停下来，别把整部剧都试一遍。
                 if (failures >= 3) { synchronized(this) { pending.toList().forEach { known.remove(it.episodeId) }; pending.clear() }; break }
             }
@@ -141,7 +140,7 @@ class CacheManager(
                     val percent = (done * 100 / total).toInt()
                     val now = System.currentTimeMillis()
                     if (percent >= task.percent + 2 || done == total || now - reportedAt >= 500) {
-                        task.percent = percent; reportedAt = now; notify()
+                        task.percent = percent; reportedAt = now; notifyUi()
                     }
                 },
                 canceled = { task.canceled })
@@ -150,7 +149,7 @@ class CacheManager(
         } finally { video.close(); synchronized(this) { if (activeVideo === video) activeVideo = null } }
     }
 
-    private fun notify() { main.post(listener) }
+    private fun notifyUi() { main.post(listener) }
 
     fun close() { worker.shutdownNow() }
 }

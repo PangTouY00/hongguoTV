@@ -83,7 +83,7 @@ internal class PublicFeedBackend(
     private fun open(id: String): RemoteVideo {
         val opened=openStream(http,repository,id,quality,CodecCapabilities::supports,initialBytes=32*1024) { it==null || CodecCapabilities.supports(it) }
             ?: throw java.io.IOException("该作品暂时没有可试播的剧集")
-        return opened.video
+        return opened.remote()
     }
     override fun prepare(detail: Detail): TrialClip {
         val id=detail.episodes.firstOrNull() ?: throw java.io.IOException("该作品暂时没有可试播的剧集")

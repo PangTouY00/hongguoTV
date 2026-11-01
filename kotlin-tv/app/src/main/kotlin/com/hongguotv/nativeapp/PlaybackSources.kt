@@ -15,6 +15,9 @@ import okhttp3.OkHttpClient
 /** `http` is set only when the stream was carried over from an earlier warm-up, so the caller
  *  hands that client to playback instead of opening a second connection for the same episode. */
 internal data class OpenedStream(val video: VideoSource,val rendition: Rendition?,val tiers: List<Rendition>,val track: VideoTracks.Track?,val http: OkHttpClient?=null,val cached: Boolean=false)
+/** 在线那条路交出来的总是 RemoteVideo，缓存流由 openCached 单独给出。预热与首页试播需要
+ *  warm() 这类只有在线才有的能力，所以它们从这个入口取。 */
+internal fun OpenedStream.remote(): RemoteVideo = video as RemoteVideo
 /** Opens the first rendition the device can actually decode: select by API metadata, then
  *  verify the coded size read from the MP4 header and step down the ladder on mismatch. */
 internal fun openStream(http: OkHttpClient,repository: ContentRepository,id: String,maxQuality: Int,

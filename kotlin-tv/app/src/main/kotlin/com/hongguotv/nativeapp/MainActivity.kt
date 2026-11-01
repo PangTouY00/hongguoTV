@@ -1464,7 +1464,8 @@ class MainActivity: Activity() {
                 val prepared=scope.run {
                     val opened=openStream(http,source,id,quality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) }
                         ?: throw java.io.IOException("没有电视可播放的清晰度")
-                    opened.video.also { remote=it; it.warm(warmBytes) }
+                    // 已经缓存的下一集在上面就不再预热，走到这里的一定是在线流。
+                    opened.remote().also { remote=it; it.warm(warmBytes) }
                 }
                 if(preparedNext.complete(ticket,key,prepared)) {
                     android.util.Log.i("HongguoTV","Next episode opening buffered bytes=$warmBytes metered=$metered")
@@ -1947,7 +1948,7 @@ private fun showEpisodePanel(anchor: View) {
                     if(anchor.isAttachedToWindow) anchor.requestFocus()
                     if(overlayWasVisible) showHud() else hidePlaybackOverlay()
                 }
-            },lastWatched=library.progress(data.series.id)?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } },lastCompleted=library.progress(data.series.id)?.completed==true,cache=EpisodeCacheUi({ cacheMark(data.episodes[it]) },{ cacheSummary() },{ caches().enqueue(listOf(data.episodes[it]),library.maxQuality) },{ caches().enqueue(data.episodes,library.maxQuality) })
+            },lastWatched=library.progress(data.series.id)?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } },lastCompleted=library.progress(data.series.id)?.completed==true,cache=EpisodeCacheUi({ cacheMark(data.episodes[it]) },{ cacheSummary() },{ caches().enqueue(listOf(data.episodes[it]),library.maxQuality) },{ caches().enqueue(data.episodes,library.maxQuality) }))
         episodePanel=next; next.show(); updatePauseGlyph()
     }
     private fun hidePanel() { if(playError) return; panel=false; controls.visibility=View.GONE; controls.clearFocus(); showHud() }

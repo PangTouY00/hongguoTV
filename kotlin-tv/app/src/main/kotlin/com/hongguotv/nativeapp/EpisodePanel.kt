@@ -113,7 +113,7 @@ class EpisodePanel(
                 val mark=cacheMark(index)
                 val cell=button(cellLabel(index),index==current) { select(index) }
                 cell.contentDescription="第 ${index+1} 集"+(if(index==current) "，当前播放" else "")+mark
-                row.addView(cell,LinearLayout.LayoutParams(0,-2,1f).apply { setMargins(dp(3),dp(3),dp(3),dp(3)) }); cells+=cell
+                row.addView(cell,LinearLayout.LayoutParams(0,-2,1f).apply { setMargins(dp(3),dp(3),dp(3),dp(3)) }); cells+=cell; cellIndexes+=index
             }
             repeat(5-indexes.size) { row.addView(Space(activity),LinearLayout.LayoutParams(0,1,1f)) }
             grid.addView(row)
