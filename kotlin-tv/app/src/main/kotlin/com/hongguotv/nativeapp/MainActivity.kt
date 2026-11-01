@@ -35,8 +35,13 @@ class MainActivity: Activity() {
     private val io=Executors.newFixedThreadPool(3)
     private val repository=ContentRepository(playbackSession=PlaybackDeviceSession.shared)
     // 缓存落在应用自己的外部私有目录：不需要任何存储权限，电视上也不会弹权限框。
-    // 代价是卸载即清，这一点在缓存管理里写明了。
-    private val episodeCache by lazy { EpisodeCache(File(getExternalFilesDir(null) ?: filesDir,"episodes-v1")) }
+    // 代价是卸载即清，这一点在缓存管理里写明了。外部目录建不出来或写不进去时退回应用内部目录：
+    // 两处都是应用私有、都不需要权限，只是内部目录在文件管理器里看不到。
+    private val cacheDirectory: java.io.File by lazy {
+        val external = getExternalFilesDir(null)?.let { java.io.File(it, "episodes-v1") }
+        if (external != null && EpisodeCache.isUsable(external)) external else java.io.File(filesDir, "episodes-v1")
+    }
+    private val episodeCache by lazy { EpisodeCache(cacheDirectory) }
     private var cacheQueue: CacheManager?=null
     private var detailCacheButton: TextView?=null
     // 榜单专用并行加载通道：最多四榜各自在途、互不取消，与全局单飞 work() 隔离。
@@ -1946,6 +1951,10 @@ class MainActivity: Activity() {
             else -> "缓存全部 ${data.episodes.size} 集"
         }
     }
+    /** 缓存目录落在哪一处。缓存出问题时这一句就是判断依据，只写「应用自己的目录」看不出用了哪个。 */
+    private fun cacheLocationLabel(): String =
+        if (cacheDirectory.path.startsWith(filesDir.path)) "应用内部目录" else "外部私有目录"
+
     private fun showCacheManager(anchor: TextView) {
         val data=detail
         val queue=caches()
@@ -1958,7 +1967,7 @@ class MainActivity: Activity() {
             if(unwatched.isEmpty()) "没有未看的集可缓存" else "缓存未看的 ${unwatched.size} 集",
             if(current!=null && episodeCache.cached(current)!=null) "删除本集缓存" else "缓存本集",
             "清空全部缓存 · ${rows.size} 集 · ${queue.bytesUsed()/1024/1024} MB",
-            "剩余空间 ${queue.freeBytes()/1024/1024} MB · 缓存存在应用自己的目录，卸载即清")
+            "剩余空间 ${queue.freeBytes()/1024/1024} MB · 缓存位置 ${cacheLocationLabel()} · 卸载即清")
         tvTools.choose("缓存管理",labels,anchor,{ choice -> main.post {
             if(screen!="player" && !anchor.isAttachedToWindow) return@post
             when(choice) {

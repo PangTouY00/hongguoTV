@@ -30,4 +30,13 @@ class CacheQueueTest {
         assertEquals("未知原因", safeCacheError(""))
         assertTrue(safeCacheError("x".repeat(400)).length <= 120)
     }
+
+    @Test fun aDirectoryProblemNamesTheDirectoryInsteadOfBlamingTheDisk() {
+        // 这一句是用户唯一能看到的信息：写成「存储空间不足」会让人去清磁盘，而问题在目录上。
+        val reason = "无法创建缓存目录 /storage/emulated/0/Android/data/com.hongguotv.nativeapp/files/episodes-v1"
+        val text = cacheSummaryText(0, 0, 0, listOf("910" to safeCacheError(reason)))
+        assertNotNull(text)
+        assertTrue(text!!.contains("无法创建缓存目录"))
+        assertFalse(text.contains("存储空间不足"))
+    }
 }

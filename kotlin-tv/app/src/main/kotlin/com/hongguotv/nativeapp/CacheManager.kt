@@ -17,6 +17,8 @@ import java.util.concurrent.Executors
 internal class NotEnoughSpace(message: String) : IOException(message)
 /** 这一集本来就没有能用的清晰度：换档也没有可换的。 */
 internal class NoRenditionException(message: String) : IOException(message)
+/** 缓存目录建不出来或写不进去：换清晰度、换一集都不会改变结果，直接停并把位置报出来。 */
+internal class CacheStorageException(message: String) : IOException(message)
 
 /**
  * 缓存任务的编排：一次只下一集，按点下的顺序排队。
@@ -160,14 +162,16 @@ class CacheManager(
             catch (error: Exception) {
                 last = error
                 android.util.Log.w("HongguoTV", "Cache attempt failed episode=${task.episodeId} quality=${rendition.quality} codec=${rendition.codec}: ${error.javaClass.simpleName} ${error.message}")
-                // 取消、空间不足、这一集本来就没有资源：换清晰度不会改变结果，别白试一遍。
-                if (task.canceled || error is NotEnoughSpace || error is NoRenditionException) throw error
+                // 取消、空间不足、目录不可用、这一集本来就没有资源：换清晰度不会改变结果，别白试一遍。
+                if (task.canceled || error is NotEnoughSpace || error is CacheStorageException || error is NoRenditionException) throw error
             }
         }
         throw last ?: IOException("这一集没有可缓存的清晰度")
     }
 
     private fun store(task: Task, rendition: Rendition) {
+        // 目录不可用时换清晰度、换一集都没有区别，先问它，省掉一次已经知道会失败的请求。
+        cache.unusable()?.let { throw CacheStorageException(it) }
         val video = RemoteVideo(http, rendition.toStreamInfo())
         synchronized(this) { activeVideo = video }
         try {
