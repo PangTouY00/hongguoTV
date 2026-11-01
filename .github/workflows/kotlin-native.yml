@@ -73,22 +73,7 @@ jobs:
         run: ./kotlin-tv/gradlew -p kotlin-tv :core:test :app:testDebugUnitTest :app:lintDebug --console=plain
       - name: Report which checks failed
         if: failure()
-        run: |
-          set -eu
-          found=0
-          for report in $(find kotlin-tv -path '*/build/test-results/*' -name '*.xml' 2>/dev/null); do
-            python3 - "$report" <<'PY'
-import sys,xml.etree.ElementTree as ET
-try: root=ET.parse(sys.argv[1]).getroot()
-except Exception: sys.exit(0)
-for case in root.iter('testcase'):
-    for bad in list(case.iter('failure'))+list(case.iter('error')):
-        detail=(bad.get('message') or '').strip().replace('\n',' ')[:400]
-        print('::error::%s.%s: %s' % (case.get('classname'),case.get('name'),detail))
-PY
-            found=1
-          done
-          if [ "$found" = 0 ]; then echo '::error::没有找到测试报告：失败发生在编译或 lint 阶段'; fi
+        run: python3 kotlin-tv/tools/report-test-failures.py
       - name: Publish this APK as a pre-release
         if: always() && github.event_name == 'push'
         env:
