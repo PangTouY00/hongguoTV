@@ -6,7 +6,6 @@ import android.widget.TextView
 import com.hongguotv.core.BackupData
 import com.hongguotv.core.BackupSettings
 import com.hongguotv.core.EpisodeCache
-import com.hongguotv.core.Library
 import com.hongguotv.core.LibraryIndex
 import org.junit.Assert.*
 import org.junit.Test
@@ -26,7 +25,7 @@ class FavoritesDownloadsTest {
     private fun texts(view: View): List<TextView> = if(view is ViewGroup) (0 until view.childCount).flatMap { texts(view.getChildAt(it)) } else if(view is TextView) listOf(view) else emptyList()
     private fun method(activity: MainActivity,name: String,value: Int) = MainActivity::class.java.getDeclaredMethod(name,Int::class.javaPrimitiveType).apply { isAccessible=true }.invoke(activity,value)
     /** `by lazy` 委托在字节码里叫 <属性名>$delegate。 */
-    private fun cacheOf(activity: MainActivity): EpisodeCache = (get(activity,"episodeCache$delegate") as Lazy<*>).value as EpisodeCache
+    private fun cacheOf(activity: MainActivity): EpisodeCache = (get(activity,"episodeCache\$delegate") as Lazy<*>).value as EpisodeCache
     /** 本机列表走的是持久化索引；测试里直接给一个空的，不去碰真实存储。 */
     private fun emptyLibrary(activity: MainActivity) {
         val library=get(activity,"library") as Library
