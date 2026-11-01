@@ -5,16 +5,15 @@ import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
-import java.io.Closeable
 import java.io.IOException
 import java.io.InputStream
 
 /** One playback stream. No listening socket or local HTTP service. */
-class RemoteVideo(private val http: OkHttpClient, val info: StreamInfo): Closeable {
+class RemoteVideo(private val http: OkHttpClient, override val info: StreamInfo): VideoSource {
     @Volatile private var closed=false
     private val calls=mutableSetOf<Call>()
     data class Range(val bytes: ByteArray,val total: Long)
-    var total: Long=0; private set
+    override var total: Long=0; private set
     private lateinit var prepared: MediaCrypto.Prepared
     @Volatile private var prefix=byteArrayOf()
     private fun newCall(start: Long,end: Long): Call {
@@ -62,7 +61,7 @@ class RemoteVideo(private val http: OkHttpClient, val info: StreamInfo): Closeab
     }
     /** One bounded HTTP range, delivered as bytes arrive instead of waiting for the whole body.
      *  The playback data source owns this reader; close() interrupts an outstanding body read. */
-    fun openRead(start: Long,length: Int): InputStream {
+    override fun openRead(start: Long,length: Int): InputStream {
         check(::prepared.isInitialized)
         require(start in 0 until total && length in 1..1024*1024)
         val end=minOf(total-1,start+length-1)
@@ -102,7 +101,7 @@ class RemoteVideo(private val http: OkHttpClient, val info: StreamInfo): Closeab
             call.cancel();response?.close();synchronized(calls) { calls-=call };throw error
         }
     }
-    @JvmOverloads @Synchronized fun prepare(initialBytes: Int=256*1024): RemoteVideo {
+    @Synchronized override fun prepare(initialBytes: Int): RemoteVideo {
         require(initialBytes in 16*1024..256*1024)
         if(::prepared.isInitialized) return this
         val first=if(initialBytes<256*1024) indexPrefix(initialBytes) else range(0,256*1024-1)
@@ -115,6 +114,8 @@ class RemoteVideo(private val http: OkHttpClient, val info: StreamInfo): Closeab
         if(prepared.samples.any { it.end>total }) throw IOException("视频样本超出资源大小")
         return this
     }
+    /** 默认的首段读取量；接口方法不能带默认值，所以无参入口单独留着。 */
+    fun prepare(): RemoteVideo = prepare(256*1024)
     /** Bounded warm-up. Retains raw bytes so decryption still uses the absolute sample offset. */
     @Synchronized fun warm(bytes: Int=1024*1024): RemoteVideo {
         require(bytes in 256*1024..4*1024*1024)
@@ -124,8 +125,8 @@ class RemoteVideo(private val http: OkHttpClient, val info: StreamInfo): Closeab
         return this
     }
     /** Bytes already held locally; a player can consume these before another network range. */
-    fun cachedBytes(start: Long): Int = (prefix.size.toLong()-start).coerceIn(0,Int.MAX_VALUE.toLong()).toInt()
-    fun read(start: Long,length: Int): ByteArray {
+    override fun cachedBytes(start: Long): Int = (prefix.size.toLong()-start).coerceIn(0,Int.MAX_VALUE.toLong()).toInt()
+    override fun read(start: Long,length: Int): ByteArray {
         require(length in 1..1024*1024 && start>=0)
         if(closed) throw IOException("播放请求已取消")
         if(start>=total) return byteArrayOf()
@@ -136,6 +137,6 @@ class RemoteVideo(private val http: OkHttpClient, val info: StreamInfo): Closeab
         return MediaCrypto.decrypt(raw,start,info.key,prepared)
     }
     /** Coded video dimensions after prepare(); null before prepare or when the header has no readable video track. */
-    fun trackInfo(): VideoTracks.Track? { if(!::prepared.isInitialized) return null; return VideoTracks.videoTrack(prepared.header) }
+    override fun trackInfo(): VideoTracks.Track? { if(!::prepared.isInitialized) return null; return VideoTracks.videoTrack(prepared.header) }
     override fun close() { synchronized(calls) { closed=true; calls.toList().forEach { it.cancel() }; calls.clear() } }
 }

@@ -24,6 +24,7 @@ import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
 import com.hongguotv.core.*
+import java.io.File
 import java.util.concurrent.Executors
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -33,6 +34,11 @@ class MainActivity: Activity() {
     private val main=Handler(Looper.getMainLooper())
     private val io=Executors.newFixedThreadPool(3)
     private val repository=ContentRepository(playbackSession=PlaybackDeviceSession.shared)
+    // 缓存落在应用自己的外部私有目录：不需要任何存储权限，电视上也不会弹权限框。
+    // 代价是卸载即清，这一点在缓存管理里写明了。
+    private val episodeCache by lazy { EpisodeCache(File(getExternalFilesDir(null) ?: filesDir,"episodes-v1")) }
+    private var cacheQueue: CacheManager?=null
+    private var detailCacheButton: TextView?=null
     // 榜单专用并行加载通道：最多四榜各自在途、互不取消，与全局单飞 work() 隔离。
     private val rankWorker=Executors.newFixedThreadPool(3)
     private val networkCleanup=Executors.newSingleThreadExecutor()
@@ -180,7 +186,7 @@ class MainActivity: Activity() {
     private var group=0
     private var synopsisExpanded=false
     private var player: ExoPlayer?=null
-    private var video: RemoteVideo?=null
+    private var video: VideoSource?=null
     private var playbackReady=false
     private var pausedForLifecycle=false
     private lateinit var hud: LinearLayout
@@ -1201,6 +1207,12 @@ class MainActivity: Activity() {
             synopsisButton.text=if(synopsisExpanded) "收起简介" else "完整简介"
             scroll.post { scroll.scrollTo(0,previousScroll) }
         }
+        lateinit var cacheButton: TextView
+        cacheButton=addButton(secondary,detailCacheLabel()) {
+            if(caches().pendingCount()>0) caches().cancelAll() else caches().enqueue(data.episodes,library.maxQuality)
+            refreshCacheUi()
+        }
+        detailCacheButton=cacheButton
         content.addView(hero)
         val groupRow=row(); groupRow.setPadding(0,dp(3),0,dp(5))
         val maxGroup=data.episodes.lastIndex/20; group=group.coerceIn(0,maxGroup)
@@ -1214,14 +1226,14 @@ class MainActivity: Activity() {
         val episodes=mutableListOf<View>()
         (group*20 until minOf((group+1)*20,data.episodes.size)).toList().chunked(10).forEach { numbers ->
             val line=row()
-            numbers.forEach { index -> val item=button("${index+1}"+(if(index==episodeIndex) "\n当前" else if(index==resumeIndex && progress!=null) if(progress.completed) "\n已看" else "\n上次" else ""),index==episodeIndex) { playEpisode(index,if(progress?.episodeId==data.episodes[index] && !progress.completed) progress.position else 0) }; item.textSize=12f;item.setPadding(dp(2),dp(3),dp(2),dp(3));item.contentDescription="第 ${index+1} 集"; line.addView(item,lp(0,dp(42)).apply { weight=1f; rightMargin=dp(6) }); episodes+=item }
+            numbers.forEach { index -> val item=button("${index+1}"+(if(index==episodeIndex) "\n当前" else if(index==resumeIndex && progress!=null) if(progress.completed) "\n已看" else "\n上次" else "")+(cacheMark(data.episodes[index])?.let { "\n$it" }.orEmpty()),index==episodeIndex) { playEpisode(index,if(progress?.episodeId==data.episodes[index] && !progress.completed) progress.position else 0) }; item.textSize=12f;item.setPadding(dp(2),dp(3),dp(2),dp(3));item.contentDescription="第 ${index+1} 集"; line.addView(item,lp(0,dp(42)).apply { weight=1f; rightMargin=dp(6) }); episodes+=item }
             repeat(10-numbers.size) { line.addView(Space(this),lp(0,dp(42)).apply { weight=1f; rightMargin=dp(6) }) }
             content.addView(line,lp(-1,dp(49)))
         }
         episodes.forEachIndexed { i,v -> v.nextFocusLeftId=if(i%10==0) v.id else episodes[i-1].id; v.nextFocusRightId=if(i%10==9 || i==episodes.lastIndex) v.id else episodes[i+1].id; if(i>=10) v.nextFocusUpId=episodes[i-10].id; v.nextFocusDownId=if(i+10<episodes.size) episodes[i+10].id else v.id }
         val primary=listOf(play,detailComments)
         play.setTextColor(accent)
-        val secondaryActions=listOf(accountFavoriteButton!!,favorite,synopsisButton)
+        val secondaryActions=listOf(accountFavoriteButton!!,favorite,synopsisButton,cacheButton)
         secondaryActions.forEach { it.textSize=13f;it.setTextColor(muted) }
         primary.forEachIndexed { i,v -> v.nextFocusLeftId=primary.getOrNull(i-1)?.id ?: v.id;v.nextFocusRightId=primary.getOrNull(i+1)?.id ?: v.id;v.nextFocusDownId=secondaryActions[minOf(i,secondaryActions.lastIndex)].id }
         secondaryActions.forEachIndexed { i,v -> v.nextFocusUpId=primary[minOf(i,primary.lastIndex)].id;v.nextFocusLeftId=secondaryActions.getOrNull(i-1)?.id ?: v.id;v.nextFocusRightId=secondaryActions.getOrNull(i+1)?.id ?: v.id;v.nextFocusDownId=jump.id }
@@ -1334,6 +1346,7 @@ class MainActivity: Activity() {
         val requestedId=data.episodes[episodeIndex]; val maxQuality=library.maxQuality; val ticket=generation
         work({ val carried=claimWarmup(targetKey,warmupInFlight)
             carried.first?.let { OpenedStream(it,null,emptyList(),it.trackInfo(),carried.second) }
+                ?: openCached(episodeCache,requestedId,maxQuality) { it==null || CodecCapabilities.supports(it) }
                 ?: openStream(repository.http,repository,requestedId,maxQuality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) }
                 ?: throw java.io.IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集") }, { opened ->
             val remote=opened.video; video=remote; val carriedOver=opened.http!=null
@@ -1430,6 +1443,8 @@ class MainActivity: Activity() {
         if(!foreground || !p.isPlaying || !library.autoNext || playError || sleepStopped ||
             sleepTimer.episodesLeft==1 || queuedNext!=null || episodeIndex>=data.episodes.lastIndex) return
         val id=data.episodes[episodeIndex+1]; val quality=library.maxQuality; val key="$id:$quality"
+        // 下一集已经在本地就不必再预热：本地打开没有地址查询与首段网络等待，预热反而抢带宽。
+        if(episodeCache.cached(id)!=null) return
         if(preparedNext.isFresh(key) || prefetchJob?.isDone==false) return
         val now=android.os.SystemClock.elapsedRealtime()
         val metered=connectivity.isActiveNetworkMetered
@@ -1462,7 +1477,7 @@ class MainActivity: Activity() {
             }
         }
     }
-    private fun episodeSource(remote: RemoteVideo,id: String)=ProgressiveMediaSource.Factory { VideoDataSource(remote) }
+    private fun episodeSource(remote: VideoSource,id: String)=ProgressiveMediaSource.Factory { VideoDataSource(remote) }
         .createMediaSource(MediaItem.Builder().setMediaId(id).setUri("hongguotv://episode/$id").setMimeType(MimeTypes.VIDEO_MP4).build())
     private fun queuePreparedEpisode(key: String) {
         val p=player ?: return;val data=detail ?: return
@@ -1538,6 +1553,7 @@ class MainActivity: Activity() {
         }
     }
     private fun playedQualityLabel(opened: OpenedStream,maxQuality: Int): String {
+        if(opened.cached) return opened.video.info.quality+" · 本地缓存"
         val rendition=opened.rendition ?: return opened.video.info.quality
         val label=if(rendition.quality>0) "${rendition.quality}P" else "自动"
         if(rendition.quality>maxQuality) return label+"（兼容资源）"
@@ -1700,7 +1716,7 @@ class MainActivity: Activity() {
         val duration=p.duration.coerceAtLeast(0); val position=pendingSeek ?: p.currentPosition
         val state=when { p.playbackState==Player.STATE_BUFFERING -> "缓冲中"; p.playbackState==Player.STATE_ENDED -> "本集已结束"; !p.playWhenReady -> "已暂停"; else -> "正在播放" }
         val speed=if(boostSpeed) "3x 长按倍速" else PlaybackSpeed.label(p.playbackParameters.speed)
-        playbackText.text="$state  ·  ${formatTime(position)} / ${formatTime(duration)}  ·  $quality  ·  $speed"+(if(touchLock) "  ·  已锁定" else "")+(if(sleepTimer.active) "  ·  定时 ${sleepTimer.label()}" else "")
+        playbackText.text="$state  ·  ${formatTime(position)} / ${formatTime(duration)}  ·  $quality  ·  $speed"+(if(touchLock) "  ·  已锁定" else "")+(if(sleepTimer.active) "  ·  定时 ${sleepTimer.label()}" else "")+(cacheQueue?.pendingCount()?.takeIf { it>0 }?.let { "  ·  缓存中 $it 集" }.orEmpty())
         progressBar.progress=if(duration>0) (position*1000/duration).toInt().coerceIn(0,1000) else 0
     }
     private fun requestPlayback(play: Boolean) {
@@ -1791,7 +1807,7 @@ class MainActivity: Activity() {
         addButton(transport,if(touchLock) "🔒" else "🔓",touchLock) { touchLock=!touchLock; showPanel() }
         lateinit var more: TextView
         more=addButton(transport,"播放设置") {
-            tvTools.choose("播放设置",listOf("倍速 ${PlaybackSpeed.label(library.playbackSpeed)}","清晰度 ${library.maxQuality}P","画面 ${library.frameMode.label}","定时 ${sleepTimer.label()}","从头播放","重置设备能力记录"),more,{ choice ->
+            tvTools.choose("播放设置",listOf("倍速 ${PlaybackSpeed.label(library.playbackSpeed)}","清晰度 ${library.maxQuality}P","画面 ${library.frameMode.label}","定时 ${sleepTimer.label()}","从头播放","重置设备能力记录","缓存管理 · 已缓存 ${episodeCache.records().size} 集"),more,{ choice ->
                 main.post {
                     if(screen=="player" && more.isAttachedToWindow) when(choice) {
                         0 -> showSpeedPicker(more)
@@ -1805,6 +1821,7 @@ class MainActivity: Activity() {
                             android.util.Log.i("HongguoTV","Decoder capability lessons reset ($count entries)")
                             playbackText.text=if(count>0) "已清除 $count 条设备能力记录，重新按解码器实际能力选流" else "暂无设备能力记录"
                         }
+                        6 -> showCacheManager(more)
                     }
                 }
             })
@@ -1848,7 +1865,68 @@ class MainActivity: Activity() {
         dialog.setOnDismissListener { if(anchor.isAttachedToWindow) anchor.requestFocus() }
         dialog.show()
     }
-    private fun showEpisodePanel(anchor: View) {
+    /** 缓存队列只在第一次用到时建。HTTP 通道沿用播放那一份：同一组 CDN 复用连接，注册下发的 Cookie 也一并带上。 */
+    private fun caches(): CacheManager {
+        cacheQueue?.let { return it }
+        val http=repository.http.newBuilder().readTimeout(60,java.util.concurrent.TimeUnit.SECONDS).build()
+        return CacheManager(episodeCache,repository,http,CodecCapabilities::supports,{ main.post { refreshCacheUi() } }).also { cacheQueue=it }
+    }
+    /** 队列状态一变就画回界面：选集面板的标记、详情页的按钮文字、播放界面的进度。 */
+    private fun refreshCacheUi() {
+        episodePanel?.refresh()
+        detailCacheButton?.text=detailCacheLabel()
+        if(screen=="player" && playbackReady) updatePlaybackText()
+    }
+    /** 一集在缓存里的标记：已缓存、排队、下载中的百分比、失败。 */
+    private fun cacheMark(episodeId: String): String? {
+        if(episodeCache.cached(episodeId)!=null) return "✓"
+        // 只是画一个标记，不该为此建起下载队列（它带自己的线程与 HTTP 通道）。
+        val task=cacheQueue?.task(episodeId) ?: return null
+        return when(task.state) {
+            CacheManager.State.QUEUED -> "…"
+            CacheManager.State.RUNNING -> "${task.percent}%"
+            CacheManager.State.FAILED -> "失败"
+        }
+    }
+    private fun cacheSummary(): String? {
+        val queue=cacheQueue ?: return null
+        val pending=queue.pendingCount()
+        if(pending==0) return null
+        return "缓存队列 · 还有 $pending 集 · 已缓存 ${queue.cachedCount()} 集 · 占用 ${queue.bytesUsed()/1024/1024} MB"
+    }
+    private fun detailCacheLabel(): String {
+        val data=detail ?: return "缓存全部"
+        val ids=data.episodes.toSet()
+        val done=episodeCache.records().count { it.episodeId in ids }
+        val pending=cacheQueue?.pendingCount() ?: 0
+        return when {
+            pending>0 -> "缓存中 · 还有 $pending 集"
+            done>=data.episodes.size -> "已全部缓存 · $done 集"
+            done>0 -> "已缓存 $done 集 · 缓存全部"
+            else -> "缓存全部 ${data.episodes.size} 集"
+        }
+    }
+    private fun showCacheManager(anchor: TextView) {
+        val data=detail
+        val queue=caches()
+        val rows=queue.cached()
+        val current=data?.episodes?.getOrNull(episodeIndex)
+        val labels=listOf(
+            if(queue.pendingCount()>0) "停止缓存" else "缓存未缓存的 ${data?.episodes?.size ?: 0} 集",
+            if(current!=null && episodeCache.cached(current)!=null) "删除本集缓存" else "缓存本集",
+            "清空全部缓存 · ${rows.size} 集 · ${queue.bytesUsed()/1024/1024} MB",
+            "剩余空间 ${queue.freeBytes()/1024/1024} MB · 缓存存在应用自己的目录，卸载即清")
+        tvTools.choose("缓存管理",labels,anchor,{ choice -> main.post {
+            if(screen!="player" && !anchor.isAttachedToWindow) return@post
+            when(choice) {
+                0 -> if(queue.pendingCount()>0) queue.cancelAll() else data?.let { queue.enqueue(it.episodes,library.maxQuality) }
+                1 -> current?.let { if(episodeCache.cached(it)!=null) queue.remove(it) else queue.enqueue(listOf(it),library.maxQuality) }
+                2 -> queue.clear()
+            }
+            refreshCacheUi()
+        } })
+    }
+private fun showEpisodePanel(anchor: View) {
         val data=detail ?: return
         if(episodePanel!=null) return
         val ticket=generation
@@ -1869,7 +1947,7 @@ class MainActivity: Activity() {
                     if(anchor.isAttachedToWindow) anchor.requestFocus()
                     if(overlayWasVisible) showHud() else hidePlaybackOverlay()
                 }
-            },lastWatched=library.progress(data.series.id)?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } },lastCompleted=library.progress(data.series.id)?.completed==true)
+            },lastWatched=library.progress(data.series.id)?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } },lastCompleted=library.progress(data.series.id)?.completed==true,cache=EpisodeCacheUi({ cacheMark(data.episodes[it]) },{ cacheSummary() },{ caches().enqueue(listOf(data.episodes[it]),library.maxQuality) },{ caches().enqueue(data.episodes,library.maxQuality) })
         episodePanel=next; next.show(); updatePauseGlyph()
     }
     private fun hidePanel() { if(playError) return; panel=false; controls.visibility=View.GONE; controls.clearFocus(); showHud() }
@@ -2008,7 +2086,7 @@ class MainActivity: Activity() {
         social.destroy()
         favoriteMonitor.destroy(); tvTools.destroy(); updater.destroy(); saveProgress(); cloudAccount.destroy(); releasePlayer(); library.close()
         artwork.close(); releaseCatalogViews(); mediaSession.release(); main.removeCallbacksAndMessages(null)
-        io.shutdownNow(); rankWorker.shutdownNow(); prefetchWorker.shutdownNow(); networkCleanup.shutdown()
+        cacheQueue?.close(); io.shutdownNow(); rankWorker.shutdownNow(); prefetchWorker.shutdownNow(); networkCleanup.shutdown()
         Thread({ repository.http.dispatcher.cancelAll(); repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown() },"hongguotv-network-cleanup").start()
         super.onDestroy()
     }

@@ -10,16 +10,34 @@ import android.view.View
 import android.view.Window
 import android.widget.*
 
+/**
+ * 选集面板看到的缓存状态。
+ *
+ * label 给某一集一个后缀标记（已缓存、排队中、下载中的百分比、失败），summary 给整批一个
+ * 摘要行；两个动作分别对应「缓存这一集」和「缓存全部」。全部可省略，省略时面板与之前一样。
+ */
+class EpisodeCacheUi(
+    val label: (Int) -> String? = { null },
+    val summary: () -> String? = { null },
+    val cacheOne: (Int) -> Unit = {},
+    val cacheAll: () -> Unit = {},
+)
+
 /** A remote-accessible side panel; selecting a number is the only action that changes episodes. */
 class EpisodePanel(
     private val activity: Activity,private val count: Int,private val current: Int,
     private val locate: (Int,View,(Int)->Unit)->Unit,
     private val select: (Int)->Unit,private val closed: ()->Unit,
-    private val lastWatched: Int?=null,private val lastCompleted: Boolean=false
+    private val lastWatched: Int?=null,private val lastCompleted: Boolean=false,
+    private val cache: EpisodeCacheUi?=null
 ) {
     private val dialog=Dialog(activity)
     private var group=current/20
     private var focused=current
+    // 当前这一组格子的引用：下载进度落地时只改文字，不重画整屏，焦点不会跳。
+    private val cells=mutableListOf<TextView>()
+    private val cellIndexes=mutableListOf<Int>()
+    private var summaryLine: TextView?=null
     private fun dp(n: Int)=(n*activity.resources.displayMetrics.density).toInt()
     private fun label(value: String,size: Float=17f)=TextView(activity).apply { text=value; textSize=size; setTextColor(TvStyle.text); setPadding(dp(8),dp(6),dp(8),dp(6)) }
     private fun button(value: String,active: Boolean=false,action: ()->Unit)=label(value,16f).apply {
@@ -39,6 +57,23 @@ class EpisodePanel(
         }
     }
     fun dismiss()=dialog.dismiss()
+    /** 下载进度落地后只改格子上的文字与摘要行：标记要跟着真实状态走，重画整屏会让焦点跳走。 */
+    fun refresh() {
+        if(!dialog.isShowing) return
+        cellIndexes.forEachIndexed { position, index ->
+            val cell=cells[position]
+            cell.text=cellLabel(index)
+            cell.contentDescription="第 ${index+1} 集"+(if(index==current) "，当前播放" else "")+cacheMark(index)
+        }
+        summaryLine?.let { line ->
+            val text=cache?.summary?.invoke()
+            line.text=text.orEmpty(); line.visibility=if(text==null) View.GONE else View.VISIBLE
+        }
+    }
+    private fun cacheMark(index: Int): String = cache?.label?.invoke(index)?.let { " $it" }.orEmpty()
+    private fun cellLabel(index: Int): String = "${index+1}${cacheMark(index)}"+when {
+        index==current -> " · 当前";index==lastWatched -> if(lastCompleted) " · 已看" else " · 上次";else -> ""
+    }
     private fun render() {
         val content=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(14),dp(12),dp(14),dp(12)); setBackgroundColor(TvStyle.background) }
         content.addView(label("选集  /  正在看第 ${current+1} 集",20f))
@@ -46,8 +81,23 @@ class EpisodePanel(
         val close=button("关闭") { dismiss() }
         lateinit var jump: TextView
         jump=button("跳转集数") { locate(focused,jump) { target -> focused=target; group=target/20; render() } }
-        listOf(close,jump).forEach { actions.addView(it,LinearLayout.LayoutParams(0,-2,1f).apply { setMargins(dp(3),dp(3),dp(3),dp(3)) }) }
+        val controls=mutableListOf(close,jump)
+        if(cache!=null) {
+            controls+=button("缓存本集") { cache.cacheOne(current); render() }
+            controls+=button("缓存全部") { cache.cacheAll(); render() }
+        }
+        controls.forEach { actions.addView(it,LinearLayout.LayoutParams(0,-2,1f).apply { setMargins(dp(3),dp(3),dp(3),dp(3)) }) }
+        // 一行里的按钮按位置左右连通，遥控器从任一个都能走到相邻的那个。
+        controls.forEachIndexed { i,control ->
+            control.nextFocusLeftId=controls[if(i==0) i else i-1].id
+            control.nextFocusRightId=controls[if(i==controls.lastIndex) i else i+1].id
+            control.nextFocusUpId=control.id
+        }
         content.addView(actions)
+        val summaryView=label("",14f).apply { visibility=View.GONE }
+        summaryLine=summaryView
+        content.addView(summaryView)
+        refresh()
         val paging=LinearLayout(activity)
         val previous=button("‹ 上一组") { group--; focused=group*20; render() }.apply { isEnabled=group>0; isFocusable=isEnabled; alpha=if(isEnabled) 1f else .4f }
         val next=button("下一组 ›") { group++; focused=group*20; render() }.apply { isEnabled=(group+1)*20<count; isFocusable=isEnabled; alpha=if(isEnabled) 1f else .4f }
@@ -56,12 +106,13 @@ class EpisodePanel(
         content.addView(label("第 ${group*20+1}—${minOf((group+1)*20,count)} 集 / 共 $count 集",14f))
         val scroll=ScrollView(activity); val grid=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL }; scroll.addView(grid)
         content.addView(scroll,LinearLayout.LayoutParams(-1,0,1f))
-        val cells=mutableListOf<TextView>()
+        cells.clear(); cellIndexes.clear()
         (group*20 until minOf((group+1)*20,count)).toList().chunked(5).forEach { indexes ->
             val row=LinearLayout(activity)
             indexes.forEach { index ->
-                val cell=button("${index+1}"+when { index==current -> " · 当前";index==lastWatched -> if(lastCompleted) " · 已看" else " · 上次";else -> "" },index==current) { select(index) }
-                cell.contentDescription="第 ${index+1} 集"+(if(index==current) "，当前播放" else "")
+                val mark=cacheMark(index)
+                val cell=button(cellLabel(index),index==current) { select(index) }
+                cell.contentDescription="第 ${index+1} 集"+(if(index==current) "，当前播放" else "")+mark
                 row.addView(cell,LinearLayout.LayoutParams(0,-2,1f).apply { setMargins(dp(3),dp(3),dp(3),dp(3)) }); cells+=cell
             }
             repeat(5-indexes.size) { row.addView(Space(activity),LinearLayout.LayoutParams(0,1,1f)) }
@@ -77,7 +128,6 @@ class EpisodePanel(
         previous.nextFocusDownId=cells.first().id; next.nextFocusDownId=cells[minOf(4,cells.lastIndex)].id
         close.nextFocusDownId=if(previous.isFocusable) previous.id else cells.first().id
         jump.nextFocusDownId=if(next.isFocusable) next.id else cells[minOf(4,cells.lastIndex)].id
-        close.nextFocusLeftId=close.id; close.nextFocusRightId=jump.id; jump.nextFocusLeftId=close.id; jump.nextFocusRightId=jump.id
         dialog.setContentView(content)
         cells[(focused-group*20).coerceIn(0,cells.lastIndex)].requestFocus()
     }

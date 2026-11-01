@@ -5,10 +5,10 @@ import android.net.Uri
 import androidx.media3.common.C
 import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DataSpec
-import com.hongguotv.core.RemoteVideo
+import com.hongguotv.core.VideoSource
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-class VideoDataSource(private val video: RemoteVideo): BaseDataSource(true) {
+class VideoDataSource(private val video: VideoSource): BaseDataSource(true) {
     private var position=0L
     private var remaining=0L
     private var reader: java.io.InputStream?=null
