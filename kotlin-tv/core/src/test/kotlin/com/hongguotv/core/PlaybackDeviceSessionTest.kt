@@ -20,7 +20,6 @@ class PlaybackDeviceSessionTest {
     @Test
     fun registersBeforePlaybackAndReusesIdentityAcrossRepositoriesAndRetries() {
         var registrations = 0
-        var models = 0
         val requests = mutableListOf<okhttp3.Request>()
         val http = OkHttpClient.Builder().addInterceptor { chain ->
             val request = chain.request()
@@ -37,7 +36,9 @@ class PlaybackDeviceSessionTest {
                 assertEquals("444", request.url.queryParameter("iid"))
                 // 注册响应里的设备 Cookie 必须跟着播放请求走，账号 Cookie 不在白名单里。
                 assertEquals("ttreq=test-only", request.header("Cookie"))
-                if (++models == 1) "" else model
+                // 这份 fixture 是旧接口的形状：新接口读它会得到「错误码 -1」，
+                // 于是取址回退到旧接口成功——正好覆盖新接口不可用时的回退路径。
+                model
             }
             Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("fixture")
                 .apply { if (registration) addHeader("Set-Cookie", "ttreq=test-only; Path=/") }
@@ -47,7 +48,8 @@ class PlaybackDeviceSessionTest {
         ContentRepository(http, playbackSession = session).streamLadder("123")
         ContentRepository(http, playbackSession = session).streamLadder("123")
         assertEquals("注册一次就够，跨 repository 复用", 1, registrations)
-        assertEquals(3, models)
+        assertEquals(2, requests.count { it.url.encodedPath == "/novel/player/multi_video_model/v1/" })
+        // 两个仓库共用同一个 cdid：重新注册会让平台看成另一台设备，播放进度和限流都对不上。
         assertEquals(1, requests.map { it.url.queryParameter("cdid") }.distinct().size)
     }
 
@@ -139,6 +141,11 @@ class PlaybackDeviceSessionTest {
         val tickets = mutableListOf<String?>()
         val http = OkHttpClient.Builder().addInterceptor { chain ->
             val request = chain.request()
+            // 这条用例只关心旧接口的空响应重试，新接口直接按不可用处理。
+            if (request.url.encodedPath.startsWith("/reading/bookapi/video_tab/")) {
+                return@addInterceptor Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                    .code(200).message("fixture").body("""{"code":100103}""".toResponseBody()).build()
+            }
             tickets += request.url.queryParameter("_rticket")
             val body = if (reads.incrementAndGet() < 3) "" else model
             Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("fixture")

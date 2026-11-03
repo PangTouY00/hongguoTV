@@ -51,6 +51,8 @@ class FeedStartupCacheTest {
                 val json=when(req.url.encodedPath) {
                     "/detail" -> """<script>_ROUTER_DATA={"loaderData":{"detail_page":{"seriesDetail":{"series_id":"101","series_title":"缓存作品","vid_list":["10101","10102"]}}}};</script>"""
                     "/novel/player/multi_video_model/v1/" -> """{"data":{"10101":{"video_model":{"video_list":[{"main_url":"https://example.test/video","video_meta":{"definition":"720p","codec_type":"h264","vwidth":720,"vheight":1280},"encrypt_info":{"encrypt":false}}]}}}}"""
+                    // 新接口在测试里按不可用处理，播放地址仍由旧接口提供。
+                    "/reading/bookapi/video_tab/multi_video_model/v1/" -> """{"code":100103,"message":"PARAM_INVALID"}"""
                     else -> error("Unexpected request")
                 }
                 builder.code(200).body(json.toResponseBody()).build()
@@ -76,7 +78,8 @@ class FeedStartupCacheTest {
             assertEquals(1,paths.count { it=="/detail" })
             assertEquals(2,paths.count { it=="/novel/player/multi_video_model/v1/" })
             assertEquals(listOf("bytes=0-262143","bytes=0-262143"),ranges)
-            assertEquals(5,paths.size)
+            // 每轮多一次新接口尝试：2 次新接口 + 原有的 5 次
+            assertEquals(7,paths.size)
         } finally { controller.pause().stop().destroy() }
     }
 }
