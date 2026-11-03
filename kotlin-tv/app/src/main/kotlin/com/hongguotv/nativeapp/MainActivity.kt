@@ -1991,10 +1991,15 @@ class MainActivity: Activity() {
         if (cacheDirectory.path.startsWith(filesDir.path)) "应用内部目录" else "外部私有目录"
 
     /** 这一集显示的集号。离线详情用缓存里记下的真实集号；没记过的按列表位置算，不冒充「第几集」。 */
-    private fun episodeNumber(data: Detail,index: Int): Int =
-        data.episodeNumbers?.getOrNull(index)?.takeIf { it>0 } ?: (index+1)
-    private fun episodeLabel(data: Detail,index: Int): String =
-        if(data.episodeNumbers!=null && (data.episodeNumbers.getOrNull(index) ?: 0)<=0) "已缓存" else "${episodeNumber(data,index)}"
+    private fun episodeNumber(data: Detail,index: Int): Int {
+        val numbers=data.episodeNumbers
+        return numbers?.getOrNull(index)?.takeIf { it>0 } ?: (index+1)
+    }
+    private fun episodeLabel(data: Detail,index: Int): String {
+        // 取到局部变量再判空：episodeNumbers 是跨模块的公开属性，编译器不给它做 smart cast。
+        val numbers=data.episodeNumbers
+        return if(numbers!=null && (numbers.getOrNull(index) ?: 0)<=0) "已缓存" else "${episodeNumber(data,index)}"
+    }
     /** 详情里的剧集 →（集号, 分集 id）。集号跟着缓存写进元数据，断网时由缓存拼出来的列表才显示得出第几集。 */
     private fun episodePairs(data: Detail,indexes: List<Int> = data.episodes.indices.toList()): List<Pair<Int,String>> =
         indexes.mapNotNull { index -> data.episodes.getOrNull(index)?.let { index to it } }
