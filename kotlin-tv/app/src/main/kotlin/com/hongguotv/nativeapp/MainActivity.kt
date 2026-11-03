@@ -1996,7 +1996,7 @@ class MainActivity: Activity() {
     private fun episodeLabel(data: Detail,index: Int): String =
         if(data.episodeNumbers!=null && (data.episodeNumbers.getOrNull(index) ?: 0)<=0) "已缓存" else "${episodeNumber(data,index)}"
     /** 详情里的剧集 →（集号, 分集 id）。集号跟着缓存写进元数据，断网时由缓存拼出来的列表才显示得出第几集。 */
-    private fun episodePairs(data: Detail,indexes: List<Int>=data.episodes.indices.toList()): List<Pair<Int,String>> =
+    private fun episodePairs(data: Detail,indexes: List<Int> = data.episodes.indices.toList()): List<Pair<Int,String>> =
         indexes.mapNotNull { index -> data.episodes.getOrNull(index)?.let { index to it } }
     /** 还没看过的集，已经缓存过的排掉：这一项报的是真的还会下多少集。 */
     private fun unwatchedPairs(data: Detail): List<Pair<Int,String>> =
