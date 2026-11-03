@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import com.hongguotv.core.CachedEpisode
 import com.hongguotv.core.ContentRepository
+import com.hongguotv.core.Detail
 import com.hongguotv.core.EpisodeCache
 import com.hongguotv.core.RemoteVideo
 import com.hongguotv.core.Rendition
@@ -37,8 +38,9 @@ class CacheManager(
 ) {
     enum class State { QUEUED, RUNNING, FAILED }
 
-    /** 任务带着它属于哪部剧：落盘时把归属写进元数据，「已下载」列表才认得出剧名。 */
-    class Task(val episodeId: String, val quality: Int, val series: Series) {
+    /** 任务带着它属于哪部剧、是这部剧的第几集：落盘时把归属与集号写进元数据，「已下载」列表才认得出
+     *  剧名，断网时由缓存拼出来的剧集列表才显示得出「第几集」。 */
+    class Task(val episodeId: String, val episodeIndex: Int, val quality: Int, val series: Series) {
         @Volatile var state = State.QUEUED
         @Volatile var percent = 0
         @Volatile var message = ""
@@ -66,11 +68,12 @@ class CacheManager(
     /** 队列里失败的任务：界面要写清是哪一集、为什么失败，别只留一个「失败」。 */
     fun failures(): List<Task> = synchronized(this) { known.values.filter { it.state == State.FAILED } }
 
-    /** 把一批分集排进队列。已经缓存过的、已经在队列里的直接跳过，不重复下载。 */
-    fun enqueue(series: Series, episodeIds: List<String>, quality: Int) {
+    /** 把一批分集排进队列。episodes 是（集号, 分集 id）：集号进缓存元数据，离线时用它显示第几集。
+     *  已经缓存过的、已经在队列里的直接跳过，不重复下载。 */
+    fun enqueue(series: Series, episodes: List<Pair<Int, String>>, quality: Int) {
         var added = false
         synchronized(this) {
-            episodeIds.forEach { id ->
+            episodes.forEach { (index, id) ->
                 if (cache.cached(id) != null) return@forEach
                 val existing = known[id]
                 if (existing != null) {
@@ -81,7 +84,7 @@ class CacheManager(
                     }
                     return@forEach
                 }
-                val task = Task(id, quality, series)
+                val task = Task(id, index, quality, series)
                 known[id] = task; pending.addLast(task); added = true
             }
         }
@@ -189,7 +192,8 @@ class CacheManager(
                     }
                 },
                 canceled = { task.canceled },
-                seriesId = task.series.id, seriesTitle = task.series.title, cover = task.series.cover)
+                seriesId = task.series.id, seriesTitle = task.series.title, cover = task.series.cover,
+                episodeIndex = task.episodeIndex)
             synchronized(this) { known.remove(task.episodeId) }
             android.util.Log.i("HongguoTV", "Episode cached episode=${task.episodeId} quality=${rendition.quality} bytes=${video.total}")
         } finally { video.close(); synchronized(this) { if (activeVideo === video) activeVideo = null } }
@@ -216,4 +220,25 @@ internal fun cacheSummaryText(pending: Int, cached: Int, bytesUsed: Long, failur
     val first = failures.firstOrNull() ?: return null
     val more = if (failures.size > 1) " ${failures.size} 集" else ""
     return "缓存失败$more · 原因：${first.second.ifBlank { "未知原因" }} · 再点一次可以重试"
+}
+
+/**
+ * 断网时的详情：由本地缓存记录拼出这部剧的剧集列表。
+ *
+ * 集号来自缓存元数据——缓存了第 145 集，列表第一项仍然是第 145 集，不会冒充第 1 集；旧版本写的
+ * 缓存没记集号（-1），写进 episodeNumbers 是 0，界面按「已缓存」标注。这部剧一集都没缓存时返回
+ * null，让调用方照旧报网络错误，不要凭空造出一个空列表。
+ */
+internal fun offlineDetailOf(series: Series, cached: List<CachedEpisode>): Detail? {
+    val rows = cached.filter { it.seriesId == series.id }
+    if (rows.isEmpty()) return null
+    // 有集号的按集号排，没集号的排到最后：位置不确定的内容不该挤到已知集号中间。
+    val ordered = rows.sortedWith(compareBy({ if (it.episodeIndex >= 0) it.episodeIndex else Int.MAX_VALUE }, { it.episodeId }))
+    val title = series.title.ifBlank { ordered.first().seriesTitle.ifBlank { "剧集 ${series.id}" } }
+    val cover = series.cover.ifBlank { ordered.first().cover }
+    return Detail(
+        Series(series.id, title, cover, series.description, series.badge, series.tags),
+        ordered.map { it.episodeId },
+        ordered.map { it.episodeIndex + 1 },
+    )
 }

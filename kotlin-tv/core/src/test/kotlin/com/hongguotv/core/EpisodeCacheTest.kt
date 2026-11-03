@@ -227,4 +227,22 @@ class EpisodeCacheTest {
         assertTrue(EpisodeCache.isUsable(root))
         assertFalse(EpisodeCache.isUsable(directory))
     }
+
+    @Test fun storedRecordsCarryTheEpisodeNumberTheOfflineListNeeds() {
+        val cache = EpisodeCache(root)
+        cache.store("145", 720, "avc1", 1024L, read = { _, length -> bytes(length) },
+            seriesId = "s-9", seriesTitle = "凛冬末世", episodeIndex = 144)
+        assertEquals(144, cache.cached("145")!!.episodeIndex)
+        // 断网时剧集列表由这些记录拼出来：集号读不回来，缓存了第 145 集会显示成第 1 集。
+        assertEquals(144, cache.records().first { it.episodeId == "145" }.episodeIndex)
+        assertEquals(144, org.json.JSONObject(File(root, "145-720.json").readText()).getInt("episodeIndex"))
+    }
+
+    @Test fun metadataWithoutAnEpisodeNumberReadsAsUnknownInsteadOfFirst() {
+        // 旧版本写的元数据没有集号：必须读成 -1（未知），不能当成第 1 集。
+        val cache = EpisodeCache(root)
+        File(root, "146-720.json").writeText("""{"episodeId":"146","quality":720,"codec":"avc1","bytes":1024,"savedAt":1,"seriesId":"s-9"}""")
+        File(root, "146-720.mp4").writeBytes(bytes(1024))
+        assertEquals(-1, cache.cached("146")!!.episodeIndex)
+    }
 }

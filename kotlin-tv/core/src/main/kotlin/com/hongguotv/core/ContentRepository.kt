@@ -45,7 +45,9 @@ data class Series(val id: String, val title: String, val cover: String = "", val
     fun toJson() = JSONObject().put("id",id).put("title",title).put("cover",cover).put("description",description).put("badge",badge).put("tags",tags)
     companion object { fun fromJson(o: JSONObject) = Series(o.str("id"),o.str("title"),o.str("cover"),o.str("description"),o.str("badge"),o.str("tags")) }
 }
-data class Detail(val series: Series, val episodes: List<String>)
+/** episodeNumbers 只出现在离线详情里：断网时剧集列表由本地缓存拼出来，集号来自缓存元数据，
+ *  而不是列表里的位置——缓存了第 145 集，列表第一项仍然是「第 145 集」，不是「第 1 集」。 */
+data class Detail(val series: Series, val episodes: List<String>, val episodeNumbers: List<Int>? = null)
 data class RankPosition(val rank: Int?, val heat: String, val metrics: String = "")
 data class ComicRanking(val positions: Map<String,RankPosition>, val totalPages: Int, val updatedText: String)
 data class TrialHint(val episodeId: String,val episodeCount: Int)
