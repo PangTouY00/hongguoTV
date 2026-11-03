@@ -36,6 +36,9 @@ internal class MemoryCookies : CookieJar {
         val now = System.currentTimeMillis()
         return store[url.host].orEmpty().filter { it.expiresAt > now }
     }
+
+    /** 空响应重试前丢掉半失效的 ttwid 会话，让 CDN 重新下发一份，而不是反复拿空页。 */
+    fun clear() = store.clear()
 }
 
 internal fun JSONArray.objects() = (0 until length()).mapNotNull { optJSONObject(it) }
@@ -112,12 +115,19 @@ class ContentRepository(
             .build()
     }
     private val site = "https://hongguoduanju.com"
+    private val PLAYER_HOST = "https://api5-normal-sinfonlineb.fqnovel.com"
+    private val PLAYER_UA = "com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)"
     private val suggestionWebId = UUID.randomUUID().toString()
     private data class SearchCursor(val searchId: String, val passback: String, val offset: Int?, val updatedAt: Long)
     private val searchCursors=linkedMapOf<Triple<ContentType,String,Int>,SearchCursor>()
-    private fun text(url: String, signed: Signer.Request? = null, retryTransient: Boolean = false, retries: Int = 1, client: OkHttpClient = http): String {
-        val request = Request.Builder().url(url).header("User-Agent",VendorConstants.VIDEO_UA).header("Accept-Language","zh-CN,zh;q=0.9")
-        signed?.headers?.forEach { (k,v) -> request.header(k,v) }
+    private fun text(url: String, signed: Signer.Request? = null, retryTransient: Boolean = false, retries: Int = 1, client: OkHttpClient = http,
+        headers: Map<String,String> = emptyMap()): String {
+        // 同名头只留一份：OkHttp 的 header() 是追加，先合并成一张表再写。
+        val merged = linkedMapOf("User-Agent" to VendorConstants.VIDEO_UA,"Accept-Language" to "zh-CN,zh;q=0.9")
+        merged.putAll(headers)
+        signed?.headers?.let { merged.putAll(it) }
+        val request = Request.Builder().url(url)
+        merged.forEach { (k,v) -> request.header(k,v) }
         signed?.body?.let { request.post(it.toRequestBody("application/json; charset=utf-8".toMediaType())) }
         // 榜单用收紧超时的专用客户端，其余请求沿用默认客户端。
         fun fetch() = RequestScope.execute(client.newCall(request.build())) { response ->
@@ -141,6 +151,9 @@ class ContentRepository(
                 if(!retryTransient || !temporary || attempt>=retries || Thread.currentThread().isInterrupted) throw e
                 // Bounded retries of the same read-only page; navigation still cancels its scope.
                 attempt++
+                // 200 空响应多半是 CDN 拿着半失效的 ttwid 会话软拦截：先丢掉会话再重读，
+                // 让服务端重新下发 Cookie，而不是原样重放同一个被拦的请求。
+                if(e is EmptyContentException) (http.cookieJar as? MemoryCookies)?.clear()
                 try { Thread.sleep(700L*attempt) } catch (_: InterruptedException) {
                     Thread.currentThread().interrupt();throw java.io.InterruptedIOException("请求已取消")
                 }
@@ -387,9 +400,81 @@ class ContentRepository(
         }
         throw last ?: EmptyPlaybackResponseException()
     }
-    /** Every playable rendition of one episode, best tier first; one player-API round trip. */
+    /**
+     * 一集的可播放清晰度，优先走官方现行接口。
+     *
+     * 旧的 `POST /novel/player/multi_video_model/v1/` 自 2026-11-02 起对第三方客户端一律回
+     * HTTP 200 + 0 字节（换域名、UA、Cookie、完整签名、device_token 都一样），而官方客户端
+     * 早已改用 `GET /reading/bookapi/video_tab/multi_video_model/v1/`。所以先读新接口，
+     * 只有它拿不到清晰度时才回退旧接口，旧接口再给不出就报新接口的原因。
+     */
     fun streamLadder(id: String): StreamLadder {
         require(id.matches(Regex("[0-9]{1,30}")))
+        var tabError: IOException? = null
+        for(round in 0 until 2) {
+            try {
+                tabLadder(id)?.let { return it }
+                break
+            } catch (error: IOException) {
+                tabError=error
+                if(!playbackRetryable(error) || round==1) break
+                try { Thread.sleep(600L) } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt(); throw java.io.InterruptedIOException("请求已取消")
+                }
+            }
+        }
+        try { return readLadder(id) } catch (error: IOException) {
+            // 旧接口常态只有空 body，那种情况下新接口的错误码更有信息量；其它错误照旧抛。
+            throw if(error is EmptyContentException && tabError!=null) tabError else error
+        }
+    }
+    /**
+     * 官方 App 现行的取播放信息接口。参数缺任意一项服务端回 100103；`video_platform`
+     * 只接受 1024，`device_level` 用 1 最稳（3 会把部分集下发成 bytevc2）。
+     */
+    private fun tabLadder(id: String): StreamLadder? {
+        val identity=playbackSession.profile(http)
+        val query=Signer.encode(identity.values + ("_rticket" to clock().toString()))
+        val extra="&video_id=$id&video_id_type=0&device_level=1&need_all_video_definition=1"+
+            "&need_mp4_align=0&use_os_player=0&video_platform=1024&source=0&from_video_id="
+        val headers=linkedMapOf("User-Agent" to PLAYER_UA,"Accept" to "application/json; charset=utf-8")
+        if(identity.cookie.isNotBlank()) headers["Cookie"]=identity.cookie
+        val body=text("$PLAYER_HOST/reading/bookapi/video_tab/multi_video_model/v1/?$query$extra",
+            headers=headers,retryTransient=true)
+        val json=runCatching { JSONObject(body) }.getOrNull() ?: throw IOException("播放接口返回了无法解析的数据")
+        val code=json.optInt("code",-1)
+        if(code!=0) throw IOException("播放接口暂不可用（错误码 $code）")
+        val models=json.optJSONObject("data")?.optJSONObject("video_model_data") ?: throw IOException("播放信息为空")
+        val entry=models.optJSONObject(id)
+            ?: models.keys().asSequence().mapNotNull { models.optJSONObject(it) }.firstOrNull()
+            ?: throw IOException("播放信息为空")
+        val raw=entry.opt("video_model") ?: throw IOException("播放信息为空")
+        val model=if(raw is JSONObject) raw else runCatching { JSONObject(raw.toString()) }.getOrNull() ?: throw IOException("播放信息格式已变化")
+        return ladderFromModel(model)
+    }
+    /** 只有这几类才值得换一轮新签名重读；参数/结构错误重读也没用。 */
+    private fun playbackRetryable(error: IOException) =
+        error is EmptyContentException || error is EmptyPlaybackResponseException ||
+            error is java.net.SocketTimeoutException || error is java.net.SocketException ||
+            error is java.net.UnknownHostException ||
+            (error is ContentHttpException && error.statusCode in setOf(500,502,503,504))
+    /** 新老接口的 video_model 形状一致：能直接组出清晰度就返回，否则交给旧接口的降级地址。 */
+    private fun ladderFromModel(model: JSONObject): StreamLadder? {
+        val inline=model.optJSONArray("video_list")?.objects().orEmpty().mapNotNull { row -> runCatching {
+            val meta=row.optJSONObject("video_meta") ?: return@runCatching null
+            val encryption=row.optJSONObject("encrypt_info") ?: return@runCatching null
+            val codec=meta.str("codec_type").lowercase()
+            val url=cleanUrl(row.str("main_url"))
+            if(codec.isBlank() || codec in setOf("bytevc2","bvc2") || (!url.startsWith("https://") && !url.startsWith("http://"))) return@runCatching null
+            val width=dimension(meta,"vwidth","width") ?: return@runCatching null
+            val height=dimension(meta,"vheight","height") ?: return@runCatching null
+            val key=encryption.str("spade_a").takeIf(String::isNotBlank)?.let(MediaCrypto::deriveKey)
+            if(key==null && !isUnencrypted(encryption)) return@runCatching null
+            Rendition(qualityNumber(meta.str("definition")),codec,width,height,url,key)
+        }.getOrNull() }
+        return if(inline.isEmpty()) null else StreamLadder(inline)
+    }
+    private fun readLadder(id: String): StreamLadder {
         val payload="""{"biz_param":{"detail_page_version":0,"device_level":3,"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]}}""".toByteArray()
         val response=playbackModel(payload)
         val data=JSONObject(response)
@@ -400,19 +485,7 @@ class ContentRepository(
         val model=entry.optJSONObject("video_model") ?: JSONObject(entry.str("video_model"))
         // The current model already carries plain media URLs, dimensions and CENC keys.
         // Only use the legacy fallback endpoint when this shape has no usable rendition.
-        val inline=model.optJSONArray("video_list")?.objects().orEmpty().mapNotNull { row -> runCatching {
-            val meta=row.optJSONObject("video_meta") ?: return@runCatching null
-            val encryption=row.optJSONObject("encrypt_info") ?: return@runCatching null
-            val codec=meta.str("codec_type").lowercase()
-            val url=cleanUrl(row.str("main_url"))
-            if(codec.isBlank() || codec in setOf("bytevc2","bvc2") || (!url.startsWith("https://") && !url.startsWith("http://"))) return@runCatching null
-            val width=dimension(meta,"vwidth","width") ?: return@runCatching null
-            val height=dimension(meta,"vheight","height") ?: return@runCatching null
-            val key=encryption.str("spade_a").takeIf(String::isNotBlank)?.let(MediaCrypto::deriveKey)
-            if(key==null && encryption.opt("encrypt") !in listOf(false,0,"0","false")) return@runCatching null
-            Rendition(qualityNumber(meta.str("definition")),codec,width,height,url,key)
-        }.getOrNull() }
-        if(inline.isNotEmpty()) return StreamLadder(inline)
+        ladderFromModel(model)?.let { return it }
         val raw=model.opt("fallback_api")
         val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
         if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")
@@ -434,6 +507,11 @@ class ContentRepository(
         }.getOrNull() }
         if(renditions.isEmpty()) throw IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集")
         return StreamLadder(renditions)
+    }
+    /** 未加密的行没有 spade_a 密钥，encrypt 标记会是 false/0/"0"/"false" 之一。 */
+    private fun isUnencrypted(encryption: JSONObject): Boolean {
+        val flag=encryption.opt("encrypt")
+        return flag==false || flag==0 || flag=="0" || flag=="false"
     }
     private fun dimension(o: JSONObject,vararg keys: String): Int? {
         for(key in keys) { val value=o.optInt(key,0); if(value>0) return value }

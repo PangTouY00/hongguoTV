@@ -26,7 +26,8 @@ class ContentRepositoryTest {
                 JSONObject().put("video_list",JSONArray().put(row)).put("fallback_api","https://example.com/fallback")))).toString()
         }
         val tier=repo.streamLadder("123").renditions.single()
-        assertEquals(1,requests.size);assertEquals("https://example.com/inline",tier.url)
+        assertEquals(1,requests.count { it.url.encodedPath=="/novel/player/multi_video_model/v1/" })
+        assertEquals("https://example.com/inline",tier.url)
         assertEquals(720,tier.quality);assertEquals(1280,tier.height)
         assertArrayEquals(ByteArray(16) { it.toByte() },tier.key)
     }
@@ -42,6 +43,7 @@ class ContentRepositoryTest {
                     .put("fallback_api","https://example.com/fallback")))).toString()
             }
             assertEquals("https://example.com/valid",repo.streamLadder("123").renditions.single().url)
+            // 新接口那次由上面的拦截器直接挡掉、不计入 respond；这里是旧接口一次 + 降级地址一次
             assertEquals(2,calls)
         }
     }
@@ -163,10 +165,14 @@ class ContentRepositoryTest {
         assertEquals(540,ladder.select(1080) { !(it.width==1080 && it.height==1920) }!!.quality)
     }
 
+    /** 未单独准备的测试一律把新接口当成不可用，让它们继续走旧接口的回退链路。 */
     private fun repository(clock: () -> Long = System::currentTimeMillis, respond: (Request) -> String) = ContentRepository(
         OkHttpClient.Builder().addInterceptor { chain ->
-            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1)
-                .code(200).message("OK").body(respond(chain.request()).toResponseBody()).build()
+            val request=chain.request()
+            val body=if(request.url.encodedPath.startsWith("/reading/bookapi/video_tab/")) """{"code":100103,"message":"PARAM_INVALID"}"""
+                else respond(request)
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                .code(200).message("OK").body(body.toResponseBody()).build()
         }.build(),clock,
         // 播放身份固定成注册结果，测试不真的去打设备注册接口。
         PlaybackDeviceSession { DeviceRegister.Registered("333","444") }
@@ -445,5 +451,36 @@ class ContentRepositoryTest {
             PlaybackDeviceSession { throw IOException("register refused") },
         )
         assertThrows(SearchIdentityException::class.java) { repo.search("短剧",1,ContentType.SHORT) }
+    }
+
+    @Test fun videoTabModelIsPreferredOverTheLegacyPlayerEndpoint() {
+        val requests=mutableListOf<Request>()
+        // 新接口把 video_model 作为 JSON 字符串放在 video_model_data[<集 id>] 里。
+        val model=JSONObject().put("video_list",JSONArray().put(JSONObject()
+            .put("main_url","https://example.com/tab")
+            .put("video_meta",JSONObject().put("definition","1080p").put("codec_type","h264").put("vwidth",1080).put("vheight",1920))
+            .put("encrypt_info",JSONObject().put("encrypt",false)))).toString()
+        val repo=ContentRepository(
+            OkHttpClient.Builder().addInterceptor { chain ->
+                val request=chain.request();requests+=request
+                check(request.url.encodedPath.startsWith("/reading/bookapi/video_tab/")) { "旧接口不该被调用" }
+                val body=JSONObject().put("code",0).put("data",JSONObject().put("video_model_data",
+                    JSONObject().put("123",JSONObject().put("video_model",model)))).toString()
+                Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                    .code(200).message("OK").body(body.toResponseBody()).build()
+            }.build(),
+            System::currentTimeMillis,
+            PlaybackDeviceSession { DeviceRegister.Registered("333","444") }
+        )
+        val rendition=repo.streamLadder("123").renditions.single()
+        assertEquals("https://example.com/tab",rendition.url)
+        assertEquals(1080,rendition.quality)
+        val tab=requests.single()
+        assertEquals("GET",tab.method)
+        // 缺任何一项服务端都回 100103，参数名和取值都不能改。
+        assertEquals("123",tab.url.queryParameter("video_id"))
+        assertEquals("0",tab.url.queryParameter("video_id_type"))
+        assertEquals("1",tab.url.queryParameter("device_level"))
+        assertEquals("1024",tab.url.queryParameter("video_platform"))
     }
 }
