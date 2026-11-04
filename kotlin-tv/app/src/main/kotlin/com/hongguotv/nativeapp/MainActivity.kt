@@ -362,21 +362,23 @@ class MainActivity: Activity() {
         }
         artwork.load(view,url,if(focused) ArtworkLoader.PRIORITY_FOCUSED else ArtworkLoader.PRIORITY_VISIBLE)
     }
-    /** Same read, but the caller is told when the artwork lands so a fixed-height frame can follow the real cover ratio. */
-    private fun loadCover(view: ImageView,url: String,onApplied: ()->Unit) {
+    /**
+     * Same read, sized to the grid slot instead of to whatever the frame happens to measure right now.
+     * A later re-fit changes the frame, and without a fixed request size that would ask the loader for
+     * the same cover again at a new size, which feeds back into the ratio the frames are measured from.
+     * The caller is told when the artwork lands so the whole grid can be re-measured once.
+     */
+    private fun loadCover(view: ImageView,url: String,widthPx: Int,heightPx: Int,onApplied: ()->Unit) {
         var ancestor: View?=view
         var focused=false
         while(ancestor!=null && ancestor!==root) {
             if(ancestor.isFocused) { focused=true; break }
             ancestor=ancestor.parent as? View
         }
-        artwork.load(view,url,if(focused) ArtworkLoader.PRIORITY_FOCUSED else ArtworkLoader.PRIORITY_VISIBLE,0,0,onApplied)
+        artwork.load(view,url,if(focused) ArtworkLoader.PRIORITY_FOCUSED else ArtworkLoader.PRIORITY_VISIBLE,widthPx,heightPx,onApplied)
     }
-    /** Sizes one poster frame to the cover ratio the site actually serves, so the artwork fills the card. */
-    private fun fitCoverFrame(frame: View,cardWidth: Int) {
-        val height=((cardWidth-dp(8))/CoverRatio.current).toInt()
-        if(frame.layoutParams.height!=height) frame.layoutParams=frame.layoutParams.apply { this.height=height }
-    }
+    /** The shelves measure their own slots, so they keep asking for the size the view actually has. */
+    private fun loadCover(view: ImageView,url: String,onApplied: ()->Unit)=loadCover(view,url,0,0,onApplied)
     private fun cancelWork() {
         deferredWork?.discard?.invoke(); deferredWork=null
         workScope?.cancel(); workScope=null
@@ -794,14 +796,45 @@ class MainActivity: Activity() {
             if(focusType) typeButtons[library.contentType]?.requestFocus() else if(collectionBack!=null && !focusNav) collectionBack?.requestFocus() else if(sourceButtons.isNotEmpty() && !focusNav) sourceButtons[if(tab==3) librarySources.favoritesSource else if(librarySources.accountHistory) 1 else 0].requestFocus() else if(focusNav || resumeCards.isEmpty()) nav[tab].requestFocus() else resumeCards.first().requestFocus()
             return
         }
-        val cards=mutableListOf<View>(); val count=6; val gap=dp(14); val width=((resources.displayMetrics.widthPixels*.9f-gap*(count-1))/count).toInt(); val coverAspect= CoverRatio.current
+        val cards=mutableListOf<View>(); val rows=mutableListOf<List<View>>(); val count=6; val gap=dp(14); val width=((resources.displayMetrics.widthPixels*.9f-gap*(count-1))/count).toInt(); val coverAspect= CoverRatio.current
+        val coverHeight=((width-dp(8))/coverAspect).toInt()
+        var fittedRatio=coverAspect
+        /**
+         * Re-measures every poster frame in one pass. Sizing a card only when its own cover arrives is what
+         * left one card shorter than the rest of its row: covers land one by one, and the last one to land
+         * re-measured only itself.
+         */
+        fun fitCovers() {
+            if(catalogScroll!==scroll) return
+            fittedRatio=CoverRatio.current
+            val desired=((width-dp(8))/CoverRatio.current).toInt()
+            rows.forEach { rowCards ->
+                // 文本高度取整行的最大值：同一行的海报必须等高，否则标题和进度行会错位。
+                val textHeight=rowCards.maxOf { card ->
+                    val view=card as LinearLayout
+                    view.paddingTop+view.paddingBottom+(1 until view.childCount).sumOf { index ->
+                        val content=view.getChildAt(index)
+                        content.measuredHeight+((content.layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.let { it.topMargin+it.bottomMargin } ?: 0)
+                    }
+                }
+                val height=minOf(desired,(scroll.height-textHeight-dp(4)).coerceAtLeast(dp(48)))
+                rowCards.forEach { card ->
+                    val artwork=(card as android.view.ViewGroup).getChildAt(0)
+                    if(artwork.layoutParams.height!=height) artwork.layoutParams=artwork.layoutParams.apply { this.height=height }
+                }
+            }
+        }
+        // 封面是一张张到达的：只有学到的比例真的移动时才整页重测一次，不让每张封面各自改一次布局。
+        fun refitCovers() { if(CoverRatio.differsFrom(fittedRatio)) fitCovers() }
+        val coverApplied: ()->Unit={ scroll.post { refitCovers() } }
         displayed.chunked(count).forEach { items ->
             val line=row(); line.gravity=Gravity.TOP
+            val rowCards=mutableListOf<View>()
             items.forEachIndexed { columnIndex,item ->
                 val card=column(); card.setPadding(dp(4),dp(4),dp(4),dp(9)); focusStyle(card); card.contentDescription=item.title; card.tag=item.id; catalogCards[item.id]=card
                 val position=if(tab==2) ranking?.positions?.get(item.id) else null
-                val artwork=FrameLayout(this); card.addView(artwork,lp(-1,((width-dp(8))/coverAspect).toInt()))
-                val image=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }; artwork.addView(image,FrameLayout.LayoutParams(-1,-1)); loadCover(image,item.cover){ fitCoverFrame(artwork,width) }; cardImages[item.id]=image to item.cover
+                val artwork=FrameLayout(this); card.addView(artwork,lp(-1,coverHeight))
+                val image=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }; artwork.addView(image,FrameLayout.LayoutParams(-1,-1)); loadCover(image,item.cover,width,coverHeight,coverApplied); cardImages[item.id]=image to item.cover
                 if(tab==2) {
                     val rankLabel=position?.rank?.let { "第 $it 名" } ?: "名次暂无"
                     artwork.addView(text(rankLabel,15f).apply { setTypeface(null,Typeface.BOLD); setPadding(dp(8),dp(5),dp(8),dp(5)); background=rounded(if((position?.rank ?: Int.MAX_VALUE)<=3) accent else Color.rgb(28,31,39)) },FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START))
@@ -826,10 +859,11 @@ class MainActivity: Activity() {
                 card.setOnClickListener { if(reservationNotice(item,card)) return@setOnClickListener; catalogFocus=item.id; openDetail(item,isLocalHistory() || isAccountHistory() || collection=="resume" || collection=="updates",cloudProgress=if(isAccountHistory()) cloudAccount.progress(item.id) else null) }
                 card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
                 card.setOnKeyListener { _,key,event -> if(key==KeyEvent.KEYCODE_MENU) { if(event.action==KeyEvent.ACTION_UP) { catalogFocus=item.id; quickActions(item,card) }; true } else false }
-                card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this,focused); if(focused) { catalogFocus=item.id; loadCover(image,item.cover); preview.show(item,selectionStatus(item)); if(!restoringScroll) scroll.post { scroll.smoothScrollTo(0,when { line.top<scroll.scrollY -> line.top; line.bottom>scroll.scrollY+scroll.height -> (line.bottom-scroll.height).coerceAtLeast(0); else -> scroll.scrollY }) } } }
+                card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this,focused); if(focused) { catalogFocus=item.id; loadCover(image,item.cover,width,coverHeight,coverApplied); preview.show(item,selectionStatus(item)); if(!restoringScroll) scroll.post { scroll.smoothScrollTo(0,when { line.top<scroll.scrollY -> line.top; line.bottom>scroll.scrollY+scroll.height -> (line.bottom-scroll.height).coerceAtLeast(0); else -> scroll.scrollY }) } } }
                 // The row measures its tallest card, then stretches siblings to keep badges aligned.
-                line.addView(card,lp(width,-1).apply { if(columnIndex<count-1) rightMargin=gap }); cards+=card
+                line.addView(card,lp(width,-1).apply { if(columnIndex<count-1) rightMargin=gap }); cards+=card; rowCards+=card
             }
+            rows+=rowCards
             list.addView(line,lp(-1,-2).apply { bottomMargin=dp(10) })
         }
         val paging=row(); paging.gravity=Gravity.CENTER
@@ -894,13 +928,7 @@ class MainActivity: Activity() {
         val savedScroll=scrollPositions[catalogPageKey]
         scroll.post {
             if(catalogScroll!==scroll) return@post
-            cards.forEach { view ->
-                val card=view as LinearLayout
-                val image=card.getChildAt(0)
-                val textHeight=card.paddingTop+card.paddingBottom+(1 until card.childCount).sumOf { card.getChildAt(it).measuredHeight }
-                val target=minOf(((width-dp(8))/CoverRatio.current).toInt(),(scroll.height-textHeight-dp(4)).coerceAtLeast(dp(48)))
-                if(image.layoutParams.height!=target) image.layoutParams=image.layoutParams.apply { height=target }
-            }
+            fitCovers()
             scroll.post settle@{
                 if(catalogScroll!==scroll) return@settle
                 savedScroll?.let { scroll.scrollTo(0,it) }

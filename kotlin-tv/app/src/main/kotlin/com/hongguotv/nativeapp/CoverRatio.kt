@@ -10,18 +10,21 @@ import kotlin.math.abs
  * that really arrive lets every grid size its frames to the artwork instead.
  */
 internal object CoverRatio {
-    private val samples=ArrayList<Float>()
+    // One sample per cover. A poster gets decoded again whenever its frame is re-measured, and counting
+    // those repeats would let the card that keeps re-deciding pull the median toward its own artwork.
+    private val samples=LinkedHashMap<String,Float>()
     var current= TvStyle.POSTER_ASPECT
         private set
     /** Records one delivered cover; the median keeps a single odd crop from moving every card. */
-    fun observe(bitmap: Bitmap) {
+    fun observe(url: String, bitmap: Bitmap) {
         if(bitmap.width<=0 || bitmap.height<=0) return
         val ratio=bitmap.width.toFloat()/bitmap.height
         if(ratio<=.25f || ratio>3f) return
         synchronized(samples) {
-            if(samples.size>=24) samples.removeAt(0)
-            samples.add(ratio)
-            if(samples.size>=4) current=samples.sorted()[samples.size/2]
+            if(samples.containsKey(url)) return
+            if(samples.size>=24) samples.remove(samples.keys.first())
+            samples[url]=ratio
+            if(samples.size>=4) current=samples.values.sorted()[samples.size/2]
         }
     }
     /** True when the learned ratio has moved far enough that frames should be re-measured. */
