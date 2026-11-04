@@ -10,6 +10,10 @@ import java.io.InputStream
 
 /** One playback stream. No listening socket or local HTTP service. */
 class RemoteVideo(private val http: OkHttpClient, override val info: StreamInfo): VideoSource {
+    companion object {
+        /** 一次分段读取的最大字节数。缓存落盘按这个长度开段，播放侧仍按 1 MiB 要。 */
+        private const val MAX_RANGE = 8*1024*1024
+    }
     @Volatile private var closed=false
     private val calls=mutableSetOf<Call>()
     data class Range(val bytes: ByteArray,val total: Long)
@@ -60,10 +64,11 @@ class RemoteVideo(private val http: OkHttpClient, override val info: StreamInfo)
         } finally { synchronized(calls) { calls-=call } }
     }
     /** One bounded HTTP range, delivered as bytes arrive instead of waiting for the whole body.
-     *  The playback data source owns this reader; close() interrupts an outstanding body read. */
+     *  The playback data source owns this reader; close() interrupts an outstanding body read.
+     *  上限 8 MiB 是给缓存落盘用的：一次开一大段，顺序消费完再开下一段。播放侧照旧按 1 MiB 要。 */
     override fun openRead(start: Long,length: Int): InputStream {
         check(::prepared.isInitialized)
-        require(start in 0 until total && length in 1..1024*1024)
+        require(start in 0 until total && length in 1..MAX_RANGE)
         val end=minOf(total-1,start+length-1)
         val call=newCall(start,end)
         var response: Response?=null
@@ -101,6 +106,9 @@ class RemoteVideo(private val http: OkHttpClient, override val info: StreamInfo)
             call.cancel();response?.close();synchronized(calls) { calls-=call };throw error
         }
     }
+    /** 从某个偏移开始的连续读，给整集落盘用：一次请求覆盖一大段，读完再开下一段，不再每 1 MiB 一次往返。
+     *  字节按到达顺序交付，边到边写盘，不整兆进内存。 */
+    fun openStream(start: Long): InputStream = openRead(start, MAX_RANGE)
     @Synchronized override fun prepare(initialBytes: Int): RemoteVideo {
         require(initialBytes in 16*1024..256*1024)
         if(::prepared.isInitialized) return this

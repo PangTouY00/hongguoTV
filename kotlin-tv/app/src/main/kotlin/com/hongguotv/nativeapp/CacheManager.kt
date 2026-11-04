@@ -71,10 +71,12 @@ class CacheManager(
     /** 把一批分集排进队列。episodes 是（集号, 分集 id）：集号进缓存元数据，离线时用它显示第几集。
      *  已经缓存过的、已经在队列里的直接跳过，不重复下载。 */
     fun enqueue(series: Series, episodes: List<Pair<Int, String>>, quality: Int) {
+        // 一次问清哪些已经缓存过。原来每集问一次，每集都要扫一遍缓存目录：排五十集就是五十遍。
+        val already = cache.cachedIds()
         var added = false
         synchronized(this) {
             episodes.forEach { (index, id) ->
-                if (cache.cached(id) != null) return@forEach
+                if (already.contains(id)) return@forEach
                 val existing = known[id]
                 if (existing != null) {
                     // 失败过的重新排一次。界面上写着「失败」却怎么点都不动，最容易被当成整个功能坏了。
@@ -133,7 +135,8 @@ class CacheManager(
                 synchronized(this) { running = task }
                 notifyUi()
                 try { download(task); failures = 0 }
-                catch (error: Exception) {
+                // 连内存不够这种也接住：这一集下不成，界面写「失败」并说明原因，比整个应用被系统关掉好。
+                catch (error: Throwable) {
                     synchronized(this) { task.state = State.FAILED; task.percent = 0
                         task.message = error.message ?: error.javaClass.simpleName }
                     failures++
@@ -177,12 +180,39 @@ class CacheManager(
         cache.unusable()?.let { throw CacheStorageException(it) }
         val video = RemoteVideo(http, rendition.toStreamInfo())
         synchronized(this) { activeVideo = video }
+        // 一次请求覆盖一大段，顺序消费完再开下一段。原来每 1 MB 一次往返：一集几十兆就是几十次首字节
+        // 等待，下载慢，失败的机会也多几十倍。
+        var stream: java.io.InputStream? = null
+        var streamFrom = -1L
+        fun takeBytes(at: Long, length: Int): ByteArray {
+            val target = ByteArray(length)
+            var filled = 0
+            var exhausted = 0
+            while (filled < length) {
+                if (task.canceled) throw IOException("缓存已取消")
+                var current = stream
+                if (current == null || streamFrom != at + filled) {
+                    current?.close()
+                    current = video.openStream(at + filled)
+                    stream = current; streamFrom = at + filled
+                }
+                val read = current.read(target, filled, length - filled)
+                if (read < 0) {
+                    // 这一段读完了，从下一个偏移开新的段。同一处连续几次都读不到字节就是真读不到了。
+                    current.close(); stream = null; streamFrom = -1L
+                    if (++exhausted > 3) throw IOException("缓存读取不完整")
+                    continue
+                }
+                filled += read
+            }
+            return target
+        }
         try {
             video.prepare()
             if (!cache.hasRoom(video.total)) throw NotEnoughSpace("存储空间不足，还剩 ${cache.freeBytes() / 1024 / 1024} MB 可用")
             var reportedAt = 0L
             cache.store(task.episodeId, rendition.quality, rendition.codec, video.total,
-                read = { at, length -> video.read(at, length) },
+                read = { at, length -> takeBytes(at, length) },
                 progress = { done, total ->
                     // 每 2% 或每半秒报一次：一集几十 MB 按 MB 报会让界面每秒重绘十几次。
                     val percent = (done * 100 / total).toInt()
@@ -196,10 +226,23 @@ class CacheManager(
                 episodeIndex = task.episodeIndex)
             synchronized(this) { known.remove(task.episodeId) }
             android.util.Log.i("HongguoTV", "Episode cached episode=${task.episodeId} quality=${rendition.quality} bytes=${video.total}")
-        } finally { video.close(); synchronized(this) { if (activeVideo === video) activeVideo = null } }
+        } finally {
+            runCatching { stream?.close() }
+            video.close(); synchronized(this) { if (activeVideo === video) activeVideo = null }
+        }
     }
 
-    private fun notifyUi() { main.post(listener) }
+    /**
+     * 界面要刷新，但同一时刻只排一次。
+     *
+     * 进度每半秒报一次，逐条 post 会把主线程的消息队列排满：刷新本身要花时间，排在后面的点击
+     * 事件等不到处理，五秒不响应系统就报 ANR。已经排着就不再排——下一次刷新看到的是当时的最新状态。
+     */
+    private val notifyQueued = java.util.concurrent.atomic.AtomicBoolean(false)
+    private fun notifyUi() {
+        if (!notifyQueued.compareAndSet(false, true)) return
+        main.post { notifyQueued.set(false); listener() }
+    }
 
     fun close() { worker.shutdownNow() }
 }

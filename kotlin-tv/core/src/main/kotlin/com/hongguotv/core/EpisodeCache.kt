@@ -71,6 +71,42 @@ class EpisodeCache(private val directory: File) {
         fun isUsable(directory: File): Boolean = unusableAt(directory) == null
     }
 
+    /**
+     * 读索引与写文件分开两把锁。
+     *
+     * 原来整个类共用一把实例锁，而 store 握着它读完整集——几十秒。界面每半秒问一次「这一集
+     * 缓存好了吗」都要去抢同一把锁，于是主线程被下载线程按住不动，输入事件五秒不响应，
+     * 系统报 ANR、应用被当成卡死关掉。读索引只是读几个小 JSON，写文件是长任务，两者不该互等。
+     */
+    private val writeLock = Any()
+    private val indexLock = Any()
+    /** 一次扫盘的结果留着用。列表建好就不再改，可以直接交给界面。 */
+    private var indexCache: List<CachedEpisode>? = null
+    /** 这份索引对应的那次目录快照：文件名和各自字节数。对不上说明盘上的缓存变了，索引作废。 */
+    private var indexSnapshot: Map<String, Long>? = null
+    /** 按分集编号直接找，省掉每次遍历整份列表。同一集留着最低的那一档，与原来的取法一致。 */
+    private var idIndex: Map<String, CachedEpisode> = emptyMap()
+    /** 已经缓存过的分集编号，跟着索引一起留着：一次排几十集时用它判断。 */
+    private var idSet: Set<String> = emptySet()
+
+    /** 让下一次读索引重新扫盘。写路径和「发现盘上的文件与索引不符」都会调它。 */
+    private fun invalidateIndex() {
+        synchronized(indexLock) { indexCache = null; indexSnapshot = null; idIndex = emptyMap(); idSet = emptySet() }
+    }
+
+    /**
+     * 目录里每个文件的字节数：一次 readdir 加一次 stat。
+     *
+     * 用它判断上次扫盘的结果还作不作数，比重新读一遍全部元数据便宜得多；用户在系统里删掉缓存、
+     * 文件被系统清理、或者文件被写坏，都会在这里露出来，索引不会继续拿旧答案骗界面。
+     */
+    private fun directorySnapshot(): Map<String, Long> {
+        val files = directory.listFiles() ?: return emptyMap()
+        val out = HashMap<String, Long>(files.size * 2)
+        files.forEach { if (it.isFile) out[it.name] = it.length() }
+        return out
+    }
+
     private fun stem(episodeId: String, quality: Int): String {
         require(episodeId.matches(ID)) { "分集编号格式异常" }
         require(quality >= 0) { "清晰度编号异常" }
@@ -80,11 +116,41 @@ class EpisodeCache(private val directory: File) {
     private fun meta(episodeId: String, quality: Int) = File(directory, stem(episodeId, quality) + ".json")
     private fun partial(episodeId: String, quality: Int) = File(directory, stem(episodeId, quality) + ".part")
 
-    /** 只列出真正可用的缓存：元数据在、视频在、大小对得上。对不上的当场清掉。 */
-    @Synchronized fun records(): List<CachedEpisode> {
-        val files = directory.listFiles().orEmpty().filter { it.isFile && it.name.endsWith(".json") }
+    /**
+     * 只列出真正可用的缓存：元数据在、视频在、大小对得上。对不上的当场清掉。
+     *
+     * 结果留着复用。一次刷新要问二十几回「这一集缓存好了吗」，每次都扫一遍目录、读一遍全部
+     * 元数据、再逐个核对文件大小，一百集就是上万次文件系统调用，全在主线程上——这是缓存下载时
+     * 界面卡顿的直接来源。扫一次，之后先比对一次目录快照再决定要不要重扫。
+     */
+    fun records(): List<CachedEpisode> = synchronized(indexLock) { recordsLocked() }
+
+    /** 已经缓存过的分集编号。一次排几十集时用它判断，别每集扫一遍目录。 */
+    fun cachedIds(): Set<String> = synchronized(indexLock) { recordsLocked(); idSet }
+
+    /** 读索引的公共入口。调用它时必须已经拿着 indexLock。 */
+    private fun recordsLocked(): List<CachedEpisode> {
+        val snapshot = directorySnapshot()
+        val cached = indexCache
+        if (cached != null && snapshot == indexSnapshot) return cached
+        return rebuildLocked(snapshot)
+    }
+
+    /** 扫盘，并把列表、按编号的索引、编号集合一起建好。调用它时必须已经拿着 indexLock。 */
+    private fun rebuildLocked(snapshot: Map<String, Long>): List<CachedEpisode> {
+        val kept = scanUnlocked(snapshot)
+        val byId = LinkedHashMap<String, CachedEpisode>()
+        // 列表按清晰度升序排好了：同一集第一次出现的就是最低那一档，与原来 firstOrNull 的取法一致。
+        kept.forEach { row -> if (!byId.containsKey(row.episodeId)) byId[row.episodeId] = row }
+        indexCache = kept; indexSnapshot = snapshot; idIndex = byId; idSet = byId.keys.toSet()
+        return kept
+    }
+
+    /** 真正的扫盘，用已经取好的目录快照，不再逐个 stat。只在 indexLock 下调用。 */
+    private fun scanUnlocked(snapshot: Map<String, Long>): List<CachedEpisode> {
         val kept = mutableListOf<CachedEpisode>()
-        files.forEach { index ->
+        snapshot.keys.filter { it.endsWith(".json") }.sorted().forEach { name ->
+            val index = File(directory, name)
             val decoded = runCatching {
                 val row = JSONObject(index.readText())
                 val episodeId = row.getString("episodeId"); val quality = row.getInt("quality")
@@ -93,22 +159,23 @@ class EpisodeCache(private val directory: File) {
                     row.optString("seriesId", ""), row.optString("seriesTitle", ""), row.optString("cover", ""),
                     row.optInt("episodeIndex", -1))
             }.getOrNull()
-            val video = decoded?.let { target(it.episodeId, it.quality) }
-            if (decoded == null || !decoded.episodeId.matches(ID) || video == null || !video.isFile ||
-                video.length() != decoded.bytes || decoded.bytes <= 0) { index.delete(); video?.delete() }
-            else kept += decoded
+            val videoName = decoded?.let { stem(it.episodeId, it.quality) + ".mp4" }
+            val videoBytes = videoName?.let { snapshot[it] }
+            if (decoded == null || !decoded.episodeId.matches(ID) || videoBytes == null ||
+                videoBytes != decoded.bytes || decoded.bytes <= 0) {
+                index.delete(); videoName?.let { File(directory, it).delete() }
+            } else kept += decoded
         }
         // 没有元数据的视频文件（旧版本留下的、或元数据刚被清掉的）当场删掉。
         // .part 不在这里：它是中断留下的进度，下次缓存同一集时接着写，不是孤儿。
-        directory.listFiles().orEmpty().forEach { file ->
-            if (!file.isFile) return@forEach
-            val name = file.name
-            if (name.endsWith(".mp4") && !File(directory, name.removeSuffix(".mp4") + ".json").isFile) file.delete()
+        snapshot.keys.forEach { name ->
+            if (name.endsWith(".mp4") && !snapshot.containsKey(name.removeSuffix(".mp4") + ".json")) File(directory, name).delete()
         }
         return kept.sortedWith(compareBy({ it.episodeId }, { it.quality }))
     }
 
-    @Synchronized fun cached(episodeId: String): CachedEpisode? = records().firstOrNull { it.episodeId == episodeId }
+    /** 按分集编号找它的缓存记录。索引里没有才说明没缓存过，不再遍历整份列表。 */
+    fun cached(episodeId: String): CachedEpisode? = synchronized(indexLock) { recordsLocked(); idIndex[episodeId] }
 
     /**
      * 这一集有没有能直接播的缓存。
@@ -116,37 +183,47 @@ class EpisodeCache(private val directory: File) {
      * 优先给不超过当前清晰度上限里最高的那一档；本地文件没有流量成本，只有一档且它更高时
      * 也照样用它，能不能解码由调用方的 trackInfo 校验决定，而不是由清晰度设置决定。
      */
-    @Synchronized fun playable(episodeId: String, maxQuality: Int): CachedEpisode? {
+    fun playable(episodeId: String, maxQuality: Int): CachedEpisode? {
         val rows = records().filter { it.episodeId == episodeId }
         if (rows.isEmpty()) return null
         return rows.filter { it.quality in 1..maxQuality }.maxByOrNull { it.quality } ?: rows.minByOrNull { it.quality }
     }
 
     /** 打开这一集的缓存文件；文件不在或大小与元数据不符时返回 null，让调用方回退在线播放。 */
-    @Synchronized fun open(episodeId: String, maxQuality: Int): CachedVideo? {
+    fun open(episodeId: String, maxQuality: Int): CachedVideo? {
         val record = playable(episodeId, maxQuality) ?: return null
-        val file = target(record.episodeId, record.quality)
-        if (!file.isFile || file.length() != record.bytes) return null
-        return CachedVideo(file, record)
-    }
-
-    @Synchronized fun remove(episodeId: String): Int {
-        require(episodeId.matches(ID)) { "分集编号格式异常" }
-        var removed = 0
-        directory.listFiles().orEmpty().forEach { file ->
-            if (file.isFile && file.name.substringBefore('.').substringBefore('-') == episodeId) { if (file.delete()) removed++ }
+        // 核对大小与打开文件放在索引锁这一侧：删除、以及刚落盘的那两步也在这一侧，别读到中间状态。
+        synchronized(indexLock) {
+            val file = target(record.episodeId, record.quality)
+            if (!file.isFile || file.length() != record.bytes) {
+                // 索引和盘上对不上了，这份索引不能再要：下一次读索引重新扫盘，那条坏记录会被清掉。
+                invalidateIndex(); return null
+            }
+            return CachedVideo(file, record)
         }
-        return removed
     }
 
-    @Synchronized fun clear(): Int {
-        val files = directory.listFiles().orEmpty().filter { it.isFile }
-        var removed = 0
-        files.forEach { if (it.delete()) removed++ }
-        return removed
+    fun remove(episodeId: String): Int {
+        require(episodeId.matches(ID)) { "分集编号格式异常" }
+        synchronized(writeLock) {
+            var removed = 0
+            directory.listFiles().orEmpty().forEach { file ->
+                if (file.isFile && file.name.substringBefore('.').substringBefore('-') == episodeId) { if (file.delete()) removed++ }
+            }
+            invalidateIndex(); return removed
+        }
     }
 
-    @Synchronized fun bytesUsed(): Long = records().sumOf { it.bytes }
+    fun clear(): Int {
+        synchronized(writeLock) {
+            val files = directory.listFiles().orEmpty().filter { it.isFile }
+            var removed = 0
+            files.forEach { if (it.delete()) removed++ }
+            invalidateIndex(); return removed
+        }
+    }
+
+    fun bytesUsed(): Long = records().sumOf { it.bytes }
 
     /** 缓存目录不能用时返回原因，能用返回 null。目录不可用与空间不足是两件事，分开报。 */
     fun unusable(): String? = unusableAt(directory)
@@ -169,7 +246,16 @@ class EpisodeCache(private val directory: File) {
             .put("episodeIndex", episodeIndex).toString())
     }
 
-    @Synchronized fun store(
+    /**
+     * 把一整集写进缓存。
+     *
+     * read 按绝对偏移交付解密后的字节，落盘层不关心它来自 HTTP 还是别的什么；
+     * 中断（取消、异常、进程被杀）留下 .part，下次从已写的字节继续，不从头再来。
+     *
+     * 读完整集要几十秒，这一段只占写锁：界面在下载进行中间照常问得到缓存状态。原来它和读索引
+     * 共用一把锁，下载一集就把界面按住一集，输入事件五秒不响应，系统直接报 ANR。
+     */
+    fun store(
         episodeId: String, quality: Int, codec: String, total: Long,
         read: (Long, Int) -> ByteArray,
         progress: (Long, Long) -> Unit = { _, _ -> },
@@ -179,18 +265,39 @@ class EpisodeCache(private val directory: File) {
     ): CachedEpisode {
         val file = target(episodeId, quality)
         require(total > 0) { "缓存长度异常" }
-        if (file.isFile && file.length() == total) {
-            // 旧版本写的元数据没有剧集归属。这一集既然已经落盘、这次又知道了它属于哪部剧，就把归属补上，
-            // 别让一集已经缓存好的内容在「已下载」里认不出来。集号同理：补上了，断网时才能显示成第几集。
-            val before = cached(episodeId)
-            val owner = if (seriesId.isNotEmpty()) seriesId else before?.seriesId.orEmpty()
-            val title = if (seriesId.isNotEmpty()) seriesTitle else before?.seriesTitle.orEmpty()
-            val poster = if (seriesId.isNotEmpty()) cover else before?.cover.orEmpty()
-            val position = if (episodeIndex >= 0) episodeIndex else before?.episodeIndex ?: -1
-            if (owner.isNotEmpty() && (owner != before?.seriesId || position != before.episodeIndex))
-                writeMeta(episodeId, quality, codec, total, owner, title, poster, position)
-            return CachedEpisode(episodeId, quality, codec, total, file.lastModified(), owner, title, poster, position)
+        if (file.isFile && file.length() == total) return claim(episodeId, quality, codec, total, file, seriesId, seriesTitle, cover, episodeIndex)
+        return synchronized(writeLock) {
+            writeEpisode(episodeId, quality, codec, total, read, progress, canceled, seriesId, seriesTitle, cover, episodeIndex)
         }
+    }
+
+    /** 这一集已经完整落盘：不重下一遍，只把这次知道的归属与集号补进元数据。 */
+    private fun claim(
+        episodeId: String, quality: Int, codec: String, total: Long, file: File,
+        seriesId: String, seriesTitle: String, cover: String, episodeIndex: Int,
+    ): CachedEpisode {
+        // 旧版本写的元数据没有剧集归属。这一集既然已经落盘、这次又知道了它属于哪部剧，就把归属补上，
+        // 别让一集已经缓存好的内容在「已下载」里认不出来。集号同理：补上了，断网时才能显示成第几集。
+        val before = cached(episodeId)
+        val owner = if (seriesId.isNotEmpty()) seriesId else before?.seriesId.orEmpty()
+        val title = if (seriesId.isNotEmpty()) seriesTitle else before?.seriesTitle.orEmpty()
+        val poster = if (seriesId.isNotEmpty()) cover else before?.cover.orEmpty()
+        val position = if (episodeIndex >= 0) episodeIndex else before?.episodeIndex ?: -1
+        // 改元数据要和扫盘互斥：扫盘读到半截 JSON 会把这一集当成坏记录，连视频一起删掉。
+        if (owner.isNotEmpty() && (owner != before?.seriesId || position != before.episodeIndex))
+            synchronized(indexLock) { writeMeta(episodeId, quality, codec, total, owner, title, poster, position); invalidateIndex() }
+        return CachedEpisode(episodeId, quality, codec, total, file.lastModified(), owner, title, poster, position)
+    }
+
+    /** 真正写这一集。调用它的时候已经拿着写锁。 */
+    private fun writeEpisode(
+        episodeId: String, quality: Int, codec: String, total: Long,
+        read: (Long, Int) -> ByteArray,
+        progress: (Long, Long) -> Unit,
+        canceled: () -> Boolean,
+        seriesId: String, seriesTitle: String, cover: String, episodeIndex: Int,
+    ): CachedEpisode {
+        val file = target(episodeId, quality)
         // 先确认目录可用：建不出来或写不进去时，原因要说在目录上，别让它变成一句「空间不足」。
         unusable()?.let { throw IOException(it) }
         if (!hasRoom(total)) throw IOException("存储空间不足，还剩 ${freeBytes() / 1024 / 1024} MB 可用")
@@ -210,8 +317,12 @@ class EpisodeCache(private val directory: File) {
             output.flush()
         } catch (error: Exception) { runCatching { output.close() }; throw error }
         runCatching { output.close() }
-        if (!part.renameTo(file)) { part.delete(); throw IOException("缓存文件写入失败") }
-        writeMeta(episodeId, quality, codec, total, seriesId, seriesTitle, cover, episodeIndex)
+        // 改名和写元数据是一个动作：中间那一步别让扫盘看见一个还没有元数据的视频文件，把它当孤儿删了。
+        synchronized(indexLock) {
+            if (!part.renameTo(file)) { part.delete(); throw IOException("缓存文件写入失败") }
+            writeMeta(episodeId, quality, codec, total, seriesId, seriesTitle, cover, episodeIndex)
+            invalidateIndex()
+        }
         return CachedEpisode(episodeId, quality, codec, total, file.lastModified(), seriesId, seriesTitle, cover, episodeIndex)
     }
 }
