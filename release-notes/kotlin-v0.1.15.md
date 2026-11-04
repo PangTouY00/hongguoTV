@@ -30,8 +30,10 @@
 
 ## 自动化检查
 
-`:core:test` 263 项通过，其中新增 `UnwatchedEpisodesTest`：未看且未缓存的集号计算，覆盖全部未看、部分已缓存、全部已缓存三种情况。app 层新增 `CacheQueueTest`（缓存队列失败写明原因、单集重试、队列不停）、`EpisodePanelUnwatchedTest`（「缓存未看」按钮与计数）、`OfflineDetailTest`（详情接口失败时由本地缓存拼出剧集列表、离线标记）。`:app:testDebugUnitTest`、`:app:assembleDebug`、`:app:lintDebug` 全部通过后才发布本包。
+`:core:test` 263 项通过，其中新增 `UnwatchedEpisodesTest`：未看且未缓存的集号计算，覆盖全部未看、部分已缓存、全部已缓存三种情况。app 层新增 `CacheQueueTest`（缓存队列失败写明原因、单集重试、队列不停）、`EpisodePanelUnwatchedTest`（「缓存未看」按钮与计数）、`OfflineDetailTest`（详情接口失败时由本地缓存拼出剧集列表、离线标记）。`:app:testDebugUnitTest`、`:app:assembleDebug`、`:app:lintDebug` 全部通过后才发布本次两个包。
 
 ## 安装
 
-直接下载 `hongguotv-kotlin-0.1.15-android6.apk`（Android 6.0+）覆盖安装，记录保留；App 内「检查更新」也会指向本包。
+Android 6.0 及以上下载 `hongguotv-kotlin-0.1.15-android6.apk`，Android 4.4 到 5.x 下载 `hongguotv-kotlin-0.1.15-android44.apk`，覆盖安装即可，记录保留。两个包版本号与标签相同，只是最低系统版本不同。App 内「检查更新」会自动挑本机系统装得上的那个包，不需要自己挑文件。
+
+Android 4.4 这条线自 0.1.12 起在 CI 里构建失败，中断了三个版本，这次一并修好，之后与 Android 6+ 同步发版。
