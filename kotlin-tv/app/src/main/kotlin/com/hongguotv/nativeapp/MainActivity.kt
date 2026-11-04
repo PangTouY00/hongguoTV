@@ -123,6 +123,9 @@ class MainActivity: Activity() {
     private val social by lazy { TvSocial(this,{ player },{ if(screen=="player" || screen=="detail") detail?.let { data -> data.episodes.getOrNull(episodeIndex)?.let { data.series.id to it } } else null }) }
     private lateinit var favoriteMonitor: FavoriteMonitor
     private val favoriteBadges=mutableMapOf<String,TextView>()
+    /** 本机下载页每张卡片的进度文字，以及这一页当前对应的那些剧：队列一变只改文字，不重排整页。 */
+    private val downloadBadges=mutableMapOf<String,TextView>()
+    private val downloadPage=linkedMapOf<String,DownloadRow>()
     private var favoriteStatus: TextView?=null
     private var favoriteCheck: TextView?=null
     private var homeUpdates: TextView?=null
@@ -400,6 +403,7 @@ class MainActivity: Activity() {
         homeScreen=null; selectionPreview=null; catalogScroll=null
         nav.clear(); sourceButtons.clear(); typeButtons.clear(); searchInput=null; searchButton=null; searchActions.clear()
         historyManage=null; rankRefresh=null; rankSubtitle=null; collectionBack=null; favoriteBadges.clear()
+        downloadBadges.clear(); downloadPage.clear()
         rankScreen=null
         favoriteStatus=null; favoriteCheck=null; homeUpdates=null; resumeCards.clear()
         catalogCards.clear(); cardImages.clear()
@@ -670,7 +674,7 @@ class MainActivity: Activity() {
                     isAccountFavorites() -> "${cloudAccount.accountLabel} · ${cloudAccount.favoriteState().message}\n与手机红果同步；长按剧集可管理账户收藏"
                     isAccountHistory() -> "${cloudAccount.accountLabel} · ${cloudAccount.historyStatus}\n显示当前账号最近 50 部云端记录，续播使用账号进度"
                     isLocalHistory() -> "只保存在这台电视，管理和清空不影响账户历史"
-                    isLocalDownloads() -> "已经存在这台电视上的内容，没有网络也能播。长按一部剧可以删掉它的缓存。" + if(unattributedCacheCount()>0) "\n另有 ${unattributedCacheCount()} 个旧版本缓存的片段认不出属于哪部剧，可在播放界面的缓存管理里删除" else ""
+                    isLocalDownloads() -> "已经存在这台电视上的内容，没有网络也能播。正在缓存的剧也会出现在这里，长按可以停掉它或删掉它的缓存。" + if(unattributedCacheCount()>0) "\n另有 ${unattributedCacheCount()} 个旧版本缓存的片段认不出属于哪部剧，可在播放界面的缓存管理里删除" else ""
                     else -> "只保存在这台电视，不自动上传或合并到账户收藏"
                 }
                 val noteView=text(note,13f,muted).apply { setPadding(0,0,0,dp(6)) }
@@ -818,7 +822,7 @@ class MainActivity: Activity() {
                     minHeight=dp(if(tab==5) 50 else if(tab==3 || tab==4) 34 else 19)
                     ellipsize=TextUtils.TruncateAt.END;setPadding(dp(3),0,0,0)
                 }
-                card.addView(badge,lp(-1,-2)); if(isLocalFavorites()) favoriteBadges[item.id]=badge
+                card.addView(badge,lp(-1,-2)); if(isLocalFavorites()) favoriteBadges[item.id]=badge; if(isLocalDownloads()) downloadBadges[item.id]=badge
                 card.setOnClickListener { if(reservationNotice(item,card)) return@setOnClickListener; catalogFocus=item.id; openDetail(item,isLocalHistory() || isAccountHistory() || collection=="resume" || collection=="updates",cloudProgress=if(isAccountHistory()) cloudAccount.progress(item.id) else null) }
                 card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
                 card.setOnKeyListener { _,key,event -> if(key==KeyEvent.KEYCODE_MENU) { if(event.action==KeyEvent.ACTION_UP) { catalogFocus=item.id; quickActions(item,card) }; true } else false }
@@ -1048,6 +1052,12 @@ class MainActivity: Activity() {
         if(isLocalHistory()) actions+="管理观看记录" to { manageHistory(series,anchor) }
         if(isLocalDownloads()) {
             val cached=episodeCache.records().filter { it.seriesId==series.id }
+            // 正在缓存的剧也能当场停掉：这一页既然写得出「还有几集」，就该给一个停止的入口。
+            val queued=cacheQueue?.activeTasks()?.filter { it.series.id==series.id }.orEmpty()
+            if(queued.isNotEmpty()) actions+="停止缓存这部剧 · 还有 ${queued.size} 集" to {
+                queued.forEach { cacheQueue?.cancel(it.episodeId) }
+                Toast.makeText(this,"已停止缓存《${series.title}》",Toast.LENGTH_SHORT).show()
+            }
             if(cached.isNotEmpty()) actions+="删除本机缓存 · ${cached.size} 集" to {
                 tvTools.confirm("删除缓存","删除《${series.title}》存在这台电视上的 ${cached.size} 集缓存？观看进度与收藏都不受影响。",anchor) {
                     cached.forEach { caches().remove(it.episodeId) }
@@ -1929,11 +1939,27 @@ class MainActivity: Activity() {
         val http=repository.http.newBuilder().readTimeout(60,java.util.concurrent.TimeUnit.SECONDS).build()
         return CacheManager(episodeCache,repository,http,CodecCapabilities::supports,{ main.post { refreshCacheUi() } }).also { cacheQueue=it }
     }
-    /** 队列状态一变就画回界面：选集面板的标记、详情页的按钮文字、播放界面的进度。 */
+    /** 队列状态一变就画回界面：选集面板的标记、详情页的按钮文字、播放界面的进度、本机下载页的进度。 */
     private fun refreshCacheUi() {
         episodePanel?.refresh()
         detailCacheButton?.text=detailCacheLabel()
         if(screen=="player" && playbackReady) updatePlaybackText()
+        refreshDownloadLabels()
+    }
+    /**
+     * 本机下载页跟着缓存队列走：进度只改卡片上那行文字，整页不动。
+     *
+     * 进度每半秒报一次，逐次重建整页会让焦点与滚动位置反复丢失，也正是上次 ANR 的那类做法。
+     * 只有「该出现的剧」真的变了——比如刚点了缓存全部、这部剧第一次要出现——才重建列表。
+     */
+    private fun refreshDownloadLabels() {
+        if(screen!="catalog" || !isLocalDownloads()) return
+        val rows=downloadRows()
+        rows.forEach { row -> val label=downloadBadges[row.series.id] ?: return@forEach; val value=downloadBadgeText(row); if(label.text.toString()!=value) label.text=value }
+        val shown=downloadPage.keys.toSet()
+        val next=rows.map { it.series.id }.toSet()
+        downloadPage.clear(); downloadPage.putAll(rows.associateBy { it.series.id })
+        if(shown!=next) showCatalog(false)
     }
     /** 一集在缓存里的标记：已缓存、排队、下载中的百分比、失败。 */
     private fun cacheMark(episodeId: String): String? {
@@ -1953,25 +1979,45 @@ class MainActivity: Activity() {
     /** 还没看的分集下标：照观看进度往后算，和续播跳到下一集是同一套判断。 */
     private fun unwatchedIndexes(data: Detail): List<Int> =
         UnwatchedEpisodes.indexes(data.episodes.size,library.progress(data.series.id)?.episodeId?.let { data.episodes.indexOf(it) })
+    /** 本机下载列表的一行：已经落盘的集，加上还在排队或正在下载的集与当前这一集的百分比。 */
+    private class DownloadRow(val series: Series,val cachedCount: Int,val bytes: Long,val queued: Int,val percent: Int)
     /**
      * 已下载的剧集：按缓存元数据里记下的归属，把落盘的集归到各自的剧上。
      *
      * 归属是缓存时写进去的，这里不联网、不查详情——离线列表不该因为网络不通就空掉。
      * 旧版本缓存的元数据没有归属，它们不进这个列表，只在上方说明里报个数。
+     * 正在缓存的剧也算这一页的内容：点了「缓存全部」就该当场看到它在干活，而不是等整部落完才冒出来。
      */
-    private fun downloadedSeries(): List<Series> {
+    private fun downloadRows(): List<DownloadRow> {
         val grouped=LinkedHashMap<String, MutableList<CachedEpisode>>()
         episodeCache.records().forEach { row -> if(row.seriesId.isNotEmpty()) grouped.getOrPut(row.seriesId) { mutableListOf() }.add(row) }
         val saved=library.favorites().associateBy { it.id }
-        return grouped.map { (id,cached) ->
-            val first=cached.first()
-            Series(id, first.seriesTitle.ifBlank { saved[id]?.title ?: "剧集 $id" }, first.cover.ifBlank { saved[id]?.cover ?: "" }) to cached.sumOf { it.bytes }
-        }.sortedByDescending { it.second }.map { it.first }
+        val queued=cacheQueue?.activeTasks()?.groupBy { it.series.id }.orEmpty()
+        val ids=LinkedHashSet<String>().apply { addAll(queued.keys); addAll(grouped.keys) }
+        return ids.mapNotNull { id ->
+            val cached=grouped[id].orEmpty()
+            val tasks=queued[id].orEmpty()
+            val first=cached.firstOrNull()
+            val series=tasks.firstOrNull()?.series
+                ?: first?.let { Series(id,it.seriesTitle.ifBlank { saved[id]?.title ?: "剧集 $id" },it.cover.ifBlank { saved[id]?.cover ?: "" }) }
+                ?: return@mapNotNull null
+            DownloadRow(series,cached.size,cached.sumOf { it.bytes },tasks.size,tasks.maxOfOrNull { it.percent } ?: 0)
+        }.sortedWith(compareByDescending<DownloadRow> { it.queued>0 }.thenByDescending { it.bytes })
     }
-    private fun downloadBadge(series: Series): String {
-        val cached=episodeCache.records().filter { it.seriesId==series.id }
-        if(cached.isEmpty()) return "缓存已不可用"
-        return "已缓存 ${cached.size} 集 · ${cached.sumOf { it.bytes }/1024/1024} MB"
+    private fun downloadedSeries(): List<Series> =
+        downloadRows().also { rows -> downloadPage.clear(); downloadPage.putAll(rows.associateBy { it.series.id }) }.map { it.series }
+    private fun downloadBadge(series: Series): String = downloadBadgeText(downloadPage[series.id])
+    private fun downloadBadgeText(row: DownloadRow?): String {
+        if(row==null) return "缓存已不可用"
+        if(row.queued>0) {
+            val parts=mutableListOf("缓存中")
+            if(row.percent>0) parts += "当前 ${row.percent}%"
+            if(row.cachedCount>0) parts += "已存 ${row.cachedCount} 集"
+            parts += "还有 ${row.queued} 集"
+            return parts.joinToString(" · ")
+        }
+        if(row.cachedCount==0) return "缓存已不可用"
+        return "已缓存 ${row.cachedCount} 集 · ${row.bytes/1024/1024} MB"
     }
     private fun unattributedCacheCount(): Int = episodeCache.records().count { it.seriesId.isEmpty() }
     private fun detailCacheLabel(): String {

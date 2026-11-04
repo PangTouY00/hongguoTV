@@ -245,4 +245,48 @@ class EpisodeCacheTest {
         File(root, "146-720.mp4").writeBytes(bytes(1024))
         assertEquals(-1, cache.cached("146")!!.episodeIndex)
     }
+
+    @Test fun readingTheIndexDoesNotWaitForTheEpisodeBeingWritten() {
+        // 真实故障：缓存下载时界面卡住并被系统当成无响应关掉。落盘与读索引原来共用一把锁，
+        // 下载一集要几十秒，界面每半秒问一次「这一集缓存好了吗」就被按住，输入事件五秒不响应。
+        val cache = EpisodeCache(root)
+        val started = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val writer = Thread {
+            runCatching {
+                store(cache, "101", 720, 2 * chunk) { at, length ->
+                    started.countDown(); release.await(20, java.util.concurrent.TimeUnit.SECONDS); bytesAt(at, length)
+                }
+            }
+        }
+        writer.name = "cache-writer"; writer.start()
+        assertTrue("落盘线程没开始", started.await(5, java.util.concurrent.TimeUnit.SECONDS))
+        val reader = Thread { cache.records(); cache.cached("101"); cache.bytesUsed(); cache.cachedIds() }
+        reader.name = "index-reader"; reader.start(); reader.join(3000)
+        assertTrue("下载进行中间读索引被落盘卡住了", !reader.isAlive)
+        release.countDown(); writer.join(20_000)
+        // 写完的这一集立刻看得见：界面那个 ✓ 靠的就是这个。
+        assertNotNull(cache.cached("101")); assertEquals((2 * chunk).toLong(), cache.cached("101")!!.bytes)
+    }
+
+    @Test fun theIndexFollowsWhatWasJustWrittenAndJustRemoved() {
+        val cache = EpisodeCache(root)
+        store(cache, "102", 720, 1024)
+        assertEquals(setOf("102"), cache.cachedIds())
+        store(cache, "103", 720, 1024)
+        // 索引留着复用，但写完必须马上算上新那一集。
+        assertEquals(setOf("102", "103"), cache.cachedIds())
+        cache.remove("102")
+        assertEquals(setOf("103"), cache.cachedIds()); assertNull(cache.cached("102"))
+        cache.clear()
+        assertTrue(cache.cachedIds().isEmpty()); assertTrue(cache.records().isEmpty())
+    }
+
+    @Test fun cachedStillTakesTheLowestTierOfAnEpisode() {
+        // 同一集存了几档时 cached 取哪一档：与改动前一致（列表按清晰度升序，取第一个）。
+        val cache = EpisodeCache(root)
+        store(cache, "104", 720, 2048); store(cache, "104", 480, 1024)
+        assertEquals(480, cache.cached("104")!!.quality)
+        assertEquals(720, cache.playable("104", 720)!!.quality)
+    }
 }

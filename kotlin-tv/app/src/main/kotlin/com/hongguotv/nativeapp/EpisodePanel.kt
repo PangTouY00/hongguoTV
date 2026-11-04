@@ -59,17 +59,25 @@ class EpisodePanel(
         }
     }
     fun dismiss()=dialog.dismiss()
-    /** 下载进度落地后只改格子上的文字与摘要行：标记要跟着真实状态走，重画整屏会让焦点跳走。 */
+    /**
+     * 下载进度落地后只改格子上的文字与摘要行：标记要跟着真实状态走，重画整屏会让焦点跳走。
+     *
+     * 只改真正变了的那几个。一集在下的时候二十个格子里只有一个在动，逐个 setText 会让整片格子
+     * 重新测量一遍，每半秒一次——界面看起来就是「下载时整屏发涩」。
+     */
     fun refresh() {
         if(!dialog.isShowing) return
         cellIndexes.forEachIndexed { position, index ->
             val cell=cells[position]
-            cell.text=cellLabel(index)
-            cell.contentDescription="第 ${index+1} 集"+(if(index==current) "，当前播放" else "")+cacheMark(index)
+            val label=cellLabel(index)
+            if(cell.text.toString()!=label) cell.text=label
+            val description="第 ${index+1} 集"+(if(index==current) "，当前播放" else "")+cacheMark(index)
+            if(cell.contentDescription?.toString()!=description) cell.contentDescription=description
         }
         summaryLine?.let { line ->
             val text=cache?.summary?.invoke()
-            line.text=text.orEmpty(); line.visibility=if(text==null) View.GONE else View.VISIBLE
+            if(line.text.toString()!=text.orEmpty()) line.text=text.orEmpty()
+            line.visibility=if(text==null) View.GONE else View.VISIBLE
         }
     }
     private fun cacheMark(index: Int): String = cache?.label?.invoke(index)?.let { " $it" }.orEmpty()

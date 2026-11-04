@@ -87,4 +87,42 @@ class RemoteVideoStreamingTest {
             assertThrows(IOException::class.java) { video.openRead(300*1024L,32) }
         } finally { video.close() }
     }
+    @Test fun streamedReaderFillsWholeBlocksInsteadOfDecryptingPerCall() {
+        val file=fixture(16);val ranges=mutableListOf<String>()
+        val http=OkHttpClient.Builder().addInterceptor { chain ->
+            val range=chain.request().header("Range")!!;ranges+=range
+            val limits=range.removePrefix("bytes=").split('-').map(String::toInt)
+            val end=minOf(file.lastIndex,limits[1])
+            // 底层每次只给一个字节：按调用逐次解密的写法会在这里退化成几十万次解密，
+            // 攒够一块再解密的写法不受它影响。
+            val monitored=object: okio.ForwardingSource(okio.Buffer().write(file,limits[0],end-limits[0]+1)) {
+                override fun read(sink: okio.Buffer,byteCount: Long): Long=super.read(sink,minOf(byteCount,1L))
+            }.buffer()
+            val body=object: ResponseBody() {
+                override fun contentType(): MediaType?=null
+                override fun contentLength()=(end-limits[0]+1).toLong()
+                override fun source()=monitored
+            }
+            Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(206).message("partial")
+                .header("Content-Range","bytes ${limits[0]}-$end/${file.size}").body(body).build()
+        }.build()
+        val start=300*1024;val want=200*1024
+        RemoteVideo(http,StreamInfo("https://example.test/video",null,"测试")).use { video ->
+            video.prepare()
+            val reader=video.openRead(start.toLong(),want)
+            val got=ByteArray(want)
+            var read=0
+            try {
+                while(read<want) {
+                    val n=reader.read(got,read,minOf(4096,want-read))
+                    if(n<0) break
+                    read+=n
+                }
+            } finally { reader.close() }
+            assertEquals(want,read)
+            assertArrayEquals(file.copyOfRange(start,start+want),got)
+            // 中途不再为下一块开新的请求：prepare 一次 + 这一段一次。
+            assertEquals(2,ranges.size)
+        }
+    }
 }

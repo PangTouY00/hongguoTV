@@ -68,13 +68,23 @@ class CacheManager(
     /** 队列里失败的任务：界面要写清是哪一集、为什么失败，别只留一个「失败」。 */
     fun failures(): List<Task> = synchronized(this) { known.values.filter { it.state == State.FAILED } }
 
+    /**
+     * 还在排队或正在下载的任务，带着它们属于哪部剧。
+     *
+     * 「本机下载」原来只列已经落盘的集，于是点了「缓存全部」以后那一页还是空的——看不出有没有在干活。
+     * 这一份让正在缓存的剧当场出现，并带上还剩几集、当前这一集的百分比。
+     */
+    fun activeTasks(): List<Task> = synchronized(this) { known.values.filter { it.state == State.QUEUED || it.state == State.RUNNING } }
+
     /** 把一批分集排进队列。episodes 是（集号, 分集 id）：集号进缓存元数据，离线时用它显示第几集。
      *  已经缓存过的、已经在队列里的直接跳过，不重复下载。 */
     fun enqueue(series: Series, episodes: List<Pair<Int, String>>, quality: Int) {
+        // 一次问清哪些已经缓存过。原来每集问一次，每集都要扫一遍缓存目录：排五十集就是五十遍。
+        val already = cache.cachedIds()
         var added = false
         synchronized(this) {
             episodes.forEach { (index, id) ->
-                if (cache.cached(id) != null) return@forEach
+                if (already.contains(id)) return@forEach
                 val existing = known[id]
                 if (existing != null) {
                     // 失败过的重新排一次。界面上写着「失败」却怎么点都不动，最容易被当成整个功能坏了。
@@ -133,7 +143,8 @@ class CacheManager(
                 synchronized(this) { running = task }
                 notifyUi()
                 try { download(task); failures = 0 }
-                catch (error: Exception) {
+                // 连内存不够这种也接住：这一集下不成，界面写「失败」并说明原因，比整个应用被系统关掉好。
+                catch (error: Throwable) {
                     synchronized(this) { task.state = State.FAILED; task.percent = 0
                         task.message = error.message ?: error.javaClass.simpleName }
                     failures++
@@ -177,6 +188,10 @@ class CacheManager(
         cache.unusable()?.let { throw CacheStorageException(it) }
         val video = RemoteVideo(http, rendition.toStreamInfo())
         synchronized(this) { activeVideo = video }
+        // 落盘按整块要字节、整块解密。上一轮这里改成「一次开一大段、流式消费」，本机实测反而慢 90 倍：
+        // 9.5 MB 一集，每 1 MB 一次往返 1.3 秒，流式那段要 120 秒。慢的不是往返——服务端 keep-alive，
+        // 一次往返几乎不花时间；慢的是流式读取每几十 KB 就调一次解密，每次都要新建一次 AES 上下文。
+        // 播放侧照旧用流式（它按播放进度要字节，量级小，不影响流畅）。
         try {
             video.prepare()
             if (!cache.hasRoom(video.total)) throw NotEnoughSpace("存储空间不足，还剩 ${cache.freeBytes() / 1024 / 1024} MB 可用")
@@ -196,10 +211,22 @@ class CacheManager(
                 episodeIndex = task.episodeIndex)
             synchronized(this) { known.remove(task.episodeId) }
             android.util.Log.i("HongguoTV", "Episode cached episode=${task.episodeId} quality=${rendition.quality} bytes=${video.total}")
-        } finally { video.close(); synchronized(this) { if (activeVideo === video) activeVideo = null } }
+        } finally {
+            video.close(); synchronized(this) { if (activeVideo === video) activeVideo = null }
+        }
     }
 
-    private fun notifyUi() { main.post(listener) }
+    /**
+     * 界面要刷新，但同一时刻只排一次。
+     *
+     * 进度每半秒报一次，逐条 post 会把主线程的消息队列排满：刷新本身要花时间，排在后面的点击
+     * 事件等不到处理，五秒不响应系统就报 ANR。已经排着就不再排——下一次刷新看到的是当时的最新状态。
+     */
+    private val notifyQueued = java.util.concurrent.atomic.AtomicBoolean(false)
+    private fun notifyUi() {
+        if (!notifyQueued.compareAndSet(false, true)) return
+        main.post { notifyQueued.set(false); listener() }
+    }
 
     fun close() { worker.shutdownNow() }
 }
