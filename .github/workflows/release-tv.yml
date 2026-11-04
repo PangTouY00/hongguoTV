@@ -290,11 +290,16 @@ jobs:
         run: |
           set -euo pipefail
           build_tools="$(ls -d "$ANDROID_HOME"/build-tools/* | tail -n1)"
+          # apksigner 一次只接受一个 APK，多个构建必须逐个取指纹再比对。
+          fingerprints=""
           for apk in outputs/release/*/*.apk; do
-            echo "$apk: $("$build_tools/apksigner" verify --print-certs "$apk" | sed -n 's/.*certificate SHA-256 digest: //p' | head -n1)"
+            fp="$("$build_tools/apksigner" verify --print-certs "$apk" | sed -n 's/.*certificate SHA-256 digest: //p' | head -n1)"
+            if [ -z "$fp" ]; then echo "读不到 $apk 的签名指纹"; exit 1; fi
+            echo "$apk: $fp"
+            fingerprints="${fingerprints}${fp}"$'\n'
           done
-          fingerprints="$("$build_tools/apksigner" verify --print-certs outputs/release/*/*.apk | sed -n 's/.*certificate SHA-256 digest: //p' | sort -u | wc -l)"
-          [ "$fingerprints" -eq 1 ] || { echo "同一次发布的多个构建签名不一致"; exit 1; }
+          count="$(printf '%s' "$fingerprints" | sed '/^$/d' | sort -u | wc -l)"
+          [ "$count" -eq 1 ] || { echo "同一次发布的多个构建签名不一致"; exit 1; }
       - name: Publish the formal release
         env:
           GH_TOKEN: ${{ github.token }}
