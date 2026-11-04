@@ -10,3 +10,8 @@
 # 但压缩器会因为找不到它而报错。
 -dontwarn tv.danmaku.ijk.media.player.**
 -dontwarn android.media.MediaDataSource
+# R8 保留 okhttp 3.12 的 KitKat/PreKitKat 适配器（minSdk 19 会留着它们），这两个类引用的是
+# 老 conscrypt 与 Apache Harmony 的内部类，compileSdk 36 的 android.jar 里没有。运行时在
+# 4.x 上由随包的 Conscrypt 提供等价实现，这里只是不让压缩器因为找不到类而中止。
+-dontwarn com.android.org.conscrypt.SSLParametersImpl
+-dontwarn org.apache.harmony.xnet.provider.jsse.SSLParametersImpl
