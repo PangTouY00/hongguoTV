@@ -78,7 +78,7 @@ class DramaDiscoveryScreenTest {
                 Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK").body(response(request).toResponseBody()).build()
             }.build(),System::currentTimeMillis,
                 // 搜索与播放共用注册身份：钉一份，测试不会真去发注册请求。
-                PlaybackDeviceSession { DeviceRegister.Registered("333","444") })))
+                PlaybackDeviceSession { DeviceRegister.Registered("333","444") }))
             set(activity,"foreground",true)
             MainActivity::class.java.getDeclaredMethod("switchTab",Int::class.javaPrimitiveType).apply { isAccessible=true }.invoke(activity,1)
             pump(activity)
