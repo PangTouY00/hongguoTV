@@ -42,6 +42,11 @@ class DramaDiscoveryScreenTest {
     private fun response(request: Request): String {
         if(request.url().encodedPath=="/incent_resource/suggestion") return """{"suggest_list":[{"name":"大佬，你该出手了"}]}"""
         if(request.url().encodedPath=="/api/search/result") return """{"hasMore":false,"searchList":[{"series_id":"900","series_name":"搜索结果剧"}]}"""
+        // 找剧页的搜索已经改走 App 搜索接口（网页搜索接口被风控关闭），这里给出短剧 tab 的结果。
+        if(request.url().encodedPath=="/reading/bookapi/search/tab/v") return JSONObject().put("code",0)
+            .put("search_tabs",JSONArray().put(JSONObject().put("tab_type",11).put("has_more",false)
+                .put("data",JSONArray().put(JSONObject().put("video_data",JSONArray().put(JSONObject()
+                    .put("series_id","900").put("title","搜索结果剧").put("episode_cnt",8))))))).toString()
         val input=body(request);val offset=input.getInt("offset")
         val real=input.getJSONObject("select_items").getJSONArray("genre").optString(0)=="short_play"
         val rows=JSONArray()
