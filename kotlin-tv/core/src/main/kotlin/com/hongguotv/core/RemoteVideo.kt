@@ -11,8 +11,10 @@ import java.io.InputStream
 /** One playback stream. No listening socket or local HTTP service. */
 class RemoteVideo(private val http: OkHttpClient, override val info: StreamInfo): VideoSource {
     companion object {
-        /** 一次分段读取的最大字节数。缓存落盘按这个长度开段，播放侧仍按 1 MiB 要。 */
+        /** 一次分段读取的最大字节数。播放侧按 512 KiB 开段，这里留出余量。 */
         private const val MAX_RANGE = 8*1024*1024
+        /** 流式读取每次解密的块大小。攒够一块再解密，别每几十 KB 就新建一次 AES 上下文。 */
+        private const val DECRYPT_BLOCK = 128*1024
     }
     @Volatile private var closed=false
     private val calls=mutableSetOf<Call>()
@@ -65,7 +67,8 @@ class RemoteVideo(private val http: OkHttpClient, override val info: StreamInfo)
     }
     /** One bounded HTTP range, delivered as bytes arrive instead of waiting for the whole body.
      *  The playback data source owns this reader; close() interrupts an outstanding body read.
-     *  上限 8 MiB 是给缓存落盘用的：一次开一大段，顺序消费完再开下一段。播放侧照旧按 1 MiB 要。 */
+     *  字节按到达顺序交付，但解密按 128 KiB 一块做：调用方每次只要几十 KB，逐次解密时每次新建
+     *  AES 上下文的固定开销会盖过解密本身，实测能把吞吐压到 0.1 MB/s。 */
     override fun openRead(start: Long,length: Int): InputStream {
         check(::prepared.isInitialized)
         require(start in 0 until total && length in 1..MAX_RANGE)
@@ -80,20 +83,36 @@ class RemoteVideo(private val http: OkHttpClient, override val info: StreamInfo)
                 private var position=start
                 private var remaining=size
                 private var readerClosed=false
-                private val scratch=ByteArray(32*1024)
+                private val block=ByteArray(DECRYPT_BLOCK)
+                private var plain=byteArrayOf()
+                private var plainAt=0
                 override fun read(): Int {
                     val single=ByteArray(1)
                     return if(read(single,0,1)<0) -1 else single[0].toInt() and 255
+                }
+                /** 从底层读满一块，一次解密。返回这一块的实际字节数，0 表示服务端提前结束了。 */
+                private fun fillPlain(want: Int): Int {
+                    var filled=0
+                    while(filled<want) {
+                        val n=input.read(block,filled,want-filled)
+                        if(n<0) break
+                        filled+=n
+                    }
+                    if(filled==0) return 0
+                    plain=MediaCrypto.decrypt(block.copyOf(filled),position,info.key,prepared)
+                    plainAt=0
+                    return filled
                 }
                 override fun read(target: ByteArray,offset: Int,count: Int): Int {
                     require(offset>=0 && count>=0 && offset<=target.size-count)
                     if(count==0) return 0
                     if(readerClosed || closed) throw IOException("播放请求已取消")
                     if(remaining==0) return -1
-                    val n=input.read(scratch,0,minOf(count,remaining,scratch.size))
-                    if(n<0) throw java.io.EOFException("视频分段意外结束")
-                    MediaCrypto.decrypt(scratch.copyOf(n),position,info.key,prepared).copyInto(target,offset)
-                    position+=n;remaining-=n
+                    if(plainAt>=plain.size && fillPlain(minOf(count,remaining,DECRYPT_BLOCK))==0)
+                        throw java.io.EOFException("视频分段意外结束")
+                    val n=minOf(count,plain.size-plainAt,remaining)
+                    plain.copyInto(target,offset,plainAt,plainAt+n)
+                    plainAt+=n;position+=n;remaining-=n
                     return n
                 }
                 override fun close() {
@@ -106,9 +125,6 @@ class RemoteVideo(private val http: OkHttpClient, override val info: StreamInfo)
             call.cancel();response?.close();synchronized(calls) { calls-=call };throw error
         }
     }
-    /** 从某个偏移开始的连续读，给整集落盘用：一次请求覆盖一大段，读完再开下一段，不再每 1 MiB 一次往返。
-     *  字节按到达顺序交付，边到边写盘，不整兆进内存。 */
-    fun openStream(start: Long): InputStream = openRead(start, MAX_RANGE)
     @Synchronized override fun prepare(initialBytes: Int): RemoteVideo {
         require(initialBytes in 16*1024..256*1024)
         if(::prepared.isInitialized) return this

@@ -68,6 +68,14 @@ class CacheManager(
     /** 队列里失败的任务：界面要写清是哪一集、为什么失败，别只留一个「失败」。 */
     fun failures(): List<Task> = synchronized(this) { known.values.filter { it.state == State.FAILED } }
 
+    /**
+     * 还在排队或正在下载的任务，带着它们属于哪部剧。
+     *
+     * 「本机下载」原来只列已经落盘的集，于是点了「缓存全部」以后那一页还是空的——看不出有没有在干活。
+     * 这一份让正在缓存的剧当场出现，并带上还剩几集、当前这一集的百分比。
+     */
+    fun activeTasks(): List<Task> = synchronized(this) { known.values.filter { it.state == State.QUEUED || it.state == State.RUNNING } }
+
     /** 把一批分集排进队列。episodes 是（集号, 分集 id）：集号进缓存元数据，离线时用它显示第几集。
      *  已经缓存过的、已经在队列里的直接跳过，不重复下载。 */
     fun enqueue(series: Series, episodes: List<Pair<Int, String>>, quality: Int) {
@@ -180,39 +188,16 @@ class CacheManager(
         cache.unusable()?.let { throw CacheStorageException(it) }
         val video = RemoteVideo(http, rendition.toStreamInfo())
         synchronized(this) { activeVideo = video }
-        // 一次请求覆盖一大段，顺序消费完再开下一段。原来每 1 MB 一次往返：一集几十兆就是几十次首字节
-        // 等待，下载慢，失败的机会也多几十倍。
-        var stream: java.io.InputStream? = null
-        var streamFrom = -1L
-        fun takeBytes(at: Long, length: Int): ByteArray {
-            val target = ByteArray(length)
-            var filled = 0
-            var exhausted = 0
-            while (filled < length) {
-                if (task.canceled) throw IOException("缓存已取消")
-                var current = stream
-                if (current == null || streamFrom != at + filled) {
-                    current?.close()
-                    current = video.openStream(at + filled)
-                    stream = current; streamFrom = at + filled
-                }
-                val read = current.read(target, filled, length - filled)
-                if (read < 0) {
-                    // 这一段读完了，从下一个偏移开新的段。同一处连续几次都读不到字节就是真读不到了。
-                    current.close(); stream = null; streamFrom = -1L
-                    if (++exhausted > 3) throw IOException("缓存读取不完整")
-                    continue
-                }
-                filled += read
-            }
-            return target
-        }
+        // 落盘按整块要字节、整块解密。上一轮这里改成「一次开一大段、流式消费」，本机实测反而慢 90 倍：
+        // 9.5 MB 一集，每 1 MB 一次往返 1.3 秒，流式那段要 120 秒。慢的不是往返——服务端 keep-alive，
+        // 一次往返几乎不花时间；慢的是流式读取每几十 KB 就调一次解密，每次都要新建一次 AES 上下文。
+        // 播放侧照旧用流式（它按播放进度要字节，量级小，不影响流畅）。
         try {
             video.prepare()
             if (!cache.hasRoom(video.total)) throw NotEnoughSpace("存储空间不足，还剩 ${cache.freeBytes() / 1024 / 1024} MB 可用")
             var reportedAt = 0L
             cache.store(task.episodeId, rendition.quality, rendition.codec, video.total,
-                read = { at, length -> takeBytes(at, length) },
+                read = { at, length -> video.read(at, length) },
                 progress = { done, total ->
                     // 每 2% 或每半秒报一次：一集几十 MB 按 MB 报会让界面每秒重绘十几次。
                     val percent = (done * 100 / total).toInt()
@@ -227,7 +212,6 @@ class CacheManager(
             synchronized(this) { known.remove(task.episodeId) }
             android.util.Log.i("HongguoTV", "Episode cached episode=${task.episodeId} quality=${rendition.quality} bytes=${video.total}")
         } finally {
-            runCatching { stream?.close() }
             video.close(); synchronized(this) { if (activeVideo === video) activeVideo = null }
         }
     }
