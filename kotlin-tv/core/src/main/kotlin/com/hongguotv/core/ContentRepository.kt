@@ -40,6 +40,10 @@ internal class MemoryCookies : CookieJar {
     fun clear() = store.clear()
 }
 
+// okhttp 3.12 的 OkHttpClient 没有公开的 cookieJar getter：默认客户端的罐在这里建好并留住引用，
+// 空响应重试时直接清它，不再从客户端往回取。
+private val sharedCookies = MemoryCookies()
+
 internal fun JSONArray.objects() = (0 until length()).mapNotNull { optJSONObject(it) }
 internal fun JSONObject.str(key: String) = if (isNull(key)) "" else optString(key, "").trim()
 internal fun cleanUrl(s: String) = s.replace("\\/","/").replace("\\u002F","/",ignoreCase=true).replace("\\u0026","&").replace("&amp;","&")
@@ -94,7 +98,7 @@ class ContentRepository(
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
-            .cookieJar(MemoryCookies())
+            .cookieJar(sharedCookies)
             .compatTls()
             .build(),
     private val clock: () -> Long = System::currentTimeMillis,
@@ -160,7 +164,7 @@ class ContentRepository(
                 attempt++
                 // 200 空响应多半是 CDN 拿着半失效的 ttwid 会话软拦截：先丢掉会话再重读，
                 // 让服务端重新下发 Cookie，而不是原样重放同一个被拦的请求。
-                if(e is EmptyContentException) (http.cookieJar as? MemoryCookies)?.clear()
+                if(e is EmptyContentException) sharedCookies.clear()
                 try { Thread.sleep(700L*attempt) } catch (_: InterruptedException) {
                     Thread.currentThread().interrupt();throw java.io.InterruptedIOException("请求已取消")
                 }
