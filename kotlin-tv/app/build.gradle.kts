@@ -11,8 +11,8 @@ android {
         applicationId = "com.hongguotv.nativeapp"
         minSdk = 19
         targetSdk = 36
-        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 53
-        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.1.12"
+        versionCode = System.getenv("HONGGUOTV_VERSION_CODE")?.toInt() ?: 56
+        versionName = System.getenv("HONGGUOTV_VERSION_NAME") ?: "0.1.15"
         // API 19 没有自动 multidex（AGP 只在 minSdk 21 起自动开启），而这条分支的依赖总量已经超过
         // 单个 dex 的 65536 方法上限：显式开启，并由 HongguoApplication 在 attachBaseContext 装载第二个 dex。
         multiDexEnabled = true
