@@ -56,7 +56,7 @@ class PlaybackDeviceSessionTest {
         ContentRepository(http, playbackSession = session).streamLadder("123")
         ContentRepository(http, playbackSession = session).streamLadder("123")
         assertEquals(1, registrations)
-        assertEquals(2, requests.size)
+        assertEquals(2, requests.count { it.url.encodedPath == "/novel/player/multi_video_model/v1/" })
         // 两个仓库共用同一个 cdid：重新注册会让平台看成另一台设备，播放进度和限流都对不上。
         assertEquals(1, requests.map { it.url.queryParameter("cdid") }.distinct().size)
     }
@@ -114,6 +114,11 @@ class PlaybackDeviceSessionTest {
             OkHttpClient.Builder()
                 .addInterceptor { chain ->
                     val request = chain.request()
+                    // 这条用例只关心旧接口的空响应重试，新接口直接按不可用处理。
+                    if (request.url.encodedPath.startsWith("/reading/bookapi/video_tab/")) {
+                        return@addInterceptor Response.Builder().request(request).protocol(Protocol.HTTP_1_1)
+                            .code(200).message("fixture").body("""{"code":100103}""".toResponseBody()).build()
+                    }
                     tickets += request.url.queryParameter("_rticket")
                     val body = if (reads.incrementAndGet() < 3) "" else model
                     Response.Builder()

@@ -28,6 +28,21 @@ object ResumePlayback {
     }
 }
 
+/**
+ * 哪些集还没看过。
+ *
+ * 进度只记「最后看到哪一集」，不逐集记，所以未看只能照这个高水位往后算：进度之后的集没看过，
+ * 进度这一集和它之前的都算看过——和续播跳到下一集是同一套判断。没有进度就是整部都没看过。
+ */
+object UnwatchedEpisodes {
+    fun indexes(total: Int, watchedThrough: Int?): List<Int> {
+        require(total >= 0) { "分集数量异常" }
+        if (watchedThrough == null) return (0 until total).toList()
+        require(watchedThrough >= -1) { "观看进度位置异常" }
+        return (watchedThrough + 1 until total).toList()
+    }
+}
+
 /** Seen count is a high-water mark, so temporary catalog shrinkage is not a new update. */
 data class FavoriteUpdate(val total: Int,val seen: Int,val checkedAt: Long) {
     val added get()=(total-seen).coerceAtLeast(0)

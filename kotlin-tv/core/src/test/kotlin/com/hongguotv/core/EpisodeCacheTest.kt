@@ -192,4 +192,57 @@ class EpisodeCacheTest {
         assertTrue(asked.isEmpty())
         assertEquals("s-8", record.seriesId); assertEquals("s-8", cache.cached("72")!!.seriesId)
     }
+
+    @Test fun freeSpaceIsReadableBeforeTheCacheDirectoryExists() {
+        // 真实故障：缓存目录还没建出来时 usableSpace 读不到那个卷、直接返回 0。缓存一集之前先要问
+        // 「放得下吗」，于是第一次用这个功能时每一集都被判成「存储空间不足，还剩 0 MB 可用」，
+        // 而设备其实还剩一百多 GB；目录也因此永远建不起来，每一集都失败。
+        val directory = File(root, "not-created-yet/episodes-v1")
+        val cache = EpisodeCache(directory)
+        assertFalse(directory.exists())
+        assertTrue("目录还没建时也必须问得到剩余空间", cache.freeBytes() > 0)
+        assertTrue(cache.hasRoom(1024))
+        assertNull(cache.unusable())
+        assertTrue("问过空间之后目录已经建好", directory.isDirectory)
+        // 走到落盘那一步同样不能因为目录不存在而失败。
+        store(cache, "91", 720, 1024)
+        assertNotNull(cache.cached("91"))
+    }
+
+    @Test fun unusableDirectoryIsReportedAsADirectoryProblemNotOutOfSpace() {
+        // 用一个普通文件挡住目录的位置：这一处的目录必然建不出来。
+        val blocker = File(root, "blocked"); blocker.writeText("占位")
+        val directory = File(blocker, "episodes-v1")
+        val cache = EpisodeCache(directory)
+        val reason = cache.unusable()
+        assertNotNull(reason)
+        assertTrue(reason!!.contains("无法创建缓存目录"))
+        try {
+            store(cache, "92", 720, 1024)
+            fail("目录建不出来时落盘必须失败")
+        } catch (error: IOException) {
+            // 原因要说在目录上。写成「存储空间不足」会把人引到完全相反的方向上去查。
+            assertTrue(error.message.orEmpty().contains("无法创建缓存目录"))
+        }
+        assertTrue(EpisodeCache.isUsable(root))
+        assertFalse(EpisodeCache.isUsable(directory))
+    }
+
+    @Test fun storedRecordsCarryTheEpisodeNumberTheOfflineListNeeds() {
+        val cache = EpisodeCache(root)
+        cache.store("145", 720, "avc1", 1024L, read = { _, length -> bytes(length) },
+            seriesId = "s-9", seriesTitle = "凛冬末世", episodeIndex = 144)
+        assertEquals(144, cache.cached("145")!!.episodeIndex)
+        // 断网时剧集列表由这些记录拼出来：集号读不回来，缓存了第 145 集会显示成第 1 集。
+        assertEquals(144, cache.records().first { it.episodeId == "145" }.episodeIndex)
+        assertEquals(144, org.json.JSONObject(File(root, "145-720.json").readText()).getInt("episodeIndex"))
+    }
+
+    @Test fun metadataWithoutAnEpisodeNumberReadsAsUnknownInsteadOfFirst() {
+        // 旧版本写的元数据没有集号：必须读成 -1（未知），不能当成第 1 集。
+        val cache = EpisodeCache(root)
+        File(root, "146-720.json").writeText("""{"episodeId":"146","quality":720,"codec":"avc1","bytes":1024,"savedAt":1,"seriesId":"s-9"}""")
+        File(root, "146-720.mp4").writeBytes(bytes(1024))
+        assertEquals(-1, cache.cached("146")!!.episodeIndex)
+    }
 }

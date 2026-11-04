@@ -35,8 +35,13 @@ class MainActivity: Activity() {
     private val io=Executors.newFixedThreadPool(3)
     private val repository=ContentRepository(playbackSession=PlaybackDeviceSession.shared)
     // 缓存落在应用自己的外部私有目录：不需要任何存储权限，电视上也不会弹权限框。
-    // 代价是卸载即清，这一点在缓存管理里写明了。
-    private val episodeCache by lazy { EpisodeCache(File(getExternalFilesDir(null) ?: filesDir,"episodes-v1")) }
+    // 代价是卸载即清，这一点在缓存管理里写明了。外部目录建不出来或写不进去时退回应用内部目录：
+    // 两处都是应用私有、都不需要权限，只是内部目录在文件管理器里看不到。
+    private val cacheDirectory: java.io.File by lazy {
+        val external = getExternalFilesDir(null)?.let { java.io.File(it, "episodes-v1") }
+        if (external != null && EpisodeCache.isUsable(external)) external else java.io.File(filesDir, "episodes-v1")
+    }
+    private val episodeCache by lazy { EpisodeCache(cacheDirectory) }
     private var cacheQueue: CacheManager?=null
     private var detailCacheButton: TextView?=null
     // 榜单专用并行加载通道：最多四榜各自在途、互不取消，与全局单飞 work() 隔离。
@@ -1163,12 +1168,16 @@ class MainActivity: Activity() {
             }
         })
     }
-    private fun openDetail(series: Series,resume: Boolean=false,autoplay: Boolean=true,cloudProgress: CloudProgress?=null,fromRelated: Boolean=false) {
+    private fun openDetail(series: Series,resume: Boolean=false,autoplay: Boolean=true,cloudProgress: CloudProgress?=null,fromRelated: Boolean=false,forceRemote: Boolean=false) {
         if(!fromRelated) detailTrail.clear()
         relatedSection=null
         val accountScope=cloudAccount.historyScope
         pendingDetail=series; detailAutoplay=autoplay
         invalidatePage(); releaseCatalogViews(); screen="detail"; directPlayback=resume; detail=null; synopsisExpanded=false
+        // 本机下载里点开的剧本来就是「这台设备上已经有的内容」：直接由缓存拼出列表，不联网也能进、能播。
+        if(!forceRemote && isLocalDownloads()) {
+            offlineDetail(series)?.let { cached -> showOfflineDetail(series,cached,resume); return }
+        }
         val body=base(series.title); message(body,"正在加载剧集…")
         work({ repository.detail(series.id) }, { result ->
             detail=result; library.observeFavorite(series.id,result.episodes.size,System.currentTimeMillis(),acknowledge=true)
@@ -1178,11 +1187,34 @@ class MainActivity: Activity() {
             val target=ResumePlayback.target(result.episodes,progress?.episodeId,progress?.position ?: 0,progress?.completed==true)
             episodeIndex=target.index; group=episodeIndex/20
             if(resume) playEpisode(target.index,target.position,autoplay=detailAutoplay) else showDetail(false)
-        }, { problem -> error(body,problem) {
-            if(cloudProgress!=null && accountScope!=cloudAccount.historyScope) showCatalog()
-            else openDetail(series,resume,detailAutoplay,cloudProgress,fromRelated)
-        } })
+        }, { problem ->
+            // 断网时不该只留一句「无法连接内容网站」：这部剧有缓存就把缓存列出来，能播就先播。
+            val cached=offlineDetail(series)
+            if(cached==null) {
+                error(body,problem) {
+                    if(cloudProgress!=null && accountScope!=cloudAccount.historyScope) showCatalog()
+                    else openDetail(series,resume,detailAutoplay,cloudProgress,fromRelated)
+                }
+            } else {
+                if(forceRemote) Toast.makeText(this,"网络不可用，仍然只显示已经缓存的 ${cached.episodes.size} 集",Toast.LENGTH_SHORT).show()
+                showOfflineDetail(series,cached,resume)
+            }
+        } )
     }
+    /** 打开离线详情：剧集列表来自本地缓存，集号按缓存时的记录。 */
+    private fun showOfflineDetail(series: Series,data: Detail,resume: Boolean) {
+        detail=data
+        val progress=library.progress(series.id)
+        val target=ResumePlayback.target(data.episodes,progress?.episodeId,progress?.position ?: 0,progress?.completed==true)
+        episodeIndex=target.index; group=episodeIndex/20
+        if(resume) playEpisode(target.index,target.position,autoplay=detailAutoplay) else showDetail(false)
+    }
+    /**
+     * 断网时用本地缓存拼出一个详情：只包含这台设备上已经缓存下来的集。
+     *
+     * 拼法在 [offlineDetailOf] 里（那里有测试）；这里只负责把缓存记录交给它。
+     */
+    private fun offlineDetail(series: Series): Detail? = offlineDetailOf(series,episodeCache.records())
     private fun showDetail(focusEpisode: Boolean) {
         invalidatePage(); releaseCatalogViews(); screen="detail"; val data=detail ?: return showCatalog()
         val body=base("剧集详情")
@@ -1200,11 +1232,11 @@ class MainActivity: Activity() {
         val resumeIndex=progress?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } } ?: 0
         val watched=library.watched(data.series.id)
         val continueTarget=ResumePlayback.target(data.episodes,progress?.episodeId,progress?.position ?: 0,progress?.completed==true)
-        val play=addButton(actions,if(watched) "重新观看" else if(progress!=null) "继续第 ${continueTarget.index+1} 集" else "开始观看") {
+        val play=addButton(actions,if(watched) "重新观看" else if(progress!=null) "继续第 ${episodeNumber(data,continueTarget.index)} 集" else "开始观看") {
             playEpisode(if(watched) 0 else continueTarget.index,if(watched) 0 else continueTarget.position)
         }
         lateinit var detailComments: TextView
-        detailComments=addButton(actions,"评论 · 第 ${episodeIndex+1} 集") { social.showComments(detailComments) }
+        detailComments=addButton(actions,"评论 · 第 ${episodeNumber(data,episodeIndex)} 集") { social.showComments(detailComments) }
         val secondary=row().apply { setPadding(0,dp(8),0,0) };info.addView(secondary)
         accountFavoriteButton=addButton(secondary,cloudAccount.favoriteActionLabel(data.series.id)) {
             accountFavoriteAction(data.series,accountFavoriteButton)
@@ -1226,15 +1258,23 @@ class MainActivity: Activity() {
         }
         lateinit var cacheButton: TextView
         cacheButton=addButton(secondary,detailCacheLabel()) {
-            if(caches().pendingCount()>0) caches().cancelAll() else caches().enqueue(data.series,data.episodes,library.maxQuality)
+            if(caches().pendingCount()>0) caches().cancelAll() else caches().enqueue(data.series,episodePairs(data),library.maxQuality)
             refreshCacheUi()
         }
         detailCacheButton=cacheButton
         content.addView(hero)
+        // 离线详情只列已缓存的集：说清列表为什么这么短，并给一个联网后拉全部剧集的入口。
+        val offline=data.episodeNumbers!=null
+        if(offline) {
+            val notice=row().apply { setPadding(0,0,0,dp(10)) }
+            notice.addView(text("离线 · 只列出这台设备上已经缓存的 ${data.episodes.size} 集，可在缓存管理里删除",13f,muted).apply { maxLines=2 },lp(0,-2).apply { weight=1f; rightMargin=dp(12) })
+            addButton(notice,"加载全部剧集") { openDetail(data.series,forceRemote=true) }
+            content.addView(notice)
+        }
         val groupRow=row(); groupRow.setPadding(0,dp(3),0,dp(5))
         val maxGroup=data.episodes.lastIndex/20; group=group.coerceIn(0,maxGroup)
         val previous=addButton(groupRow,"‹ 上一组") { if(group>0) { group--; showDetail(true) } }.apply { isEnabled=group>0; isFocusable=group>0; alpha=if(group>0) 1f else .4f }
-        groupRow.addView(text("第 ${group*20+1}—${minOf((group+1)*20,data.episodes.size)} 集",16f).apply { gravity=Gravity.CENTER },lp(dp(190),dp(42)))
+        groupRow.addView(text(if(offline) "已缓存 ${data.episodes.size} 集" else "第 ${group*20+1}—${minOf((group+1)*20,data.episodes.size)} 集",16f).apply { gravity=Gravity.CENTER },lp(dp(190),dp(42)))
         addButton(groupRow,"下一组 ›") { if(group<maxGroup) { group++; showDetail(true) } }.apply { isEnabled=group<maxGroup; isFocusable=group<maxGroup; alpha=if(group<maxGroup) 1f else .4f }
         lateinit var jump: TextView
         jump=addButton(groupRow,"跳转集数") { tvTools.episodePicker(data.episodes.size,episodeIndex,jump) { target -> episodeIndex=target; group=target/20; showDetail(true) } }
@@ -1243,7 +1283,7 @@ class MainActivity: Activity() {
         val episodes=mutableListOf<View>()
         (group*20 until minOf((group+1)*20,data.episodes.size)).toList().chunked(10).forEach { numbers ->
             val line=row()
-            numbers.forEach { index -> val item=button("${index+1}"+(if(index==episodeIndex) "\n当前" else if(index==resumeIndex && progress!=null) if(progress.completed) "\n已看" else "\n上次" else "")+(cacheMark(data.episodes[index])?.let { "\n$it" }.orEmpty()),index==episodeIndex) { playEpisode(index,if(progress?.episodeId==data.episodes[index] && !progress.completed) progress.position else 0) }; item.textSize=12f;item.setPadding(dp(2),dp(3),dp(2),dp(3));item.contentDescription="第 ${index+1} 集"; line.addView(item,lp(0,dp(42)).apply { weight=1f; rightMargin=dp(6) }); episodes+=item }
+            numbers.forEach { index -> val item=button(episodeLabel(data,index)+(if(index==episodeIndex) "\n当前" else if(index==resumeIndex && progress!=null) if(progress.completed) "\n已看" else "\n上次" else "")+(cacheMark(data.episodes[index])?.let { "\n$it" }.orEmpty()),index==episodeIndex) { playEpisode(index,if(progress?.episodeId==data.episodes[index] && !progress.completed) progress.position else 0) }; item.textSize=12f;item.setPadding(dp(2),dp(3),dp(2),dp(3));item.contentDescription="第 ${episodeNumber(data,index)} 集"; line.addView(item,lp(0,dp(42)).apply { weight=1f; rightMargin=dp(6) }); episodes+=item }
             repeat(10-numbers.size) { line.addView(Space(this),lp(0,dp(42)).apply { weight=1f; rightMargin=dp(6) }) }
             content.addView(line,lp(-1,dp(49)))
         }
@@ -1356,7 +1396,7 @@ class MainActivity: Activity() {
             val glyph=PauseGlyph(this).apply { visibility=View.GONE }; pauseGlyph=glyph; root.addView(glyph,FrameLayout.LayoutParams(dp(96),dp(96),Gravity.CENTER))
             root.addView(ScrollView(this).apply { isVerticalScrollBarEnabled=false; addView(hud) },FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
         }
-        playbackTitle.text="${data.series.title}  ·  第 ${episodeIndex+1} 集"
+        playbackTitle.text="${data.series.title}  ·  第 ${episodeNumber(data,episodeIndex)} 集"
         playbackText.text="正在获取播放地址…"; progressBar.progress=0; progressBar.visibility=View.VISIBLE; hidePlaybackOverlay(); pauseGlyph?.visibility=View.GONE
         controls.removeAllViews(); controls.visibility=View.GONE; transportPlay=null; sleepButton=null
         syncMediaSession()
@@ -1534,7 +1574,7 @@ class MainActivity: Activity() {
         playbackReady=p.playbackState==Player.STATE_READY;episodeDuration=p.duration.coerceAtLeast(0)
         readySince=android.os.SystemClock.elapsedRealtime();prefetchAttempts=0;prefetchAttemptAt=0
         cancelRecovery();recovery.reset()
-        playbackTitle.text="${data.series.title}  ·  第 ${episodeIndex+1} 集"
+        playbackTitle.text="${data.series.title}  ·  第 ${episodeNumber(data,episodeIndex)} 集"
         controls.removeAllViews();controls.visibility=View.GONE;panel=false;transportPlay=null
         saveProgress();syncMediaSession()
         android.util.Log.i("HongguoTV","Playback queue transition episode=${episodeIndex+1}")
@@ -1908,10 +1948,11 @@ class MainActivity: Activity() {
     }
     private fun cacheSummary(): String? {
         val queue=cacheQueue ?: return null
-        val pending=queue.pendingCount()
-        if(pending==0) return null
-        return "缓存队列 · 还有 $pending 集 · 已缓存 ${queue.cachedCount()} 集 · 占用 ${queue.bytesUsed()/1024/1024} MB"
+        return cacheSummaryText(queue.pendingCount(),queue.cachedCount(),queue.bytesUsed(),queue.failures().map { it.episodeId to safeCacheError(it.message) })
     }
+    /** 还没看的分集下标：照观看进度往后算，和续播跳到下一集是同一套判断。 */
+    private fun unwatchedIndexes(data: Detail): List<Int> =
+        UnwatchedEpisodes.indexes(data.episodes.size,library.progress(data.series.id)?.episodeId?.let { data.episodes.indexOf(it) })
     /**
      * 已下载的剧集：按缓存元数据里记下的归属，把落盘的集归到各自的剧上。
      *
@@ -1945,22 +1986,48 @@ class MainActivity: Activity() {
             else -> "缓存全部 ${data.episodes.size} 集"
         }
     }
+    /** 缓存目录落在哪一处。缓存出问题时这一句就是判断依据，只写「应用自己的目录」看不出用了哪个。 */
+    private fun cacheLocationLabel(): String =
+        if (cacheDirectory.path.startsWith(filesDir.path)) "应用内部目录" else "外部私有目录"
+
+    /** 这一集显示的集号。离线详情用缓存里记下的真实集号；没记过的按列表位置算，不冒充「第几集」。 */
+    private fun episodeNumber(data: Detail,index: Int): Int {
+        val numbers=data.episodeNumbers
+        return numbers?.getOrNull(index)?.takeIf { it>0 } ?: (index+1)
+    }
+    private fun episodeLabel(data: Detail,index: Int): String {
+        // 取到局部变量再判空：episodeNumbers 是跨模块的公开属性，编译器不给它做 smart cast。
+        val numbers=data.episodeNumbers
+        return if(numbers!=null && (numbers.getOrNull(index) ?: 0)<=0) "已缓存" else "${episodeNumber(data,index)}"
+    }
+    /** 详情里的剧集 →（集号, 分集 id）。集号跟着缓存写进元数据，断网时由缓存拼出来的列表才显示得出第几集。 */
+    private fun episodePairs(data: Detail,indexes: List<Int> = data.episodes.indices.toList()): List<Pair<Int,String>> =
+        indexes.mapNotNull { index -> data.episodes.getOrNull(index)?.let { index to it } }
+    /** 还没看过的集，已经缓存过的排掉：这一项报的是真的还会下多少集。 */
+    private fun unwatchedPairs(data: Detail): List<Pair<Int,String>> =
+        unwatchedIndexes(data).filter { index -> data.episodes.getOrNull(index)?.let { episodeCache.cached(it)==null } ?: false }
+            .map { it to data.episodes[it] }
+
     private fun showCacheManager(anchor: TextView) {
         val data=detail
         val queue=caches()
         val rows=queue.cached()
         val current=data?.episodes?.getOrNull(episodeIndex)
+        // 已经缓存过的未看集不必再排一遍：这一行报的是真的还会下多少集。
+        val unwatched=data?.let { unwatchedPairs(it) } ?: emptyList()
         val labels=listOf(
             if(queue.pendingCount()>0) "停止缓存" else "缓存未缓存的 ${data?.episodes?.size ?: 0} 集",
+            if(unwatched.isEmpty()) "没有未看的集可缓存" else "缓存未看的 ${unwatched.size} 集",
             if(current!=null && episodeCache.cached(current)!=null) "删除本集缓存" else "缓存本集",
             "清空全部缓存 · ${rows.size} 集 · ${queue.bytesUsed()/1024/1024} MB",
-            "剩余空间 ${queue.freeBytes()/1024/1024} MB · 缓存存在应用自己的目录，卸载即清")
+            "剩余空间 ${queue.freeBytes()/1024/1024} MB · 缓存位置 ${cacheLocationLabel()} · 卸载即清")
         tvTools.choose("缓存管理",labels,anchor,{ choice -> main.post {
             if(screen!="player" && !anchor.isAttachedToWindow) return@post
             when(choice) {
-                0 -> if(queue.pendingCount()>0) queue.cancelAll() else data?.let { queue.enqueue(it.series,it.episodes,library.maxQuality) }
-                1 -> current?.let { id -> if(episodeCache.cached(id)!=null) queue.remove(id) else data?.let { queue.enqueue(it.series,listOf(id),library.maxQuality) } }
-                2 -> queue.clear()
+                0 -> if(queue.pendingCount()>0) queue.cancelAll() else data?.let { queue.enqueue(it.series,episodePairs(it),library.maxQuality) }
+                1 -> data?.let { queue.enqueue(it.series,unwatched,library.maxQuality) }
+                2 -> current?.let { id -> if(episodeCache.cached(id)!=null) queue.remove(id) else data?.let { d -> queue.enqueue(d.series,episodePairs(d,listOf(d.episodes.indexOf(id))),library.maxQuality) } }
+                3 -> queue.clear()
             }
             refreshCacheUi()
         } })
@@ -1986,7 +2053,7 @@ private fun showEpisodePanel(anchor: View) {
                     if(anchor.isAttachedToWindow) anchor.requestFocus()
                     if(overlayWasVisible) showHud() else hidePlaybackOverlay()
                 }
-            },lastWatched=library.progress(data.series.id)?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } },lastCompleted=library.progress(data.series.id)?.completed==true,cache=EpisodeCacheUi({ cacheMark(data.episodes[it]) },{ cacheSummary() },{ caches().enqueue(data.series,listOf(data.episodes[it]),library.maxQuality) },{ caches().enqueue(data.series,data.episodes,library.maxQuality) }))
+            },lastWatched=library.progress(data.series.id)?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } },lastCompleted=library.progress(data.series.id)?.completed==true,cache=EpisodeCacheUi({ cacheMark(data.episodes[it]) },{ cacheSummary() },{ caches().enqueue(data.series,listOf(it to data.episodes[it]),library.maxQuality) },{ caches().enqueue(data.series,episodePairs(data),library.maxQuality) },{ indexes -> caches().enqueue(data.series,episodePairs(data,indexes),library.maxQuality) }))
         episodePanel=next; next.show(); updatePauseGlyph()
     }
     private fun hidePanel() { if(playError) return; panel=false; controls.visibility=View.GONE; controls.clearFocus(); showHud() }

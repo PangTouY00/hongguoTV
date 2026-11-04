@@ -22,6 +22,9 @@ data class CachedEpisode(
     val seriesId: String = "",
     val seriesTitle: String = "",
     val cover: String = "",
+    /** 这一集在剧里的序号（从 0 起）。断网时剧集列表只能由缓存拼出来，没有它就显示不出
+     *  「这是第几集」——缓存了第 145 集会显示成第 1 集。旧版本写的元数据没有这一项，读出来是 -1。 */
+    val episodeIndex: Int = -1,
 )
 
 /**
@@ -35,12 +38,37 @@ data class CachedEpisode(
  * 就是 MediaCrypto 改写过的索引，后面就是解密后的样本，缓存文件与它是同一串字节。
  */
 class EpisodeCache(private val directory: File) {
-    private companion object {
+    companion object {
         /** 一次读写的块大小。远小于 RemoteVideo 单次分段的 8 MiB 上限，也就不用整集进内存。 */
-        const val CHUNK = 1024 * 1024
+        private const val CHUNK = 1024 * 1024
         /** 留给系统与其他应用的余量；缓存不能把设备写到满。 */
-        const val RESERVED = 512L * 1024 * 1024
-        val ID = Regex("[0-9]{1,30}")
+        private const val RESERVED = 512L * 1024 * 1024
+        private val ID = Regex("[0-9]{1,30}")
+
+        /**
+         * 缓存目录所在的那个卷。
+         *
+         * usableSpace 读的是目录所在的卷，目录还没建出来时它读不到卷、直接返回 0。缓存一集之前
+         * 先要问「放得下吗」，于是第一次用这个功能时每一集都被判成空间不足，缓存目录也就永远
+         * 建不起来——屏幕上只剩「存储空间不足，还剩 0 MB 可用」，而设备其实还剩一百多 GB。
+         * 所以先把目录建出来；建不出来就退到最近的已存在祖先目录，问的还是同一个卷。
+         */
+        private fun volumeOf(directory: File): File {
+            if (directory.isDirectory) return directory
+            if (directory.mkdirs()) return directory
+            var parent = directory.parentFile
+            while (parent != null && !parent.isDirectory) parent = parent.parentFile
+            return parent ?: directory
+        }
+
+        private fun unusableAt(directory: File): String? {
+            if (volumeOf(directory) !== directory) return "无法创建缓存目录：${directory.path}"
+            if (!directory.canWrite()) return "缓存目录不可写：${directory.path}"
+            return null
+        }
+
+        /** 这个目录能不能用作缓存：建得出来、写得进去。用来在外部与内部目录之间挑一个可用的。 */
+        fun isUsable(directory: File): Boolean = unusableAt(directory) == null
     }
 
     private fun stem(episodeId: String, quality: Int): String {
@@ -62,7 +90,8 @@ class EpisodeCache(private val directory: File) {
                 val episodeId = row.getString("episodeId"); val quality = row.getInt("quality")
                 // 用元数据里声明的字节数做基准：拿实际文件大小来校验自己，永远都对得上。
                 CachedEpisode(episodeId, quality, row.optString("codec", ""), row.getLong("bytes"), row.getLong("savedAt"),
-                    row.optString("seriesId", ""), row.optString("seriesTitle", ""), row.optString("cover", ""))
+                    row.optString("seriesId", ""), row.optString("seriesTitle", ""), row.optString("cover", ""),
+                    row.optInt("episodeIndex", -1))
             }.getOrNull()
             val video = decoded?.let { target(it.episodeId, it.quality) }
             if (decoded == null || !decoded.episodeId.matches(ID) || video == null || !video.isFile ||
@@ -119,8 +148,11 @@ class EpisodeCache(private val directory: File) {
 
     @Synchronized fun bytesUsed(): Long = records().sumOf { it.bytes }
 
-    /** 还能放下多少字节。usableSpace 读的是缓存目录所在的那个卷。 */
-    fun freeBytes(): Long = (directory.usableSpace - RESERVED).coerceAtLeast(0L)
+    /** 缓存目录不能用时返回原因，能用返回 null。目录不可用与空间不足是两件事，分开报。 */
+    fun unusable(): String? = unusableAt(directory)
+
+    /** 还能放下多少字节。读的是缓存目录所在的那个卷，目录还没建时也会先把目录建出来再读。 */
+    fun freeBytes(): Long = (volumeOf(directory).usableSpace - RESERVED).coerceAtLeast(0L)
     fun hasRoom(need: Long): Boolean = freeBytes() > need
 
     /**
@@ -129,11 +161,12 @@ class EpisodeCache(private val directory: File) {
      * read 按绝对偏移交付解密后的字节，落盘层不关心它来自 HTTP 还是别的什么；
      * 中断（取消、异常、进程被杀）留下 .part，下次从已写的字节继续，不从头再来。
      */
-    private fun writeMeta(episodeId: String, quality: Int, codec: String, total: Long, seriesId: String, seriesTitle: String, cover: String) {
+    private fun writeMeta(episodeId: String, quality: Int, codec: String, total: Long, seriesId: String, seriesTitle: String, cover: String, episodeIndex: Int) {
         meta(episodeId, quality).writeText(JSONObject()
             .put("episodeId", episodeId).put("quality", quality).put("codec", codec)
             .put("bytes", total).put("savedAt", System.currentTimeMillis())
-            .put("seriesId", seriesId).put("seriesTitle", seriesTitle).put("cover", cover).toString())
+            .put("seriesId", seriesId).put("seriesTitle", seriesTitle).put("cover", cover)
+            .put("episodeIndex", episodeIndex).toString())
     }
 
     @Synchronized fun store(
@@ -142,20 +175,24 @@ class EpisodeCache(private val directory: File) {
         progress: (Long, Long) -> Unit = { _, _ -> },
         canceled: () -> Boolean = { false },
         seriesId: String = "", seriesTitle: String = "", cover: String = "",
+        episodeIndex: Int = -1,
     ): CachedEpisode {
         val file = target(episodeId, quality)
         require(total > 0) { "缓存长度异常" }
         if (file.isFile && file.length() == total) {
             // 旧版本写的元数据没有剧集归属。这一集既然已经落盘、这次又知道了它属于哪部剧，就把归属补上，
-            // 别让一集已经缓存好的内容在「已下载」里认不出来。
+            // 别让一集已经缓存好的内容在「已下载」里认不出来。集号同理：补上了，断网时才能显示成第几集。
             val before = cached(episodeId)
             val owner = if (seriesId.isNotEmpty()) seriesId else before?.seriesId.orEmpty()
             val title = if (seriesId.isNotEmpty()) seriesTitle else before?.seriesTitle.orEmpty()
             val poster = if (seriesId.isNotEmpty()) cover else before?.cover.orEmpty()
-            if (owner.isNotEmpty() && owner != before?.seriesId) writeMeta(episodeId, quality, codec, total, owner, title, poster)
-            return CachedEpisode(episodeId, quality, codec, total, file.lastModified(), owner, title, poster)
+            val position = if (episodeIndex >= 0) episodeIndex else before?.episodeIndex ?: -1
+            if (owner.isNotEmpty() && (owner != before?.seriesId || position != before.episodeIndex))
+                writeMeta(episodeId, quality, codec, total, owner, title, poster, position)
+            return CachedEpisode(episodeId, quality, codec, total, file.lastModified(), owner, title, poster, position)
         }
-        directory.mkdirs()
+        // 先确认目录可用：建不出来或写不进去时，原因要说在目录上，别让它变成一句「空间不足」。
+        unusable()?.let { throw IOException(it) }
         if (!hasRoom(total)) throw IOException("存储空间不足，还剩 ${freeBytes() / 1024 / 1024} MB 可用")
         val part = partial(episodeId, quality)
         // 半截文件比整集长，说明服务端资源已经变了，续传只会拼出一个坏文件。
@@ -174,7 +211,7 @@ class EpisodeCache(private val directory: File) {
         } catch (error: Exception) { runCatching { output.close() }; throw error }
         runCatching { output.close() }
         if (!part.renameTo(file)) { part.delete(); throw IOException("缓存文件写入失败") }
-        writeMeta(episodeId, quality, codec, total, seriesId, seriesTitle, cover)
-        return CachedEpisode(episodeId, quality, codec, total, file.lastModified(), seriesId, seriesTitle, cover)
+        writeMeta(episodeId, quality, codec, total, seriesId, seriesTitle, cover, episodeIndex)
+        return CachedEpisode(episodeId, quality, codec, total, file.lastModified(), seriesId, seriesTitle, cover, episodeIndex)
     }
 }
