@@ -205,7 +205,7 @@ internal class ContinuousCatalogView(
 }
 
 internal class CatalogPosterCard(context: Context): LinearLayout(context) {
-    val image=ImageView(context).apply { scaleType=ImageView.ScaleType.FIT_CENTER;importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO }
+    val image=CoverSlot(context)
     private val poster=FrameLayout(context)
     private val rank=TextView(context).apply {
         textSize=13f;setTextColor(TvStyle.text);typeface=android.graphics.Typeface.DEFAULT_BOLD

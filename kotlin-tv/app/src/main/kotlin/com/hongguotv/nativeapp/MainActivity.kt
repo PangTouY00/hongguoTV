@@ -806,10 +806,8 @@ class MainActivity: Activity() {
                 val card=column(); card.setPadding(dp(4),dp(4),dp(4),dp(9)); focusStyle(card); card.contentDescription=item.title; card.tag=item.id; catalogCards[item.id]=card
                 val position=if(tab==2) ranking?.positions?.get(item.id) else null
                 val artwork=FrameLayout(this); card.addView(artwork,lp(-1,coverHeight))
-                // 槽位固定是竖版比例，横 banner 一类的封面放进来会在上下留黑。先垫一层同图裁切放大、压暗的背景，
-                // 槽位保持是满的，前景仍然完整显示封面本身。
-                val backdrop=ImageView(this).apply { scaleType=ImageView.ScaleType.CENTER_CROP; alpha=.32f; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }; artwork.addView(backdrop,FrameLayout.LayoutParams(-1,-1))
-                val image=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }; artwork.addView(image,FrameLayout.LayoutParams(-1,-1)); loadCover(image,item.cover,width,coverHeight){ image.drawable?.let { backdrop.setImageDrawable(it) } }; cardImages[item.id]=image to item.cover
+                // 槽位固定是竖版比例，横 banner 一类的封面由 CoverSlot 自己垫背景，这里不再需要第二层视图。
+                val image=CoverSlot(this); artwork.addView(image,FrameLayout.LayoutParams(-1,-1)); loadCover(image,item.cover,width,coverHeight){}; cardImages[item.id]=image to item.cover
                 if(tab==2) {
                     val rankLabel=position?.rank?.let { "第 $it 名" } ?: "名次暂无"
                     artwork.addView(text(rankLabel,15f).apply { setTypeface(null,Typeface.BOLD); setPadding(dp(8),dp(5),dp(8),dp(5)); background=rounded(if((position?.rank ?: Int.MAX_VALUE)<=3) accent else Color.rgb(28,31,39)) },FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START))
@@ -834,7 +832,7 @@ class MainActivity: Activity() {
                 card.setOnClickListener { if(reservationNotice(item,card)) return@setOnClickListener; catalogFocus=item.id; openDetail(item,isLocalHistory() || isAccountHistory() || collection=="resume" || collection=="updates",cloudProgress=if(isAccountHistory()) cloudAccount.progress(item.id) else null) }
                 card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
                 card.setOnKeyListener { _,key,event -> if(key==KeyEvent.KEYCODE_MENU) { if(event.action==KeyEvent.ACTION_UP) { catalogFocus=item.id; quickActions(item,card) }; true } else false }
-                card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this,focused); if(focused) { catalogFocus=item.id; loadCover(image,item.cover,width,coverHeight){ image.drawable?.let { backdrop.setImageDrawable(it) } }; preview.show(item,selectionStatus(item)); if(!restoringScroll) scroll.post { scroll.smoothScrollTo(0,when { line.top<scroll.scrollY -> line.top; line.bottom>scroll.scrollY+scroll.height -> (line.bottom-scroll.height).coerceAtLeast(0); else -> scroll.scrollY }) } } }
+                card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this,focused); if(focused) { catalogFocus=item.id; loadCover(image,item.cover,width,coverHeight){}; preview.show(item,selectionStatus(item)); if(!restoringScroll) scroll.post { scroll.smoothScrollTo(0,when { line.top<scroll.scrollY -> line.top; line.bottom>scroll.scrollY+scroll.height -> (line.bottom-scroll.height).coerceAtLeast(0); else -> scroll.scrollY }) } } }
                 // 每一列用同一个宽度、海报用同一个高度，整行天然等高，不需要等封面到达后再逐张改。
                 line.addView(card,lp(width,-1).apply { if(columnIndex<count-1) rightMargin=gap }); cards+=card
             }

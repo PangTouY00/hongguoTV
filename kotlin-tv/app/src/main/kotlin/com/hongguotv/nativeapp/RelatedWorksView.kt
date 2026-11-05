@@ -44,7 +44,7 @@ internal class RelatedWorksView(context: Context,private val upper: List<View>,p
                 isFocusable=true; isFocusableInTouchMode=true; contentDescription=work.series.title+"，"+work.label
                 setPadding(dp(5),dp(5),dp(5),dp(9)); background=TvStyle.card(context,false)
             }
-            val image=ImageView(context).apply { scaleType=ImageView.ScaleType.FIT_CENTER }
+            val image=CoverSlot(context)
             card.addView(image,LayoutParams(-1,((dp(142)-dp(10))/TvStyle.POSTER_ASPECT).toInt())); loadCover(image,work.series.cover)
             card.addView(label(work.series.title,14f).apply { maxLines=2; minLines=2; ellipsize=android.text.TextUtils.TruncateAt.END },LayoutParams(-1,-2))
             card.addView(label(work.season,12f))
