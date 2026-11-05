@@ -796,45 +796,20 @@ class MainActivity: Activity() {
             if(focusType) typeButtons[library.contentType]?.requestFocus() else if(collectionBack!=null && !focusNav) collectionBack?.requestFocus() else if(sourceButtons.isNotEmpty() && !focusNav) sourceButtons[if(tab==3) librarySources.favoritesSource else if(librarySources.accountHistory) 1 else 0].requestFocus() else if(focusNav || resumeCards.isEmpty()) nav[tab].requestFocus() else resumeCards.first().requestFocus()
             return
         }
-        val cards=mutableListOf<View>(); val rows=mutableListOf<List<View>>(); val count=6; val gap=dp(14); val width=((resources.displayMetrics.widthPixels*.9f-gap*(count-1))/count).toInt(); val coverAspect= CoverRatio.current
-        val coverHeight=((width-dp(8))/coverAspect).toInt()
-        var fittedRatio=coverAspect
-        /**
-         * Re-measures every poster frame in one pass. Sizing a card only when its own cover arrives is what
-         * left one card shorter than the rest of its row: covers land one by one, and the last one to land
-         * re-measured only itself.
-         */
-        fun fitCovers() {
-            if(catalogScroll!==scroll) return
-            fittedRatio=CoverRatio.current
-            val desired=((width-dp(8))/CoverRatio.current).toInt()
-            rows.forEach { rowCards ->
-                // 文本高度取整行的最大值：同一行的海报必须等高，否则标题和进度行会错位。
-                val textHeight=rowCards.maxOf { card ->
-                    val view=card as LinearLayout
-                    view.paddingTop+view.paddingBottom+(1 until view.childCount).sumOf { index ->
-                        val content=view.getChildAt(index)
-                        content.measuredHeight+((content.layoutParams as? android.view.ViewGroup.MarginLayoutParams)?.let { it.topMargin+it.bottomMargin } ?: 0)
-                    }
-                }
-                val height=minOf(desired,(scroll.height-textHeight-dp(4)).coerceAtLeast(dp(48)))
-                rowCards.forEach { card ->
-                    val artwork=(card as android.view.ViewGroup).getChildAt(0)
-                    if(artwork.layoutParams.height!=height) artwork.layoutParams=artwork.layoutParams.apply { this.height=height }
-                }
-            }
-        }
-        // 封面是一张张到达的：只有学到的比例真的移动时才整页重测一次，不让每张封面各自改一次布局。
-        fun refitCovers() { if(CoverRatio.differsFrom(fittedRatio)) fitCovers() }
-        val coverApplied: ()->Unit={ scroll.post { refitCovers() } }
+        val metrics=resources.displayMetrics
+        val count=GridMetrics.columns(metrics); val gap=GridMetrics.gap(metrics); val width=GridMetrics.cardWidth(metrics,count,gap)
+        val coverHeight=GridMetrics.posterHeight(width,gap)
+        val cards=mutableListOf<View>()
         displayed.chunked(count).forEach { items ->
             val line=row(); line.gravity=Gravity.TOP
-            val rowCards=mutableListOf<View>()
             items.forEachIndexed { columnIndex,item ->
                 val card=column(); card.setPadding(dp(4),dp(4),dp(4),dp(9)); focusStyle(card); card.contentDescription=item.title; card.tag=item.id; catalogCards[item.id]=card
                 val position=if(tab==2) ranking?.positions?.get(item.id) else null
                 val artwork=FrameLayout(this); card.addView(artwork,lp(-1,coverHeight))
-                val image=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }; artwork.addView(image,FrameLayout.LayoutParams(-1,-1)); loadCover(image,item.cover,width,coverHeight,coverApplied); cardImages[item.id]=image to item.cover
+                // 槽位固定是竖版比例，横 banner 一类的封面放进来会在上下留黑。先垫一层同图裁切放大、压暗的背景，
+                // 槽位保持是满的，前景仍然完整显示封面本身。
+                val backdrop=ImageView(this).apply { scaleType=ImageView.ScaleType.CENTER_CROP; alpha=.32f; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }; artwork.addView(backdrop,FrameLayout.LayoutParams(-1,-1))
+                val image=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO }; artwork.addView(image,FrameLayout.LayoutParams(-1,-1)); loadCover(image,item.cover,width,coverHeight){ image.drawable?.let { backdrop.setImageDrawable(it) } }; cardImages[item.id]=image to item.cover
                 if(tab==2) {
                     val rankLabel=position?.rank?.let { "第 $it 名" } ?: "名次暂无"
                     artwork.addView(text(rankLabel,15f).apply { setTypeface(null,Typeface.BOLD); setPadding(dp(8),dp(5),dp(8),dp(5)); background=rounded(if((position?.rank ?: Int.MAX_VALUE)<=3) accent else Color.rgb(28,31,39)) },FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START))
@@ -859,11 +834,10 @@ class MainActivity: Activity() {
                 card.setOnClickListener { if(reservationNotice(item,card)) return@setOnClickListener; catalogFocus=item.id; openDetail(item,isLocalHistory() || isAccountHistory() || collection=="resume" || collection=="updates",cloudProgress=if(isAccountHistory()) cloudAccount.progress(item.id) else null) }
                 card.setOnLongClickListener { catalogFocus=item.id; quickActions(item,card); true }
                 card.setOnKeyListener { _,key,event -> if(key==KeyEvent.KEYCODE_MENU) { if(event.action==KeyEvent.ACTION_UP) { catalogFocus=item.id; quickActions(item,card) }; true } else false }
-                card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this,focused); if(focused) { catalogFocus=item.id; loadCover(image,item.cover,width,coverHeight,coverApplied); preview.show(item,selectionStatus(item)); if(!restoringScroll) scroll.post { scroll.smoothScrollTo(0,when { line.top<scroll.scrollY -> line.top; line.bottom>scroll.scrollY+scroll.height -> (line.bottom-scroll.height).coerceAtLeast(0); else -> scroll.scrollY }) } } }
-                // The row measures its tallest card, then stretches siblings to keep badges aligned.
-                line.addView(card,lp(width,-1).apply { if(columnIndex<count-1) rightMargin=gap }); cards+=card; rowCards+=card
+                card.setOnFocusChangeListener { _,focused -> card.background=TvStyle.card(this,focused); if(focused) { catalogFocus=item.id; loadCover(image,item.cover,width,coverHeight){ image.drawable?.let { backdrop.setImageDrawable(it) } }; preview.show(item,selectionStatus(item)); if(!restoringScroll) scroll.post { scroll.smoothScrollTo(0,when { line.top<scroll.scrollY -> line.top; line.bottom>scroll.scrollY+scroll.height -> (line.bottom-scroll.height).coerceAtLeast(0); else -> scroll.scrollY }) } } }
+                // 每一列用同一个宽度、海报用同一个高度，整行天然等高，不需要等封面到达后再逐张改。
+                line.addView(card,lp(width,-1).apply { if(columnIndex<count-1) rightMargin=gap }); cards+=card
             }
-            rows+=rowCards
             list.addView(line,lp(-1,-2).apply { bottomMargin=dp(10) })
         }
         val paging=row(); paging.gravity=Gravity.CENTER
@@ -928,7 +902,6 @@ class MainActivity: Activity() {
         val savedScroll=scrollPositions[catalogPageKey]
         scroll.post {
             if(catalogScroll!==scroll) return@post
-            fitCovers()
             scroll.post settle@{
                 if(catalogScroll!==scroll) return@settle
                 savedScroll?.let { scroll.scrollTo(0,it) }
@@ -949,7 +922,7 @@ class MainActivity: Activity() {
         continuousKey=requestQuery
         val upper=searchInput ?: nav[tab]
         lateinit var browser: ContinuousCatalogView
-        browser=ContinuousCatalogView(this,6,upper,{ item,recycled ->
+        browser=ContinuousCatalogView(this,GridMetrics.columns(resources.displayMetrics),upper,{ item,recycled ->
             val card=recycled as? CatalogPosterCard ?: CatalogPosterCard(this)
             card.show(item);loadCover(card.image,item.cover);card
         },{ item -> catalogFocus=item.id },
@@ -1258,7 +1231,7 @@ class MainActivity: Activity() {
         val body=base("剧集详情")
         val scroll=ScrollView(this).apply { isVerticalScrollBarEnabled=false }; val content=column(); scroll.addView(content); body.addView(scroll,lp(-1,0).apply { weight=1f })
         val hero=row(); hero.gravity=Gravity.TOP; hero.setPadding(0,dp(12),0,dp(12))
-        val image=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_CENTER }; hero.addView(image,lp(((dp(174)*CoverRatio.current).toInt()).coerceAtLeast(dp(90)),dp(174)).apply { rightMargin=dp(24) }); loadCover(image,data.series.cover)
+        val image=ImageView(this).apply { scaleType=ImageView.ScaleType.FIT_CENTER }; hero.addView(image,lp((dp(174)*TvStyle.POSTER_ASPECT).toInt(),dp(174)).apply { rightMargin=dp(24) }); loadCover(image,data.series.cover)
         val info=column(); hero.addView(info,lp(0,-2).apply { weight=1f })
         info.addView(text(data.series.title,26f).apply { setTypeface(null,Typeface.BOLD); maxLines=2; ellipsize=TextUtils.TruncateAt.END })
         info.addView(text("${data.episodes.size} 集  ·  ${data.series.tags}",13f,muted).apply { maxLines=1; setPadding(0,dp(8),0,dp(8)) })

@@ -53,6 +53,8 @@ class HomeScreen(
     private val scroll=ScrollView(context).apply { isVerticalScrollBarEnabled=false; clipToPadding=false }
     private val contents=LinearLayout(context).apply { orientation=VERTICAL }
     private val rows=mutableListOf<Row>()
+    /** 本屏幕下的卡片宽度：render 一次算好，每张卡用同一个值。 */
+    private var cardWidth=0
     private val cards=linkedMapOf<String,Card>()
     private var shelves=emptyList<Shelf>()
     private var footerMore: (() -> Unit)?=null
@@ -101,6 +103,9 @@ class HomeScreen(
         val previous=position ?: if(rows.isNotEmpty()) capturePosition() else null
         this.shelves=shelves; footerMore=more; revision++; val ticket=revision; restoring=true
         contents.removeAllViews(); rows.clear(); cards.clear(); moreButton=null; lastRow=null
+        // 卡片宽度与目录页用同一套推导：同一块屏幕上两个页面给出同样的列宽，不各算各的。
+        val metrics=resources.displayMetrics
+        cardWidth=GridMetrics.cardWidth(metrics,GridMetrics.columns(metrics),GridMetrics.gap(metrics))
         shelves.filter { it.entries.isNotEmpty() || it.more!=null }.forEach { shelf ->
             val block=LinearLayout(context).apply { orientation=VERTICAL }
             val heading=LinearLayout(context).apply { orientation=HORIZONTAL; gravity=Gravity.CENTER_VERTICAL; setPadding(dp(2),dp(4),dp(2),dp(9)) }
@@ -113,11 +118,11 @@ class HomeScreen(
             horizontal.addView(line); block.addView(horizontal)
             val rowCards=mutableListOf<Card>()
             fun addCard(entry: Entry?,moreAction: (() -> Unit)?=null) {
-                val width=((resources.displayMetrics.widthPixels*.9f-dp(70))/6).toInt().coerceAtLeast(dp(100))
+                val width=cardWidth
                 val key=if(entry!=null) "${shelf.key}:${entry.series.id}" else "${shelf.key}:more"
                 val view=LinearLayout(context).apply { orientation=VERTICAL; id=View.generateViewId(); tag=key; isFocusable=true; isFocusableInTouchMode=true; setPadding(dp(4),dp(4),dp(4),dp(8)); background=shape(false) }
                 val image=if(entry!=null) ImageView(context).apply { scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=IMPORTANT_FOR_ACCESSIBILITY_NO } else null
-                view.addView(image ?: label("›",36f).apply { gravity=Gravity.CENTER },LayoutParams(-1,((width-dp(8))/CoverRatio.current).toInt()))
+                view.addView(image ?: label("›",36f).apply { gravity=Gravity.CENTER },LayoutParams(-1,GridMetrics.posterHeight(width,GridMetrics.gap(metrics))))
                 val title=label(entry?.series?.title ?: "查看全部",14f).apply { minLines=2; maxLines=2; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(5),dp(3),0) }
                 val badge=label(entry?.label ?: shelf.title,12f,TvStyle.muted).apply { minLines=1; maxLines=1; ellipsize=TextUtils.TruncateAt.END; setPadding(dp(3),dp(2),0,0) }
                 val progress=ProgressBar(context,null,android.R.attr.progressBarStyleHorizontal).apply { max=100; progress=entry?.progress ?: 0; visibility=if(entry?.progress==null) INVISIBLE else VISIBLE; progressTintList=android.content.res.ColorStateList.valueOf(accent) }
@@ -226,11 +231,7 @@ class HomeScreen(
         fun start() {
             card.pending=false
             if(ticket!=revision || !image.isAttachedToWindow || image.width<=0 || image.height<=0) return
-            loadCover(image,card.entry!!.series.cover){ post refit@{
-                // The first covers to arrive teach the real ratio; re-fit the shelves only when that ratio moved.
-                if(revision!=ticket || !CoverRatio.differsFrom(fittedRatio)) return@refit
-                fitArtwork()
-            } }
+            loadCover(image,card.entry!!.series.cover){ post { if(revision==ticket) fitArtwork() } }
         }
         if(image.isLaidOut && !image.isLayoutRequested) start()
         else {
@@ -244,16 +245,16 @@ class HomeScreen(
     }
     override fun onAttachedToWindow() { super.onAttachedToWindow(); post { reloadArtwork() } }
     override fun onSizeChanged(w: Int,h: Int,oldw: Int,oldh: Int) { super.onSizeChanged(w,h,oldw,oldh); if(w!=oldw || h!=oldh) post { fitArtwork(); loadNearbySelection() } }
-    private var fittedRatio= CoverRatio.current
     private fun fitArtwork() {
         if(height<=0) return
-        fittedRatio=CoverRatio.current
+        val gap=GridMetrics.gap(resources.displayMetrics)
         rows.forEach { row ->
             val textHeight=row.cards.maxOf { item -> item.view.paddingTop+item.view.paddingBottom+(1 until item.view.childCount).sumOf { child ->
                 val view=item.view.getChildAt(child); val params=view.layoutParams as LayoutParams
                 view.measuredHeight+params.topMargin+params.bottomMargin
             } }
-            val desired=((row.cards.first().view.width-dp(8))/CoverRatio.current).toInt()
+            // 槽高由列宽决定；这里只在上限处收一下，保证一个分区不会比整块屏幕还高。
+            val desired=GridMetrics.posterHeight(row.cards.first().view.width,gap)
             val imageHeight=minOf(desired,(height-row.block.getChildAt(0).measuredHeight-textHeight-dp(8)).coerceAtLeast(dp(48)))
             row.cards.forEach { card -> card.view.getChildAt(0).let { artwork -> if(artwork.layoutParams.height!=imageHeight) artwork.layoutParams=artwork.layoutParams.apply { height=imageHeight } } }
         }

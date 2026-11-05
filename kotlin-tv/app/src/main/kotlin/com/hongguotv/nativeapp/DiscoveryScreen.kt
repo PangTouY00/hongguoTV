@@ -51,7 +51,7 @@ internal class DiscoveryScreen(
         orientation=VERTICAL
         bar.addView(types,LayoutParams(0,-2,1f));bar.addView(toggle);bar.addView(reset);bar.addView(refresh)
         addView(bar);addView(scroll,LayoutParams(-1,dp(200)));addView(summary)
-        browser=ContinuousCatalogView(context,6,toggle,{ item,recycled ->
+        browser=ContinuousCatalogView(context,GridMetrics.columns(context.resources.displayMetrics),toggle,{ item,recycled ->
             (recycled as? CatalogPosterCard ?: CatalogPosterCard(context)).apply { show(item);cover(image,item.cover) }
         },{ item -> state.position=item.id to 0 },open,more,{ if(!loading) request(state.next) })
         browser.onBrowsePosition={ position ->

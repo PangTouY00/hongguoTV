@@ -2,7 +2,7 @@
 package com.hongguotv.nativeapp
 
 import android.app.Activity
-import android.graphics.Bitmap
+import android.util.DisplayMetrics
 import android.view.View
 import android.view.ViewGroup
 import com.hongguotv.core.*
@@ -17,8 +17,11 @@ import org.robolectric.annotation.LooperMode
 import org.robolectric.shadows.ShadowLooper
 
 /**
- * 观看历史这类目录页的海报网格。封面是一张张到达的，任何一处只按"自己那张封面"重测卡片，
- * 都会让同一行里出现两种海报高度，切到顶部标签再回来时尤其明显。
+ * 观看历史这类目录页的海报网格。
+ *
+ * 槽位尺寸只由屏幕推导，不读任何一张封面的比例：同一行必须等高，而且切走再回来、封面一张张到达之后
+ * 都不应该改变。之前海报高度跟着「网站实际送来的封面比例」走，同一页里既有横 banner 又有竖海报时，
+ * 整页卡片会被挤成一条矮横带。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[23,26],qualifiers="w960dp-h540dp-land-mdpi")
@@ -26,7 +29,6 @@ import org.robolectric.shadows.ShadowLooper
 @GraphicsMode(GraphicsMode.Mode.LEGACY)
 class CatalogCardSizeTest {
     @Test fun historyRowKeepsEveryPosterTheSameHeightAcrossATabSwitch() {
-        CoverRatio.reset()
         val controller=Robolectric.buildActivity(MainActivity::class.java).create()
         val activity=controller.get()
         try {
@@ -40,16 +42,69 @@ class CatalogCardSizeTest {
             assertTrue("历史页应当渲染出整行海报卡片，实际只有 ${first.values.flatten().size} 张", first.values.flatten().size>=6)
             assertTrue("同一行的海报必须等高，实测 $first", first.values.all { it.distinct().size==1 })
 
-            // 别的页面学到了新的封面比例，再切回历史页：整行一起按新比例重测，不能只有一张卡缩下去。
-            repeat(4) { index -> CoverRatio.observe("cover$index",Bitmap.createBitmap(180,300,Bitmap.Config.ARGB_8888)) }
+            // 切到顶部标签再回来：同一行仍然等高，高度也不会因为这一页看到了什么封面而变。
             switchTab(activity,0)
             openHistory(activity)
             val second=posterHeights(activity)
             assertTrue(second.values.all { it.distinct().size==1 })
+            assertEquals(first.values.flatten().first(), second.values.flatten().first())
         } finally {
-            CoverRatio.reset()
             controller.destroy()
         }
+    }
+
+    @Test fun posterHeightComesFromTheColumnWidthAndNotFromAnyCover() {
+        val controller=Robolectric.buildActivity(MainActivity::class.java).create()
+        val activity=controller.get()
+        try {
+            val library=field(activity,"library") as Library
+            val history=(1..6).map { index ->
+                BackupProgress(Series("$index","历史剧$index"),"e$index",index,1000,90000,false,1000L+index)
+            }
+            setField(library,"index",LibraryIndex(BackupData(emptyList(),history,emptySet(),emptyList(),BackupSettings())))
+            openHistory(activity)
+            val metrics=activity.resources.displayMetrics
+            val gap=GridMetrics.gap(metrics)
+            @Suppress("UNCHECKED_CAST")
+            val cards=(field(activity,"catalogCards") as Map<String,View>).values.toList()
+            val expected=GridMetrics.posterHeight(cards.first().layoutParams.width,gap)
+            posterHeights(activity).values.flatten().forEach { actual ->
+                assertEquals("海报高度应当等于按列宽推导的固定值", expected, actual)
+            }
+            assertTrue("海报槽至少和列宽一样高，竖版封面才有完整的显示空间",
+                expected>=GridMetrics.cardWidth(metrics,GridMetrics.columns(metrics),gap))
+        } finally {
+            controller.destroy()
+        }
+    }
+
+    /** 列数与卡片宽度只由屏幕推导：小屏少列，大屏更大的卡片而不是更多的卡片。 */
+    @Test fun columnsAndCardWidthFollowTheScreen() {
+        val phone=metrics(1080,2400,440)      // 手机竖屏
+        val phoneLandscape=metrics(2400,1080,440)
+        val tv1080=metrics(1920,1080,320)
+        val tv4k=metrics(3840,2160,320)
+
+        assertEquals(3,GridMetrics.columns(phone))
+        assertEquals(6,GridMetrics.columns(phoneLandscape))
+        assertEquals(6,GridMetrics.columns(tv1080))
+        assertEquals(6,GridMetrics.columns(tv4k))
+
+        val narrow=GridMetrics.cardWidth(phone,GridMetrics.columns(phone),GridMetrics.gap(phone))
+        val wide=GridMetrics.cardWidth(tv4k,GridMetrics.columns(tv4k),GridMetrics.gap(tv4k))
+        assertTrue("4K 电视上的卡片应当比手机上的更大，实际 $narrow → $wide", wide>narrow)
+
+        // 槽位比例固定：同一列宽在任何屏幕上都给出同样的「宽:高」，不随封面变化。
+        val gap=GridMetrics.gap(tv1080)
+        val card=GridMetrics.cardWidth(tv1080,GridMetrics.columns(tv1080),gap)
+        assertEquals((card/TvStyle.POSTER_ASPECT).toInt(),GridMetrics.posterHeight(card,gap),1)
+    }
+
+    private fun metrics(width: Int,height: Int,densityDpi: Int): DisplayMetrics {
+        val metrics=DisplayMetrics()
+        metrics.widthPixels=width; metrics.heightPixels=height
+        metrics.densityDpi=densityDpi; metrics.density=densityDpi/160f; metrics.scaledDensity=metrics.density
+        return metrics
     }
     private fun openHistory(activity: MainActivity) {
         switchTab(activity,4)

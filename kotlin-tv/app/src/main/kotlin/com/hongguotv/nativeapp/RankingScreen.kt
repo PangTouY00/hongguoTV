@@ -160,7 +160,7 @@ internal class RankingScreen(
             return
         }
         val saved=state.selectedId
-        val list=ContinuousCatalogView(activity,6,controls[state.board.ordinal],{ item,recycled ->
+        val list=ContinuousCatalogView(activity,GridMetrics.columns(activity.resources.displayMetrics),controls[state.board.ordinal],{ item,recycled ->
             val card=recycled as? CatalogPosterCard ?: CatalogPosterCard(activity)
             card.show(item,snapshot?.ranking?.positions?.get(item.id));cover(card.image,item.cover);card
         },{ state.selectedId=it.id },{ state.selectedId=it.id;open(it) },{ item,anchor ->state.selectedId=item.id;more(item,anchor) },{})
