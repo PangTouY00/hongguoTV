@@ -118,6 +118,45 @@ fun main(args: Array<String>) {
         }
         return
     }
+    if(args.contains("--danmaku-emoji")) {
+        // 统计真实弹幕里出现的表情标签：app 层名字表缺哪一个，界面上那一个就退回方括号文字。
+        val seriesLimit=args.firstOrNull { it.matches(Regex("[0-9]{1,3}")) }?.toIntOrNull() ?: 12
+        val comments=TimedComments()
+        val counts=LinkedHashMap<String,Int>(); val samples=HashMap<String,String>()
+        val series=LinkedHashMap<String,String>()
+        for(page in 1..3) runCatching { repository.home(page).items }.getOrNull()?.forEach { if(!series.containsKey(it.id)) series[it.id]=it.title }
+        for(keyword in listOf("逆袭","重生","契约","战神","萌宝","古装","离婚","神豪","赘婿","甜宠")) {
+            if(series.size>=seriesLimit*2) break
+            runCatching { repository.search(keyword).items }.getOrNull()?.forEach { if(!series.containsKey(it.id)) series[it.id]=it.title }
+        }
+        val tag=Regex("""(?:\[|［|【)([^\]］】]{1,20})(?:\]|］|】)""")
+        var lines=0
+        for((id,title) in series.entries.take(seriesLimit)) {
+            val detail=runCatching { repository.detail(id) }.getOrNull() ?: continue
+            println("danmakuEmojiSeries=$id; title=${title.take(20)}; episodes=${detail.episodes.size}")
+            for(episode in detail.episodes.take(2)) {
+                var start=0L
+                for(window in 0 until 6) {
+                    // 该段没有更多弹幕时服务端把 next 原样返回，core 的校验把它当无效时间段拒掉：这是读完，不是故障。
+                    val result=runCatching { comments.read(id,episode,start,1_800_000) }.getOrNull() ?: break
+                    val items=result.optJSONArray("items") ?: org.json.JSONArray()
+                    for(index in 0 until items.length()) {
+                        val text=items.optJSONObject(index)?.optString("text").orEmpty(); lines++
+                        for(match in tag.findAll(text)) {
+                            val name=match.groupValues[1]
+                            counts[name]=(counts[name] ?: 0)+1
+                            if(!samples.containsKey(name)) samples[name]=text.take(60)
+                        }
+                    }
+                    val next=result.optLong("nextMS",0L); if(next<=start) break; start=next
+                }
+            }
+        }
+        println("danmakuEmoji lines=$lines; distinctTags=${counts.size}; occurrences=${counts.values.sum()}")
+        counts.entries.sortedByDescending { it.value }.forEach { (name,count) -> println("tag=$name; count=$count; sample=${samples[name]}") }
+        repository.http.connectionPool.evictAll(); repository.http.dispatcher.executorService.shutdown()
+        return
+    }
     if(args.contains("--ranking")) {
         try {
             val first=repository.comicRanking()

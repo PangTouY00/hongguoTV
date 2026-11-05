@@ -55,13 +55,31 @@ class TvSocialTest {
         val controller=Robolectric.buildActivity(Activity::class.java).setup()
         try {
             val emoji=CommentEmoji(controller.get())
-            for(tag in listOf("爱慕","爽","奸笑","震惊","什么","尬笑","舔屏","吃瓜","探究","送花","笑")) {
+            // 红果内置表情清单（其 APK 的 assets/emoji_config.json）里的全部 53 个标签，一个都不能退回方括号文字。
+            val tags=listOf("微笑","偷笑","笑","什么","害羞","爱慕","飞吻","奸笑","尬笑","思考","撇嘴","做鬼脸","酷","翻白眼",
+                "惊呆","震惊","送心","委屈","快哭了","笑哭","哭","大笑","舔屏","怒","捂脸","吐","恐惧","抓狂","敬礼","石化",
+                "OK","赞","爱心","伤心","KISS","懂了","探究","重拳出击","吃瓜","盯","你细品","赶稿中","注意","饱了","码住",
+                "学会了","顶帖","求爆更","求关注","爽","鼓掌","没看够","送花")
+            assertEquals("红果内置表情清单是 53 个",53,tags.size)
+            for(tag in tags) {
                 val parts=emoji.segments("前文[$tag]后文",32)
                 assertEquals("$tag 应拆成前文／插画／后文三段",3,parts.size)
                 assertEquals("前文",parts[0].text);assertNull(parts[0].bitmap)
                 assertNotNull("$tag 缺少插画",parts[1].bitmap)
                 assertEquals("后文",parts[2].text);assertNull(parts[2].bitmap)
             }
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun commonCommentEmojiTagsResolveToImages() {
+        val controller=Robolectric.buildActivity(Activity::class.java).setup()
+        try {
+            val emoji=CommentEmoji(controller.get())
+            // 名字表里所有通用写法都要真的带插画：写了映射却没随包素材时，bitmapFor 会静默返回 null，
+            // 界面上就是标签退回方括号文字，编译期发现不了。
+            val tags=listOf("笑哭","微笑","呲牙","大笑","流泪","大哭","赞","点赞","鼓掌","爱心","比心","玫瑰","捂脸","偷笑",
+                "思考","害羞","发怒","惊讶","破防","哭哭","狗头","打call","666","酸","吃瓜")
+            for(tag in tags) assertNotNull("$tag 缺少插画",emoji.segments("前文[$tag]后文",32)[1].bitmap)
         } finally { controller.pause().stop().destroy() }
     }
 
