@@ -139,9 +139,7 @@ class ArtworkLoader(context: Context) {
         cancelled?.call?.cancel()
     }
 
-    /** Every delivered cover is recorded so poster frames can be sized to the ratio the site really serves. */
     private fun apply(binding: Binding, view: ImageView, bitmap: Bitmap) {
-        CoverRatio.observe(bitmap)
         view.setImageBitmap(bitmap)
         binding.applied = binding.key
         binding.onApplied?.invoke()
