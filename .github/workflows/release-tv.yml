@@ -1,6 +1,7 @@
 name: Build and publish TV release APK
 # 推送 kotlin-v* 标签时构建正式包并发布为正式 Release（App 内的自动更新只读这里的 Latest）。
-# 同一个版本发两个构建：Android 6.0+（main）与 Android 4.4（android44-support），
+# 默认只发 Android 6.0+ 这一个正式包（从 main 构建）。Android 4.4 的构建线保留在
+# android44-support 分支，需要它时手动 workflow_dispatch 选 both，两个包的
 # versionName / versionCode 必须一致；update.json 用 variants 让两类设备各取各的包。
 on:
   push:
@@ -12,9 +13,9 @@ on:
         required: true
         default: kotlin-v0.1.12
       variant:
-        description: '发布哪些构建：both（Android 6.0+ 与 4.4）或 android6（只发 Android 6.0+）'
+        description: '发布哪些构建：android6（默认，只发 Android 6.0+）或 both（Android 6.0+ 与 4.4 一起）'
         required: false
-        default: both
+        default: android6
 permissions:
   contents: write
 jobs:
