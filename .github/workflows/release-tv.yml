@@ -115,8 +115,10 @@ jobs:
   android44:
     name: Android 4.4 构建
     needs: android6
-    # 只发高版本（Android 6.0+）时跳过 4.4 构建；4.4 线保留在 android44-support 分支。
-    if: ${{ (github.event.inputs.variant || 'both') != 'android6' }}
+    # 默认不构建 4.4；4.4 线保留在 android44-support 分支，需要它时手动 workflow_dispatch 选 both。
+    # 标签触发时没有 inputs，这里必须默认「不跑」：android44-support 上的 versionName 停在旧版，
+    # 和 main 的新版本一起打包会被 prepare-kotlin-release.py 判成「同一发布版本不一致」而让发布失败。
+    if: ${{ github.event.inputs.variant == 'both' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:

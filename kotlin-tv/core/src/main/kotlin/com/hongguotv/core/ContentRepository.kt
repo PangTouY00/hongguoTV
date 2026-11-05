@@ -116,7 +116,6 @@ class ContentRepository(
     }
     private val site = "https://hongguoduanju.com"
     private val PLAYER_HOST = "https://api5-normal-sinfonlineb.fqnovel.com"
-    private val PLAYER_UA = "com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)"
     private val suggestionWebId = UUID.randomUUID().toString()
     private data class SearchCursor(val searchId: String, val passback: String, val offset: Int?, val updatedAt: Long)
     private val searchCursors=linkedMapOf<Triple<ContentType,String,Int>,SearchCursor>()
@@ -367,22 +366,20 @@ class ContentRepository(
      * 读取一集的播放信息。
      *
      * 只认注册下发的匿名设备身份：随机编的 device_id 换回的就是 HTTP 200 空响应。
-     * 空响应时换新的 _rticket 重新签名再读（同一签名重读通常还是空），最多三次，
+     * 这个接口和搜索、推荐一样要求官方那套签名头（`x-gorgon` / `x-argus` / `x-khronos`…），
+     * 裸 query 的请求自 2026-11-05 起一律回 HTTP 200 + 0 字节，连错误码都不给。
+     * 空响应时换新的请求票据重读（同一签名重读通常还是空），最多三次，
      * 与榜单、搜索的有限重试保持同一量级；被导航取消的请求不重试。
      */
     private fun playbackModel(payload: ByteArray): String {
         val identity=playbackSession.profile(http)
         var last: IOException?=null
         for(attempt in 0 until 3) {
-            val query=Signer.encode(identity.values + ("_rticket" to clock().toString()))
-            val playerUrl="https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_model/v1/?$query"
-            val headers=linkedMapOf(
-                "User-Agent" to "com.phoenix.read/71532 (Linux; U; Android 9; SM-N9860; Build/PQ3A.190705.10241111;tt-ok/3.12.13.20)",
-                "Accept" to "application/json; charset=utf-8,application/x-protobuf"
-            )
+            val signed=signer.sign("$PLAYER_HOST/novel/player/multi_video_model/v1/",identity.values,payload)
+            val headers=linkedMapOf<String,String>()
             if(identity.cookie.isNotBlank()) headers["Cookie"]=identity.cookie
             try {
-                val body=text(playerUrl,Signer.Request(playerUrl,headers,payload))
+                val body=text(signed.url,signed,headers=headers)
                 if(body.isNotBlank()) return body
                 last=EmptyPlaybackResponseException()
             } catch (error: IOException) {
@@ -434,13 +431,17 @@ class ContentRepository(
      */
     private fun tabLadder(id: String): StreamLadder? {
         val identity=playbackSession.profile(http)
-        val query=Signer.encode(identity.values + ("_rticket" to clock().toString()))
-        val extra="&video_id=$id&video_id_type=0&device_level=1&need_all_video_definition=1"+
-            "&need_mp4_align=0&use_os_player=0&video_platform=1024&source=0&from_video_id="
-        val headers=linkedMapOf("User-Agent" to PLAYER_UA,"Accept" to "application/json; charset=utf-8")
+        val params=linkedMapOf(
+            "video_id" to id,"video_id_type" to "0","device_level" to "1",
+            "need_all_video_definition" to "1","need_mp4_align" to "0","use_os_player" to "0",
+            "video_platform" to "1024","source" to "0",
+        )
+        // 这个接口和搜索、推荐一样要官方那套签名头。不带签名的请求自 2026-11-05 起一律回
+        // HTTP 200 + 0 字节：换域名、换 UA、换出口 IP、补参数都还是空，实测只有带签名两种回数据。
+        val signed=signer.sign("$PLAYER_HOST/reading/bookapi/video_tab/multi_video_model/v1/",identity.values+params)
+        val headers=linkedMapOf<String,String>()
         if(identity.cookie.isNotBlank()) headers["Cookie"]=identity.cookie
-        val body=text("$PLAYER_HOST/reading/bookapi/video_tab/multi_video_model/v1/?$query$extra",
-            headers=headers,retryTransient=true)
+        val body=text(signed.url,signed,headers=headers,retryTransient=true)
         val json=runCatching { JSONObject(body) }.getOrNull() ?: throw IOException("播放接口返回了无法解析的数据")
         val code=json.optInt("code",-1)
         if(code!=0) throw IOException("播放接口暂不可用（错误码 $code）")
