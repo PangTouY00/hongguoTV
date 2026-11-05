@@ -47,14 +47,8 @@ data class CloudFavorite(val series: Series,val collectedAt: Long)
 data class CloudReservation(val series: Series,val online: Boolean,val publishAt: Long,val publishText: String="")
 
 class CloudAccountClient(private val http: OkHttpClient) {
-    fun registerDevice(): DeviceRegister.Registered? {
-        val body=DeviceRegister.payload(VendorConstants.device)
-        val request=Request.Builder().url(DeviceRegister.url())
-        DeviceRegister.headers(body,VendorConstants.device).forEach { (k,v) -> request.header(k,v) }
-        request.post(body.toRequestBody("application/octet-stream".toMediaType()))
-        return http.newCall(request.build()).execute().use {
-            DeviceRegister.parse(cloudResponse(it),it.headers("Set-Cookie"))
-        }
+    fun registerDevice(): DeviceRegister.Registered? = DeviceRegister.register(VendorConstants.device) { request ->
+        http.newCall(request).execute().use { cloudResponse(it) to it.headers("Set-Cookie") }
     }
     private fun json(credentials: AccountCredentials,path: String,params: Map<String,String> = emptyMap(),body: ByteArray? = null,gzip: Boolean=false): JSONObject {
         val device=VendorConstants.device.toMutableMap().apply {

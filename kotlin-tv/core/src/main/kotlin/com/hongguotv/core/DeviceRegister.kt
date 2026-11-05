@@ -3,8 +3,13 @@
 package com.hongguotv.core
 
 import java.io.ByteArrayOutputStream
+import java.io.IOException
+import java.io.InterruptedIOException
 import java.util.UUID
 import java.util.zip.GZIPOutputStream
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
  * 设备注册（`POST /service/2/device_register/`）。
@@ -49,8 +54,16 @@ import java.util.zip.GZIPOutputStream
  *    `x-helios` / `x-medusa`，query 里也没有 `ts` / `_rticket`。带上签名头反而会被判异常客户端。
  */
 object DeviceRegister {
-    /** 注册接口的域名。`is.snssdk.com` 与 `log5-applog-lf` 等价，抓包里两个都在用。 */
-    private const val HOST = "https://log5-applog-lf.fqnovel.com"
+    /**
+     * 注册接口的候选域名，按顺序试到第一个成功为止。
+     *
+     * 两个域名是同一套注册服务（抓包里两个都在用，实测返回同一对 id）。
+     * 之所以要留两条：这台设备上实测过 `log5-applog-lf.fqnovel.com` 被本地 DNS 解析成
+     * `127.0.0.1`（连过去直接 connection refused，播放与搜索全部报「设备注册失败」），
+     * 同一时刻 `is.snssdk.com` 解析与连接都正常。只写死一条域名时，这类局部 DNS 问题
+     * 会让整个 App 播不了。
+     */
+    private val HOSTS = listOf("https://log5-applog-lf.fqnovel.com", "https://is.snssdk.com")
     private const val PATH = "/service/2/device_register/"
     private const val QUERY = "?tt_data=a&cronet_version=8d40f833_2026-03-03&ttnet_version=4.2.243.31-douyin&use_store_region_cookie=1"
     /** ttEncrypt 的固定前缀（`libEncryptor.so` 的魔数）。 */
@@ -160,7 +173,45 @@ object DeviceRegister {
         "x-ss-stub" to digest("MD5", body).hex().uppercase()
     )
 
-    fun url() = HOST + PATH + QUERY
+    /** 各候选域名的完整注册地址。 */
+    fun urls(): List<String> = HOSTS.map { it + PATH + QUERY }
+
+    /**
+     * 组装一次注册请求。
+     *
+     * body 只算一次就能复用到各候选域名：`x-ss-stub` 是 body 的 MD5，与发往哪个域名无关。
+     */
+    fun request(body: ByteArray, device: Map<String,String>, url: String, now: Long = System.currentTimeMillis()): Request =
+        Request.Builder().url(url)
+            .apply { headers(body, device, now).forEach { (key,value) -> header(key,value) } }
+            .post(body.toRequestBody("application/octet-stream".toMediaType()))
+            .build()
+
+    /**
+     * 逐候选域名注册，拿到第一个有效身份就停。
+     *
+     * [send] 由调用方提供，保留各自的取消与响应读取语义（播放走 [RequestScope] 的取消通道，
+     * 账号路径直接 `execute()`）。某个域名连不上就换下一个；全部域名都失败时抛出最后一次
+     * 网络异常，让调用方分得清「连不出去」和「服务端拒了这次注册」（后者返回 null）。
+     */
+    fun register(device: Map<String,String>, send: (Request) -> Pair<String,List<String>>): Registered? {
+        val body = payload(device)
+        var failure: IOException? = null
+        for (url in urls()) {
+            val result = try {
+                val (text,setCookies) = send(request(body,device,url))
+                parse(text,setCookies)
+            } catch (cancelled: InterruptedIOException) {
+                throw cancelled
+            } catch (network: IOException) {
+                failure = network
+                continue
+            }
+            if(result != null) return result
+        }
+        failure?.let { throw it }
+        return null
+    }
 
     /**
      * 解析注册响应。

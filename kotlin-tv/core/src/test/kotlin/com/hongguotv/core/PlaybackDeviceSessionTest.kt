@@ -153,4 +153,59 @@ class PlaybackDeviceSessionTest {
             Thread.interrupted()
         }
     }
+
+    /** 注册域名不止一个：这台设备上实测过第一个域名被本地 DNS 解析成 127.0.0.1、另一个正常。 */
+    @Test
+    fun registrationHostsAreTriedInOrder() {
+        val hosts = DeviceRegister.urls().map { java.net.URI(it).host }
+        assertEquals(listOf("log5-applog-lf.fqnovel.com", "is.snssdk.com"), hosts)
+    }
+
+    @Test
+    fun registrationMovesToTheNextHostWhenTheFirstOneCannotBeReached() {
+        val hosts = mutableListOf<String>()
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            hosts += request.url.host
+            // 第一个域名模拟成本地 DNS 把它解析到回环地址、连过去被拒。
+            if (hosts.size == 1) throw java.net.ConnectException("connection refused")
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("fixture")
+                .body("""{"device_id":"333","install_id":"444"}""".toResponseBody()).build()
+        }.build()
+        val profile = PlaybackDeviceSession().profile(http)
+        assertEquals(2, hosts.size)
+        assertEquals(DeviceRegister.urls().map { java.net.URI(it).host }, hosts)
+        assertEquals("333", profile.values["device_id"])
+        assertEquals("444", profile.values["iid"])
+    }
+
+    @Test
+    fun aRejectedRegistrationAlsoMovesToTheNextHost() {
+        val hosts = mutableListOf<String>()
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            hosts += request.url.host
+            val body = if (hosts.size == 1) """{"device_id":0,"install_id":0}""" else """{"device_id":"333","install_id":"444"}"""
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("fixture")
+                .body(body.toResponseBody()).build()
+        }.build()
+        val profile = PlaybackDeviceSession().profile(http)
+        assertEquals(2, hosts.size)
+        assertEquals("333", profile.values["device_id"])
+    }
+
+    @Test
+    fun everyHostFailingStillReportsRegistrationFailureNotAnEmptyIdentity() {
+        val hosts = mutableListOf<String>()
+        val http = OkHttpClient.Builder().addInterceptor { chain ->
+            hosts += chain.request().url.host
+            throw java.net.ConnectException("connection refused")
+        }.build()
+        val error = assertThrows(PlaybackDeviceRegistrationException::class.java) {
+            PlaybackDeviceSession().profile(http)
+        }
+        assertEquals(DeviceRegister.urls().map { java.net.URI(it).host }, hosts)
+        assertFalse(error.message.orEmpty().contains("connection refused"))
+        assertNotNull(error.cause)
+    }
 }

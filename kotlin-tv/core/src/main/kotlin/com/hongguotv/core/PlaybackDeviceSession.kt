@@ -5,10 +5,7 @@ import java.io.IOException
 import java.io.InterruptedIOException
 import java.util.UUID
 import okhttp3.CookieJar
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
 
 class PlaybackDeviceRegistrationException(cause: Throwable? = null):
     IOException("播放设备注册失败，请稍后重试",cause)
@@ -21,14 +18,12 @@ class PlaybackDeviceRegistrationException(cause: Throwable? = null):
  */
 class PlaybackDeviceSession(
     private val register: (OkHttpClient) -> DeviceRegister.Registered? = { http ->
-        val body=DeviceRegister.payload(VendorConstants.device)
-        val request=Request.Builder().url(DeviceRegister.url())
-        DeviceRegister.headers(body,VendorConstants.device).forEach { (key,value) -> request.header(key,value) }
-        request.post(body.toRequestBody("application/octet-stream".toMediaType()))
         // 注册本身不带账号 Cookie；取消由发起方的 RequestScope 负责。
         val transport=http.newBuilder().cookieJar(CookieJar.NO_COOKIES).build()
-        RequestScope.execute(transport.newCall(request.build())) { response ->
-            DeviceRegister.parse(cloudResponse(response),response.headers("Set-Cookie"))
+        DeviceRegister.register(VendorConstants.device) { request ->
+            RequestScope.execute(transport.newCall(request)) { response ->
+                cloudResponse(response) to response.headers("Set-Cookie")
+            }
         }
     }
 ) {
