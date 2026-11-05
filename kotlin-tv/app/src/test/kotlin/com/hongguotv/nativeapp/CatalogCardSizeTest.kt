@@ -97,7 +97,7 @@ class CatalogCardSizeTest {
         // 槽位比例固定：同一列宽在任何屏幕上都给出同样的「宽:高」，不随封面变化。
         val gap=GridMetrics.gap(tv1080)
         val card=GridMetrics.cardWidth(tv1080,GridMetrics.columns(tv1080),gap)
-        assertEquals((card/TvStyle.POSTER_ASPECT).toInt(),GridMetrics.posterHeight(card,gap),1)
+        assertEquals((card/TvStyle.POSTER_ASPECT).toInt().toLong(),GridMetrics.posterHeight(card,gap).toLong())
     }
 
     private fun metrics(width: Int,height: Int,densityDpi: Int): DisplayMetrics {
