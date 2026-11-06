@@ -39,6 +39,9 @@ class PlaybackDeviceSession(
     private val cdid=UUID.randomUUID().toString()
     private var ready: Profile?=null
 
+    /** 服务端不认这份匿名身份时丢掉它：下一次 [profile] 会重新注册一份，新的 cdid 也一起换掉。 */
+    @Synchronized internal fun invalidate() { ready=null }
+
     /** 合并并发注册：第一个成功的身份就是之后所有仓库、所有剧集共用的身份。 */
     @Synchronized internal fun profile(http: OkHttpClient): Profile {
         ready?.let { return it }

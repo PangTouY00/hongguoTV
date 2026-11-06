@@ -88,6 +88,11 @@ class SearchSessionExpiredException: IOException("搜索结果已过期，请从
 class SearchIdentityException(cause: Throwable? = null): IOException("搜索需要先完成设备注册，请稍后重试", cause)
 /** 播放接口偶发 HTTP 200 空响应：换新签名重读，仍空才报成这个独立类别。 */
 class EmptyPlaybackResponseException: IOException("播放接口暂时返回空响应，请稍后重试")
+/**
+ * 参数与签名都对，服务端仍拒绝下发清晰度（实测 code=110001）。与设备身份、Cookie、参数组合都无关：
+ * 同一份身份同一套参数，隔一段时间重读就会回 code=0，所以按可重试处理，多轮退避重读。
+ */
+class PlaybackRejectedException(val code: Int): IOException("播放接口暂不可用（错误码 $code）")
 /** A board page never recovered; [partial] holds the rows that did load, labelled by pagesRead. */
 class IncompleteRankSnapshotException(message: String,val partial: RankSnapshot): IOException(message)
 
@@ -408,14 +413,19 @@ class ContentRepository(
     fun streamLadder(id: String): StreamLadder {
         require(id.matches(Regex("[0-9]{1,30}")))
         var tabError: IOException? = null
-        for(round in 0 until 2) {
+        // 服务端会间歇性拒绝取址（HTTP 200 空 body 或 code=110001）。实测与参数组合、设备身份、
+        // Cookie 复用都无关，同一份请求隔一会儿重读就能回 code=0，所以按轮数递增退避重读。
+        for(round in 0 until 4) {
             try {
                 tabLadder(id)?.let { return it }
                 break
             } catch (error: IOException) {
                 tabError=error
-                if(!playbackRetryable(error) || round==1) break
-                try { Thread.sleep(600L) } catch (_: InterruptedException) {
+                if(!playbackRetryable(error) || round==3) break
+                // 同一份注册身份连续被拒时换一份新的：实测同一身份反复请求容易一直空，
+                // 换一份新注册的身份则更容易立刻放行。
+                playbackSession.invalidate()
+                try { Thread.sleep(700L*(round+1)) } catch (_: InterruptedException) {
                     Thread.currentThread().interrupt(); throw java.io.InterruptedIOException("请求已取消")
                 }
             }
@@ -444,7 +454,7 @@ class ContentRepository(
         val body=text(signed.url,signed,headers=headers,retryTransient=true)
         val json=runCatching { JSONObject(body) }.getOrNull() ?: throw IOException("播放接口返回了无法解析的数据")
         val code=json.optInt("code",-1)
-        if(code!=0) throw IOException("播放接口暂不可用（错误码 $code）")
+        if(code!=0) throw playbackCodeError(code)
         val models=json.optJSONObject("data")?.optJSONObject("video_model_data") ?: throw IOException("播放信息为空")
         val entry=models.optJSONObject(id)
             ?: models.keys().asSequence().mapNotNull { models.optJSONObject(it) }.firstOrNull()
@@ -456,9 +466,16 @@ class ContentRepository(
     /** 只有这几类才值得换一轮新签名重读；参数/结构错误重读也没用。 */
     private fun playbackRetryable(error: IOException) =
         error is EmptyContentException || error is EmptyPlaybackResponseException ||
+            error is PlaybackRejectedException ||
             error is java.net.SocketTimeoutException || error is java.net.SocketException ||
             error is java.net.UnknownHostException ||
             (error is ContentHttpException && error.statusCode in setOf(500,502,503,504))
+    /**
+     * 取址接口回非 0 码时的分类。110001 实测与参数组合、设备身份、Cookie 都无关，
+     * 同一份请求隔一会儿重读就会回 code=0，所以两个接口都把它当成可重试的暂时拒绝。
+     */
+    private fun playbackCodeError(code: Int): IOException =
+        if(code==110001) PlaybackRejectedException(code) else IOException("播放接口暂不可用（错误码 $code）")
     /** 新老接口的 video_model 形状一致：能直接组出清晰度就返回，否则交给旧接口的降级地址。 */
     private fun ladderFromModel(model: JSONObject): StreamLadder? {
         val inline=model.optJSONArray("video_list")?.objects().orEmpty().mapNotNull { row -> runCatching {
@@ -480,7 +497,7 @@ class ContentRepository(
         val response=playbackModel(payload)
         val data=JSONObject(response)
         val code=data.optInt("Code",data.optInt("code",0))
-        if(code!=0) throw IOException("播放接口暂不可用（错误码 $code）")
+        if(code!=0) throw playbackCodeError(code)
         val map=data.optJSONObject("data") ?: throw IOException("播放信息为空")
         val entry=map.optJSONObject(id) ?: map.keys().asSequence().mapNotNull { map.optJSONObject(it) }.firstOrNull() ?: throw IOException("播放信息为空")
         val model=entry.optJSONObject("video_model") ?: JSONObject(entry.str("video_model"))
