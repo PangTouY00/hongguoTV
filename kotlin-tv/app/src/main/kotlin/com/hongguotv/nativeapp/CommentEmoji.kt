@@ -41,7 +41,8 @@ internal class CommentEmoji(private val context: Context) {
         "思考" to "1f914",
         "害羞" to "1f60a",
         "发怒" to "1f620",
-        "惊讶" to "1f62e",
+        // Fluent 表情集没有 U+1F62E（张口带冷汗）这张，「惊讶」与「震惊」共用 U+1F632。
+        "惊讶" to "1f632",
         "破防" to "1f62d",
         "哭哭" to "1f62d",
         "狗头" to "1f436",
