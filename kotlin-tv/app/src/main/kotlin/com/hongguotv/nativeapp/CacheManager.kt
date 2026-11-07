@@ -10,6 +10,7 @@ import com.hongguotv.core.EpisodeCache
 import com.hongguotv.core.RemoteVideo
 import com.hongguotv.core.Rendition
 import com.hongguotv.core.Series
+import com.hongguotv.core.episodeOrder
 import okhttp3.OkHttpClient
 import java.io.IOException
 import java.util.concurrent.Executors
@@ -250,6 +251,20 @@ internal fun cacheSummaryText(pending: Int, cached: Int, bytesUsed: Long, failur
 }
 
 /**
+ * 这一集写进缓存元数据的集号（从 0 起）。
+ *
+ * 在线详情里服务器给的顺序就是集号，列表位置可以直接用。离线详情是缓存拼出来的，列表位置和
+ * 真实集号不是一回事：缓存了第 145 集和第 300 集时，它们在列表里是第 0、1 项。把位置当集号写进
+ * 元数据，下一次断网打开这部剧就按这两个假集号排，整列顺序错开，显示出来的「第几集」也跟着错。
+ * 离线且这一集本来没记过集号时写 -1：宁可界面上只标「已缓存」，也不要把列表位置固化成集号。
+ */
+internal fun cacheEpisodeIndex(data: Detail, index: Int): Int {
+    val numbers = data.episodeNumbers
+    if (numbers == null) return index
+    return (numbers.getOrNull(index) ?: 0).takeIf { it > 0 }?.minus(1) ?: -1
+}
+
+/**
  * 断网时的详情：由本地缓存记录拼出这部剧的剧集列表。
  *
  * 集号来自缓存元数据——缓存了第 145 集，列表第一项仍然是第 145 集，不会冒充第 1 集；旧版本写的
@@ -260,7 +275,8 @@ internal fun offlineDetailOf(series: Series, cached: List<CachedEpisode>): Detai
     val rows = cached.filter { it.seriesId == series.id }
     if (rows.isEmpty()) return null
     // 有集号的按集号排，没集号的排到最后：位置不确定的内容不该挤到已知集号中间。
-    val ordered = rows.sortedWith(compareBy({ if (it.episodeIndex >= 0) it.episodeIndex else Int.MAX_VALUE }, { it.episodeId }))
+    // 分集编号是纯数字字符串，按字符串排会得到 1、10、100、2 —— 兜底这一档按数值排。
+    val ordered = rows.sortedWith(episodeOrder())
     val title = series.title.ifBlank { ordered.first().seriesTitle.ifBlank { "剧集 ${series.id}" } }
     val cover = series.cover.ifBlank { ordered.first().cover }
     return Detail(
@@ -269,3 +285,4 @@ internal fun offlineDetailOf(series: Series, cached: List<CachedEpisode>): Detai
         ordered.map { it.episodeIndex + 1 },
     )
 }
+

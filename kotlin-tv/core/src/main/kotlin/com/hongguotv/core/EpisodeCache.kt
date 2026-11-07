@@ -28,6 +28,20 @@ data class CachedEpisode(
 )
 
 /**
+ * 缓存记录的统一顺序：先按这一集在剧里的序号，没记序号的排到最后，再按分集编号的数值，最后按清晰度。
+ *
+ * 分集编号是纯数字字符串，按字符串排会得到 1、10、100、2，这里按数值排。清晰度放在最后一档，
+ * 是为了让同一集的多档记录相邻且升序——[EpisodeCache] 取「同一集最低那一档」依赖这一点。
+ * 落盘层和界面（断网时由缓存拼出的剧集列表）共用这一份定义，避免出现两套顺序。
+ */
+fun episodeOrder(): Comparator<CachedEpisode> = compareBy(
+    { if (it.episodeIndex >= 0) it.episodeIndex else Int.MAX_VALUE },
+    { it.episodeId.toLongOrNull() ?: Long.MAX_VALUE },
+    { it.episodeId },
+    { it.quality },
+)
+
+/**
  * 按集缓存的落盘层。
  *
  * 缓存键是分集 id 加清晰度，不是 URL 哈希：播放地址带签名有效期，用 URL 做键会让同一集
@@ -171,7 +185,9 @@ class EpisodeCache(private val directory: File) {
         snapshot.keys.forEach { name ->
             if (name.endsWith(".mp4") && !snapshot.containsKey(name.removeSuffix(".mp4") + ".json")) File(directory, name).delete()
         }
-        return kept.sortedWith(compareBy({ it.episodeId }, { it.quality }))
+        // 顺序由 [episodeOrder] 决定：按这一集在剧里的序号排，没记序号的排到最后，再按分集编号的数值。
+        // 原来这里按 episodeId 字符串排，得到的是 1、10、100、2 —— 界面照这个顺序播，集数就错开了。
+        return kept.sortedWith(episodeOrder())
     }
 
     /** 按分集编号找它的缓存记录。索引里没有才说明没缓存过，不再遍历整份列表。 */

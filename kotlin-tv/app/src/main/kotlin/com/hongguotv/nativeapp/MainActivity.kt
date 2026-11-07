@@ -2045,13 +2045,17 @@ class MainActivity: Activity() {
         val numbers=data.episodeNumbers
         return if(numbers!=null && (numbers.getOrNull(index) ?: 0)<=0) "已缓存" else "${episodeNumber(data,index)}"
     }
-    /** 详情里的剧集 →（集号, 分集 id）。集号跟着缓存写进元数据，断网时由缓存拼出来的列表才显示得出第几集。 */
+    /**
+     * 详情里的剧集 →（集号, 分集 id）。集号跟着缓存写进元数据，断网时由缓存拼出来的列表才显示得出
+     *  第几集。集号取 [cacheEpisodeIndex]：离线详情里列表位置和真实集号不是一回事，直接拿位置写进
+     *  元数据会把错的集号固化下去，下一次打开这部剧就按假集号排。
+     */
     private fun episodePairs(data: Detail,indexes: List<Int> = data.episodes.indices.toList()): List<Pair<Int,String>> =
-        indexes.mapNotNull { index -> data.episodes.getOrNull(index)?.let { index to it } }
+        indexes.mapNotNull { index -> data.episodes.getOrNull(index)?.let { cacheEpisodeIndex(data,index) to it } }
     /** 还没看过的集，已经缓存过的排掉：这一项报的是真的还会下多少集。 */
     private fun unwatchedPairs(data: Detail): List<Pair<Int,String>> =
         unwatchedIndexes(data).filter { index -> data.episodes.getOrNull(index)?.let { episodeCache.cached(it)==null } ?: false }
-            .map { it to data.episodes[it] }
+            .map { index -> cacheEpisodeIndex(data,index) to data.episodes[index] }
 
     private fun showCacheManager(anchor: TextView) {
         val data=detail
@@ -2098,7 +2102,7 @@ private fun showEpisodePanel(anchor: View) {
                     if(anchor.isAttachedToWindow) anchor.requestFocus()
                     if(overlayWasVisible) showHud() else hidePlaybackOverlay()
                 }
-            },lastWatched=library.progress(data.series.id)?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } },lastCompleted=library.progress(data.series.id)?.completed==true,cache=EpisodeCacheUi({ cacheMark(data.episodes[it]) },{ cacheSummary() },{ caches().enqueue(data.series,listOf(it to data.episodes[it]),library.maxQuality) },{ caches().enqueue(data.series,episodePairs(data),library.maxQuality) },{ indexes -> caches().enqueue(data.series,episodePairs(data,indexes),library.maxQuality) }))
+            },lastWatched=library.progress(data.series.id)?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } },lastCompleted=library.progress(data.series.id)?.completed==true,cache=EpisodeCacheUi({ cacheMark(data.episodes[it]) },{ cacheSummary() },{ caches().enqueue(data.series,listOf(cacheEpisodeIndex(data,it) to data.episodes[it]),library.maxQuality) },{ caches().enqueue(data.series,episodePairs(data),library.maxQuality) },{ indexes -> caches().enqueue(data.series,episodePairs(data,indexes),library.maxQuality) }))
         episodePanel=next; next.show(); updatePauseGlyph()
     }
     private fun hidePanel() { if(playError) return; panel=false; controls.visibility=View.GONE; controls.clearFocus(); showHud() }

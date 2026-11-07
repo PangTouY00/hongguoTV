@@ -31,6 +31,13 @@ class OfflineDetailTest {
         assertEquals(listOf(145, 0), detail.episodeNumbers)
     }
 
+    @Test fun recordsWithoutANumberFallBackToNumericIdOrderRatherThanTextOrder() {
+        // 一集集号都没记下来时只能按分集编号排。编号是纯数字字符串，按字符串排会得到 10、100、2。
+        val detail = offlineDetailOf(Series("s-1", "凛冬末世"), listOf(row("100", -1), row("2", -1), row("10", -1)))!!
+        assertEquals(listOf("2", "10", "100"), detail.episodes)
+        assertEquals(listOf(0, 0, 0), detail.episodeNumbers)
+    }
+
     @Test fun aSeriesWithNothingCachedHasNoOfflineDetail() {
         // 一集都没缓存时必须返回 null，让调用方照旧报网络错误，不要凭空造出一个空列表。
         assertNull(offlineDetailOf(Series("s-1", "凛冬末世"), listOf(row("145", 144, "s-2"))))
