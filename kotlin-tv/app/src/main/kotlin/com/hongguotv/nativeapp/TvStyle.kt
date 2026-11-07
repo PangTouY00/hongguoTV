@@ -54,9 +54,10 @@ object TvStyle {
 
     /** 弹窗、选集、弹幕设置这类独立窗口用的同一面墙，只是多盖了一层深色玻璃（res/drawable/tv_backdrop_panel.xml）。
      * 这些窗口自己带压暗，正文需要一个够实的面板；纯洗底在光斑亮的地方会把对比拉下来。
+     * 玻璃浓度取 colors.xml 的 panel_wash（.40）：实机截图证明 .80 会把光斑压平，面板看不出是墙。
      * 主题里的 alertDialogTheme 已经指到同一份资源，自绘 Dialog 走这里，两处不会是两套颜色。 */
     fun backdropPanel(context: Context): Drawable=context.getDrawable(R.drawable.tv_backdrop_panel)
-        ?: GradientDrawable().apply { setColor(Color.argb(204,10,16,24)); cornerRadius=12*context.resources.displayMetrics.density; setStroke(dp(context,1),Color.argb(74,143,166,196)) }
+        ?: GradientDrawable().apply { setColor(Color.argb(102,7,11,18)); cornerRadius=12*context.resources.displayMetrics.density; setStroke(dp(context,1),Color.argb(74,143,166,196)) }
 
     private fun dp(context: Context,value: Int)=(value*context.resources.displayMetrics.density).toInt()
 }

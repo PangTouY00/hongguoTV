@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?><!-- 弹窗与自绘面板的背景：同一张洗底 + 一层深色玻璃。
      为什么不是直接用 @drawable/tv_backdrop：弹窗里的正文要落在一个够实的面板上，纯洗底在光斑亮的地方
-     会把对比拉下来。这里把洗底铺在最底层，再盖一层 @color/panel_wash（不透明度 .80）——面板仍然够实、
-     文字对比不随身后画面变化，但面板本身带着和主界面一致的光斑走向，不再是贴上去的一块实色板。
-     圆角与描边和 TvStyle.panel 一致（12dp / 1px 亮边）。改洗底改 tools/gen-backdrop.py 重新生成，别手改这里。 -->
+     会把对比拉下来。这里把洗底铺在最底层，再盖一层 @color/panel_wash（不透明度 .40）——面板比被压暗的
+     弹窗背景亮一档、文字对比不随身后画面变化，同时面板本身看得见墙的明暗走向。
+     .40 是按实机截图定的：原来 .80 时面板最亮处 (13,14,25) 与最暗处 (6,10,17) 只差 7 级亮度，电视上
+     完全看不出光斑，整块板还是实色的。圆角与描边和 TvStyle.panel 一致（12dp / 1px 亮边）。
+     改洗底改 tools/gen-backdrop.py 重新生成，改玻璃浓度改 colors.xml 的 panel_wash，别手改这里。 -->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:drawable="@drawable/tv_backdrop" />
     <item>
