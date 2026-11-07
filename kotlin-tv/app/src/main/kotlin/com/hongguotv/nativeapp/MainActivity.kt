@@ -530,9 +530,10 @@ class MainActivity: Activity() {
             item.textSize=if(widthDp()<1000) 13f else 15f
             item.setPadding(dp(9),dp(10),dp(9),dp(10))
             fun paint(focused: Boolean) {
-                item.setTextColor(if(focused) bg else if(index==tab) accent else muted)
-                item.background=rounded(if(focused) accent else if(index==tab) TvStyle.selected else Color.TRANSPARENT)
-                item.setTypeface(null,if(focused || index==tab) Typeface.BOLD else Typeface.NORMAL)
+                // 当前所在的一栏恒为橙底深色字，和界面稿一致；焦点落在别的一栏时画一层玻璃加亮边，位置仍然看得出来。
+                item.setTextColor(if(index==tab) bg else if(focused) TvStyle.text else muted)
+                item.background=if(index==tab) rounded(accent) else if(focused) rounded(TvStyle.raised,TvStyle.edge) else rounded(Color.TRANSPARENT)
+                item.setTypeface(null,if(index==tab || focused) Typeface.BOLD else Typeface.NORMAL)
             }
             paint(false); item.setOnFocusChangeListener { _,focused -> paint(focused) }; nav+=item
         }
