@@ -210,7 +210,7 @@ internal class CatalogPosterCard(context: Context): LinearLayout(context) {
     private val rank=TextView(context).apply {
         textSize=13f;setTextColor(TvStyle.text);typeface=android.graphics.Typeface.DEFAULT_BOLD
         val density=resources.displayMetrics.density
-        setPadding((6*density).toInt(),(3*density).toInt(),(6*density).toInt(),(3*density).toInt());setBackgroundColor(Color.argb(200,15,18,24));visibility=GONE
+        setPadding((6*density).toInt(),(3*density).toInt(),(6*density).toInt(),(3*density).toInt());setBackgroundColor(TvStyle.panel);visibility=GONE
     }
     private val title=TextView(context).apply { textSize=14f;setTextColor(TvStyle.text);includeFontPadding=false;minLines=2;maxLines=2;ellipsize=android.text.TextUtils.TruncateAt.END }
     private val badge=TextView(context).apply { textSize=12f;setTextColor(TvStyle.muted);includeFontPadding=false;maxLines=1;ellipsize=android.text.TextUtils.TruncateAt.END }

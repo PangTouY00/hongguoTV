@@ -4,7 +4,6 @@ package com.hongguotv.nativeapp
 import android.app.Activity
 import android.app.Dialog
 import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
 import android.view.Window
@@ -44,7 +43,7 @@ class EpisodePanel(
     private fun label(value: String,size: Float=17f)=TextView(activity).apply { text=value; textSize=size; setTextColor(TvStyle.text); setPadding(dp(8),dp(6),dp(8),dp(6)) }
     private fun button(value: String,active: Boolean=false,action: ()->Unit)=label(value,16f).apply {
         id=View.generateViewId(); gravity=Gravity.CENTER; minHeight=dp(46); isFocusable=true; isFocusableInTouchMode=true
-        fun paint(focus: Boolean) { background=GradientDrawable().apply { setColor(if(focus) TvStyle.accent else if(active) Color.rgb(61,39,34) else TvStyle.surface); cornerRadius=dp(6).toFloat() } }
+        fun paint(focus: Boolean) { background=TvStyle.shape(activity,if(focus) TvStyle.accent else if(active) TvStyle.watched else TvStyle.surface,if(focus) Color.TRANSPARENT else TvStyle.edge,radius=6,borderDp=1f); setTextColor(if(focus) TvStyle.background else TvStyle.text) }
         paint(false); setOnFocusChangeListener { _,hasFocus -> paint(hasFocus) }; setOnClickListener { action() }
     }
     fun show() {

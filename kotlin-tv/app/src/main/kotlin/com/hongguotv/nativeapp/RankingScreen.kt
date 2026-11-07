@@ -42,7 +42,7 @@ internal class RankingScreen(
     private fun button(value: String,action: ()->Unit)=label(value,15f).apply {
         id=View.generateViewId(); isFocusable=true; isClickable=true; gravity=Gravity.CENTER
         setPadding(dp(15),dp(10),dp(15),dp(10)); minHeight=dp(42)
-        fun paint() { setTextColor(if(isSelected) TvStyle.accent else TvStyle.text); background=TvStyle.shape(activity,if(isSelected) android.graphics.Color.rgb(48,32,29) else TvStyle.surface,if(hasFocus()) TvStyle.accent else android.graphics.Color.TRANSPARENT) }
+        fun paint() { setTextColor(if(isSelected) TvStyle.accent else TvStyle.text); background=if(hasFocus()) TvStyle.card(activity,true) else TvStyle.shape(activity,if(isSelected) TvStyle.selected else TvStyle.surface,if(isSelected) TvStyle.edgeFocus else TvStyle.edge,borderDp=1f) }
         setOnFocusChangeListener { _,_-> paint() }; setOnClickListener { action() }; paint()
     }
     init {
@@ -81,7 +81,7 @@ internal class RankingScreen(
             // 加载中的榜单只在按钮上标状态，不遮挡其他榜的已完成结果。
             controls[i].text=b.label+(if(state.isRefreshing(b)) " …" else "")
             controls[i].setTextColor(if(state.board==b) TvStyle.accent else TvStyle.text)
-            controls[i].background=TvStyle.shape(activity,if(state.board==b) android.graphics.Color.rgb(48,32,29) else TvStyle.surface,if(controls[i].hasFocus()) TvStyle.accent else android.graphics.Color.TRANSPARENT)
+            controls[i].background=if(controls[i].hasFocus()) TvStyle.card(activity,true) else TvStyle.shape(activity,if(state.board==b) TvStyle.selected else TvStyle.surface,if(state.board==b) TvStyle.edgeFocus else TvStyle.edge,borderDp=1f)
         }
         refreshButton.text=if(state.isRefreshing(state.board)) "读取中…" else "刷新"
         heading.text="${state.board.label}热播榜"

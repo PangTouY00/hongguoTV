@@ -96,8 +96,7 @@ internal class DiscoveryScreen(
         fun paint() {
             val selected=chosen();isSelected=selected
             setTextColor(if(selected) TvStyle.accent else TvStyle.text)
-            background=TvStyle.shape(context,if(selected) android.graphics.Color.rgb(61,39,34) else if(hasFocus()) TvStyle.raised else TvStyle.surface,
-                if(hasFocus()) TvStyle.accent else android.graphics.Color.TRANSPARENT)
+            background=if(hasFocus()) TvStyle.card(context,true) else TvStyle.shape(context,if(selected) TvStyle.selected else TvStyle.surface,if(selected) TvStyle.edgeFocus else TvStyle.edge,borderDp=1f)
         }
         setOnFocusChangeListener { _,_->paint() };setOnClickListener { action() };paint()
     }
