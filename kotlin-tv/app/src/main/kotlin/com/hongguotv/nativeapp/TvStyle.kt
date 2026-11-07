@@ -45,6 +45,8 @@ object TvStyle {
             wash(w,h,.22f,.14f,1.15f,glowWarm,118),
             wash(w,h,.88f,.90f,1.25f,glowCool,96)))
     }
+    // GradientDrawable 自 API 16 起接受 RADIAL_GRADIENT，但 setShape 的常量注解没有把它列进去，lint 会误报。
+    @android.annotation.SuppressLint("WrongConstant")
     private fun wash(w: Float,h: Float,cx: Float,cy: Float,scale: Float,color: Int,alpha: Int)=GradientDrawable().apply {
         setShape(GradientDrawable.RADIAL_GRADIENT)
         setGradientCenter(w*cx,h*cy)
