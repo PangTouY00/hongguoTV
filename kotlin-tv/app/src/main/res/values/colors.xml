@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 这一组值与 TvStyle.kt 是同一套配色：那边供代码里动态绘制的控件用，这里供主题与 drawable 用。
+     改配色时两处都要改；TvStyle 顶部注释指向本文件。 -->
+<resources>
+    <color name="background">#070B12</color>
+    <color name="accent">#FF8964</color>
+    <color name="text">#F3F4F6</color>
+    <color name="muted">#93A0B2</color>
+    <!-- 对话框面板：比页面卡片更亮一档，好和身后的内容分开；不透明度留 0.95，
+         文字对比度不随身后画面变化。 -->
+    <color name="dialog_surface">#F21A2330</color>
+    <color name="dialog_edge">#4A8FA6C4</color>
+</resources>
