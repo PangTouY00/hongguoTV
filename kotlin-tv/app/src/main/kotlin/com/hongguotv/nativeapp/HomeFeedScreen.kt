@@ -91,9 +91,9 @@ internal class HomeFeedScreen(
         stage.isFocusable=true;stage.isFocusableInTouchMode=true;stage.isClickable=true
         stage.setPadding(dp(3),dp(3),dp(3),dp(3));stage.background=TvStyle.card(activity,false)
         stage.addView(playback.view,FrameLayout.LayoutParams(-1,-1))
-        tag.setPadding(dp(12),dp(8),dp(12),dp(8));tag.background=TvStyle.shape(activity,Color.argb(210,11,15,21))
+        tag.setPadding(dp(12),dp(8),dp(12),dp(8));tag.background=TvStyle.shape(activity,TvStyle.panel)
         stage.addView(tag,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START).apply { setMargins(dp(10),dp(10),dp(10),0) })
-        status.gravity=Gravity.CENTER;status.setPadding(dp(14),dp(12),dp(14),dp(12));status.background=TvStyle.shape(activity,Color.argb(215,11,15,21))
+        status.gravity=Gravity.CENTER;status.setPadding(dp(14),dp(12),dp(14),dp(12));status.background=TvStyle.shape(activity,TvStyle.panel)
         stage.addView(status,FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM).apply { setMargins(dp(10),0,dp(10),dp(10)) })
         content.addView(stage,lp(0,-1).apply { weight=2.2f;rightMargin=dp(22) })
         val info=LinearLayout(activity).apply { orientation=VERTICAL;setPadding(0,dp(14),0,dp(10)) }
