@@ -3,7 +3,11 @@
         <item name="android:fontFamily">sans</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:colorAccent">@color/accent</item>
-        <item name="android:windowBackground">@color/background</item>
+        <!-- 窗口背景是预渲染的洗底位图，含设计稿那层 3px 颗粒。它由 tools/gen-backdrop.py 按
+             ui-round-01/a-hall.html 的同一套参数生成：Android 6 的 GradientDrawable 画不出设计稿
+             那种 1100x620 的椭圆光斑，也不做 dithering，深色渐变硬画会既走形又起同心环带。
+             改配色请改脚本重新生成，不要手改 PNG。 -->
+        <item name="android:windowBackground">@drawable/tv_backdrop</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowNoTitle">true</item>
         <!-- 弹窗此前没有指定主题，全部落到系统 Material 的灰色面板上。这里统一指定后，
