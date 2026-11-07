@@ -51,7 +51,9 @@ class EpisodePanel(
         dialog.setOnDismissListener { closed() }
         render(); dialog.show()
         dialog.window?.apply {
-            setBackgroundDrawableResource(android.R.color.transparent)
+            // 侧栏以前是 window 透明 + 内容层铺纯色 #070B12，等于一整块不透明的板，洗底完全看不见。
+            // 现在直接用主题里那份「洗底 + 深色玻璃」面板，和弹窗、设置页是同一张墙。
+            setBackgroundDrawable(TvStyle.backdropPanel(activity))
             setGravity(Gravity.END or Gravity.CENTER_VERTICAL)
             attributes=attributes.apply { x=(activity.resources.displayMetrics.widthPixels*.05f).toInt() }
             setLayout(minOf(dp(520),(activity.resources.displayMetrics.widthPixels*.8f).toInt()),(activity.resources.displayMetrics.heightPixels*.9f).toInt())
@@ -86,7 +88,7 @@ class EpisodePanel(
         index==current -> " · 当前";index==lastWatched -> if(lastCompleted) " · 已看" else " · 上次";else -> ""
     }
     private fun render() {
-        val content=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(14),dp(12),dp(14),dp(12)); setBackgroundColor(TvStyle.background) }
+        val content=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(14),dp(12),dp(14),dp(12)) }
         content.addView(label("选集  /  正在看第 ${current+1} 集",20f))
         val actions=LinearLayout(activity)
         val close=button("关闭") { dismiss() }

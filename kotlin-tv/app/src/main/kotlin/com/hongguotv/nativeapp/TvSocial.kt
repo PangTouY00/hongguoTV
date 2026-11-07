@@ -79,7 +79,7 @@ class TvSocial(private val activity: Activity,private val player: ()->Player?,pr
     }
     fun settings(anchor: View) {
         val d=Dialog(activity);d.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        val body=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(12),dp(18),dp(12));setBackgroundColor(TvStyle.background) }
+        val body=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL;setPadding(dp(18),dp(12),dp(18),dp(12)) }
         body.addView(label("弹幕设置",22f))
         fun option(title: ()->String,action: ()->Unit) {
             lateinit var b: TextView;b=button(title()) { action();b.text=title();overlay?.setRows(pages.values.flatMap { val a=it.getJSONArray("items");(0 until a.length()).map { i->a.getJSONObject(i) } });overlay?.invalidate() };body.addView(b)
@@ -91,7 +91,10 @@ class TvSocial(private val activity: Activity,private val player: ()->Player?,pr
         body.addView(button("重新读取弹幕") { reset();d.dismiss() })
         body.addView(label("真实时间轴弹幕；无内容时不使用普通评论代替。",14f))
         body.addView(button("关闭") { d.dismiss() });d.setContentView(body);d.setOnDismissListener { if(anchor.isAttachedToWindow) anchor.requestFocus() };d.show()
-        d.window?.setLayout(dp(440),-2);body.getChildAt(1).requestFocus()
+        // 这块面板以前在内容层铺纯色 #070B12，整块板把洗底挡得一点不剩。改成主题里那份「洗底 + 深色玻璃」，
+        // 和设置页、其它弹窗共用同一张墙。
+        d.window?.apply { setBackgroundDrawable(TvStyle.backdropPanel(activity)); setLayout(dp(440),-2) }
+        body.getChildAt(1).requestFocus()
     }
     fun showComments(anchor: View, target: Pair<String,String>?=null) {
         val ids=target ?: identity() ?: return
@@ -101,7 +104,7 @@ class TvSocial(private val activity: Activity,private val player: ()->Player?,pr
         val d=Dialog(activity);dialog=d;d.requestWindowFeature(Window.FEATURE_NO_TITLE)
         var cursor="";var more=true;var busy=false;var reviewMode=false;var disposed=false;var pageGeneration=0
         val seen=mutableSetOf<String>();val cursors=mutableSetOf<String>()
-        val body=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL;setPadding(dp(16),dp(12),dp(16),dp(12));setBackgroundColor(TvStyle.background) }
+        val body=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL;setPadding(dp(16),dp(12),dp(16),dp(12)) }
         body.addView(label("评论与剧评",22f))
         val tabs=LinearLayout(activity);body.addView(tabs)
         val status=label("匿名读取 · 点赞数量只读",14f);body.addView(status)
@@ -158,7 +161,7 @@ class TvSocial(private val activity: Activity,private val player: ()->Player?,pr
         body.addView(button("关闭") { d.dismiss() })
         scroll.setOnScrollChangeListener { _: View, _: Int,y: Int,_: Int,_: Int -> if(!reviewMode && y>0 && y+scroll.height>=list.height-dp(80)) read() }
         d.setContentView(body);d.setOnDismissListener { disposed=true;commentScope?.cancel();if(dialog===d) dialog=null;if(anchor.isAttachedToWindow) anchor.requestFocus() }
-        d.show();d.window?.apply { setBackgroundDrawableResource(android.R.color.transparent);setGravity(Gravity.END);setDimAmount(0f);setLayout(minOf(dp(500),(activity.resources.displayMetrics.widthPixels*.65).toInt()),-1) }
+        d.show();d.window?.apply { setBackgroundDrawable(TvStyle.backdropPanel(activity));setGravity(Gravity.END);setDimAmount(0f);setLayout(minOf(dp(500),(activity.resources.displayMetrics.widthPixels*.65).toInt()),-1) }
         tabs.getChildAt(0).requestFocus();read()
     }
     private inner class BulletView: View(activity) {
