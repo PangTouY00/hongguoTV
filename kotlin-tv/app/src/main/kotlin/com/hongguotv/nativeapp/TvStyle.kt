@@ -5,22 +5,24 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
-import android.graphics.drawable.LayerDrawable
 
 /** Shared native colors and shapes. The values follow the accepted 01 暗厅 · 取色洗底 direction
- * (ui-round-01/style-explorer.html): a dark base with two large radial glows behind everything,
+ * (ui-round-01/a-hall.html): a dark base with two large radial glows behind everything,
  * cards drawn as low-opacity white glass with a hairline light edge, coral as the only accent.
  * The glass is what makes the wash readable through the cards; a solid panel would hide it.
  * Focus is still expressed by a brighter fill and edge, not by scaling or runtime blur — the
  * target boxes predate RenderEffect and card geometry must not jump under the d-pad.
+ *
+ * 洗底不在这里画：它是 res/drawable-nodpi/tv_backdrop.png，由 tools/gen-backdrop.py 按设计稿的同一套
+ * 参数生成，主题把它设为 windowBackground，界面代码通过下面的 backdrop() 取同一份资源。设计稿的光斑是
+ * 1100x620 的椭圆径向渐变，墙上还有一层 3px 颗粒；Android 6 的 GradientDrawable 只能画正圆、也不做
+ * dithering，硬画既走形又起同心环带。改配色改脚本重新生成，别手改 PNG。
  *
  * The same palette is declared once more in res/values/colors.xml for the theme and the dialog
  * panel drawable — AlertDialogs are themed through AppTheme.Dialog rather than drawn here, so
  * changing a colour means changing both places. */
 object TvStyle {
     val background=Color.rgb(7,11,18)
-    val glowWarm=Color.rgb(42,27,58)
-    val glowCool=Color.rgb(18,32,58)
     /** 卡片与选中态是一层白色低透明度玻璃，不是实色面板：身后的洗底透过来，卡片明暗随它在墙上的位置变。 */
     val surface=Color.argb(14,255,255,255)
     val raised=Color.argb(23,255,255,255)
@@ -45,30 +47,8 @@ object TvStyle {
     fun card(context: Context,focused: Boolean)=shape(context,if(focused) raised else surface,if(focused) edgeFocus else edge,borderDp=if(focused) 1.5f else 1f)
     fun panel(context: Context)=shape(context,panel,edge,radius=12,borderDp=1f)
 
-    /** Two large radial washes over the base tone, built once per screen and never animated. */
-    fun backdrop(context: Context): Drawable {
-        val metrics=context.resources.displayMetrics
-        val w=metrics.widthPixels.toFloat(); val h=metrics.heightPixels.toFloat()
-        return LayerDrawable(arrayOf(
-            GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.rgb(10,15,26),background,Color.rgb(5,8,14))),
-            wash(w,h,.22f,.08f,.62f,glowWarm,235),
-            wash(w,h,.78f,.26f,.58f,glowCool,190)))
-    }
-    /** 十二段 smoothstep 衰减。低版本的 GradientDrawable 不做 dithering，四段衰减会在墙上留下可见的同心环带。 */
-    // GradientDrawable 自 API 16 起接受 RADIAL_GRADIENT，但 setShape 的常量注解没有把它列进去，lint 会误报。
-    @android.annotation.SuppressLint("WrongConstant")
-    private fun wash(w: Float,h: Float,cx: Float,cy: Float,radiusScale: Float,color: Int,peak: Int): GradientDrawable {
-        val r=Color.red(color); val g=Color.green(color); val b=Color.blue(color)
-        val steps=12
-        val colors=IntArray(steps+1){ i ->
-            val t=i.toFloat()/steps
-            Color.argb((peak*(1f-t*t*(3f-2f*t))).toInt().coerceIn(0,255),r,g,b)
-        }
-        // 多色用 API 16 就有的构造函数：GradientDrawable.setColors 是 API 24，Android 6 上没有。
-        return GradientDrawable(GradientDrawable.Orientation.BL_TR,colors).apply {
-            setShape(GradientDrawable.RADIAL_GRADIENT)
-            setGradientCenter(w*cx,h*cy)
-            setGradientRadius(Math.max(w,h)*radiusScale)
-        }
-    }
+    /** 界面代码要的是一面现成的墙，不在这里画渐变：直接取预渲染位图。主题里的 windowBackground
+     * 指向同一份资源，两处共用同一个资源常量，位图只解码一次。资源缺失时退回竖向三段打底，界面不会变成透明。 */
+    fun backdrop(context: Context): Drawable=context.getDrawable(R.drawable.tv_backdrop)
+        ?: GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.rgb(10,15,26),background,Color.rgb(5,8,14)))
 }
