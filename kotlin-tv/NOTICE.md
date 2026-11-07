@@ -66,4 +66,4 @@ Users are responsible for ensuring their use complies with applicable laws
 and terms of service. The authors disclaim any responsibility for misuse
 of this software.
 
-评论表情图使用 Microsoft Fluent Emoji（MIT），通过 GPL HGTV 参考项目取得；许可全文随 APK assets/comment_emoji/LICENSE.txt 分发。为通用替代表情，非红果官方贴图。
+评论表情图使用 Microsoft Fluent Emoji（MIT），取自 microsoft/fluentui-emoji 仓库的 3D 插画（早期一批经 GPL HGTV 参考项目取得，现已全部换成同一套）；许可全文随 APK assets/comment_emoji/LICENSE.txt 分发。为通用替代表情，非红果官方贴图。
