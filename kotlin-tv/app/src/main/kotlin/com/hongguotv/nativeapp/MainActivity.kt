@@ -1103,7 +1103,7 @@ class MainActivity: Activity() {
         val groups=row().apply { gravity=Gravity.TOP }
         val playback=column(); val device=column()
         listOf(playback,device).forEachIndexed { i,group ->
-            group.setPadding(dp(16),dp(16),dp(16),dp(16)); group.background=rounded(surface)
+            group.setPadding(dp(16),dp(16),dp(16),dp(16)); group.background=rounded(surface,TvStyle.edge)
             groups.addView(group,lp(0,-2).apply { weight=1f; if(i==0) rightMargin=dp(16) })
         }
         parent.addView(groups)
@@ -1114,8 +1114,10 @@ class MainActivity: Activity() {
         fun setting(group: LinearLayout,label: String,action: ()->Unit): TextView {
             val view=button(label,onClick=action).apply {
                 gravity=Gravity.CENTER_VERTICAL; setPadding(dp(13),dp(11),dp(13),dp(11))
-                background=rounded(bg)
-                setOnFocusChangeListener { _,focused -> background=rounded(if(focused) TvStyle.raised else bg,if(focused) accent else Color.TRANSPARENT) }
+                // 行和首页卡片是同一档玻璃：以前这里是实色 #070B12，比身后的墙还暗，整页像贴了一块黑纸，
+                // 洗底被挡得一点不剩。玻璃 + 1px 亮边才和分组卡片、其它页面的控件是同一个东西。
+                background=TvStyle.card(this@MainActivity,false)
+                setOnFocusChangeListener { _,focused -> background=TvStyle.card(this@MainActivity,focused) }
             }
             group.addView(view,lp(-1,-2).apply { bottomMargin=dp(8) })
             return view

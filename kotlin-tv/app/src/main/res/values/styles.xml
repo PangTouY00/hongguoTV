@@ -15,12 +15,13 @@
         <item name="android:alertDialogTheme">@style/AppTheme.Dialog</item>
     </style>
 
-    <!-- 对话框沿用同一套配色与面板语言：深色半透明面板、1px 亮边、暖白正文、强调色按钮。
-         正文 #F1F3F7 对面板 #1A2330 约 14:1，次要文字 #8E9BB0 约 5.6:1。 -->
+    <!-- 对话框沿用同一面墙：面板是洗底加一层深色玻璃，1px 亮边、暖白正文、强调色按钮。
+         正文 #F1F3F7 对混合后的面板约 16:1，次要文字 #8E9BB0 约 6.6:1。
+         colorBackground 同步改成同一层玻璃，否则 Material 会在窗口里再铺一层实色，把洗底挡住。 -->
     <style name="AppTheme.Dialog" parent="android:style/Theme.Material.Dialog.Alert">
         <item name="android:fontFamily">sans</item>
-        <item name="android:colorBackground">@color/dialog_surface</item>
-        <item name="android:windowBackground">@drawable/dialog_panel</item>
+        <item name="android:colorBackground">@color/panel_wash</item>
+        <item name="android:windowBackground">@drawable/tv_backdrop_panel</item>
         <item name="android:textColorPrimary">@color/text</item>
         <item name="android:textColorSecondary">@color/muted</item>
         <item name="android:colorAccent">@color/accent</item>

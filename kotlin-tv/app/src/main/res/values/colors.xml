@@ -6,8 +6,9 @@
     <color name="accent">#FF8964</color>
     <color name="text">#F1F3F7</color>
     <color name="muted">#8E9BB0</color>
-    <!-- 对话框面板：比页面卡片更亮一档，好和身后的内容分开；不透明度留 0.95，
-         文字对比度不随身后画面变化。 -->
-    <color name="dialog_surface">#F21A2330</color>
+    <!-- 对话框与自绘面板的背景：同一张洗底上盖一层深色玻璃（见 drawable/tv_backdrop_panel.xml）。
+         比页面卡片更实一档，好和身后的内容分开；不透明度 .80 是留出来的——面板下的洗底隐约可见，
+         正文 #F1F3F7 对混合后的面板约 16:1，比原来那块 .95 的实色板还略高。 -->
+    <color name="panel_wash">#CC0A1018</color>
     <color name="dialog_edge">#4A8FA6C4</color>
 </resources>
