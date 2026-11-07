@@ -30,7 +30,8 @@ class TvTools(private val activity: Activity) {
     val showing: Boolean get()=dialog?.isShowing==true
     private var phone: java.io.Closeable?=null
     private fun dp(value: Int)=(value*activity.resources.displayMetrics.density).toInt()
-    private fun label(value: String,size: Float=17f)=TextView(activity).apply { text=value; textSize=size; setTextColor(Color.WHITE); setPadding(dp(8),dp(4),dp(8),dp(4)) }
+    private fun label(value: String,size: Float=17f)=TextView(activity).apply { text=value; textSize=size; setTextColor(TvStyle.text); setPadding(dp(8),dp(4),dp(8),dp(4)) }
+    private fun note(value: String,size: Float=13f)=label(value,size).apply { setTextColor(TvStyle.muted) }
     private fun column()=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(16),dp(4),dp(16),dp(8)) }
     private fun open(next: AlertDialog,anchor: View?) {
         val previous=dialog; dialog=null; phone?.close(); phone=null; previous?.dismiss(); dialog=next
@@ -175,7 +176,7 @@ class TvTools(private val activity: Activity) {
                     row.addView(qr(session.url),LinearLayout.LayoutParams(dp(185),dp(185)))
                     val instructions=column()
                     instructions.addView(label("${selected.label} · ${selected.address}\n手机扫码后，用浏览器打开并发送剧名。\n需要同一局域网；二维码有效 5 分钟。",16f))
-                    instructions.addView(label(session.url,12f))
+                    instructions.addView(note(session.url))
                     row.addView(instructions,LinearLayout.LayoutParams(0,-2,1f)); content.addView(row)
                     status.text="等待手机连接…"; content.addView(status)
                 }
@@ -212,7 +213,7 @@ class TvTools(private val activity: Activity) {
                     row.addView(qr(session.url),LinearLayout.LayoutParams(dp(185),dp(185)))
                     val instructions=column()
                     instructions.addView(label("手机扫码，用浏览器下载备份或选择备份文件恢复。\n仅限同一局域网；关闭即失效，最长 5 分钟。恢复需在电视确认。",16f))
-                    instructions.addView(label(session.url,12f)); row.addView(instructions,LinearLayout.LayoutParams(0,-2,1f)); content.addView(row)
+                    instructions.addView(note(session.url)); row.addView(instructions,LinearLayout.LayoutParams(0,-2,1f)); content.addView(row)
                 }
             } catch(_: Exception) { main.post { if(dialog===next) status.text="无法开启备份传输，请检查网络后重试。" } }
         }

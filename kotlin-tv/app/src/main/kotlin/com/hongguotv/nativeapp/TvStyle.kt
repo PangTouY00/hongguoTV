@@ -10,7 +10,11 @@ import android.graphics.drawable.LayerDrawable
 /** Shared native colors and shapes. The screen sits on a fixed two-glow wash; panels are
  * semi-transparent with a hairline light edge, which reads as frosted glass without runtime
  * blur because the target boxes predate RenderEffect. Focus is expressed by panel lift and a
- * brighter edge, not by scaling, so card geometry and layout stay untouched. */
+ * brighter edge, not by scaling, so card geometry and layout stay untouched.
+ *
+ * The same palette is declared once more in res/values/colors.xml for the theme and the dialog
+ * panel drawable — AlertDialogs are themed through AppTheme.Dialog rather than drawn here, so
+ * changing a colour means changing both places. */
 object TvStyle {
     val background=Color.rgb(7,11,18)
     val glowWarm=Color.rgb(42,27,58)

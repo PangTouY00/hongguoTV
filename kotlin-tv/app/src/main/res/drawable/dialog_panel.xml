@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?><!-- 对话框面板：深色半透明加 1px 亮边，与卡片同一套语言。
+     替换 Material 默认的灰色 9-patch，圆角与 TvStyle.panel 一致（12dp）。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/dialog_surface" />
+    <corners android:radius="12dp" />
+    <stroke android:width="1dp" android:color="@color/dialog_edge" />
+</shape>

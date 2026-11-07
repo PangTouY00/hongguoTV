@@ -1,1 +1,31 @@
-<resources><style name="AppTheme" parent="android:style/Theme.Material.NoActionBar"><item name="android:fontFamily">sans</item><item name="android:windowActionModeOverlay">true</item><item name="android:colorAccent">#FF8964</item><item name="android:windowBackground">#0B0F15</item><item name="android:windowLightStatusBar">false</item><item name="android:windowNoTitle">true</item></style></resources>
+<?xml version="1.0" encoding="utf-8"?><resources>
+    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:windowBackground">@color/background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <!-- 弹窗此前没有指定主题，全部落到系统 Material 的灰色面板上。这里统一指定后，
+             各处 AlertDialog.Builder(activity) 自动继承，不需要逐个调用点改。 -->
+        <item name="android:alertDialogTheme">@style/AppTheme.Dialog</item>
+    </style>
+
+    <!-- 对话框沿用同一套配色与面板语言：深色半透明面板、1px 亮边、暖白正文、强调色按钮。
+         正文 #F3F4F6 对面板 #1A2330 约 14:1，次要文字 #93A0B2 约 6:1。 -->
+    <style name="AppTheme.Dialog" parent="android:style/Theme.Material.Dialog.Alert">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorBackground">@color/dialog_surface</item>
+        <item name="android:windowBackground">@drawable/dialog_panel</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/muted</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:windowTitleStyle">@style/AppTheme.Dialog.Title</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.6</item>
+    </style>
+
+    <style name="AppTheme.Dialog.Title" parent="android:style/TextAppearance.Material.DialogWindowTitle">
+        <item name="android:textColor">@color/text</item>
+    </style>
+</resources>
