@@ -43,7 +43,8 @@ internal class PublicFeedBackend(
         private val feedPool=okhttp3.ConnectionPool(3,2,TimeUnit.MINUTES)
     }
     private val closed=java.util.concurrent.atomic.AtomicBoolean(false)
-    private val repository=ContentRepository(http,playbackSession=playbackSession)
+    private val repository=ContentRepository(http,playbackSession=playbackSession,
+        accountCookie={ account?.cookie.orEmpty() })
     private val recommendationAccount=account
     private val cacheIdentity=account?.let {
         java.security.MessageDigest.getInstance("SHA-256").digest(it.cookie.toByteArray(Charsets.UTF_8)).joinToString("") { b -> "%02x".format(b.toInt() and 255) }

@@ -55,9 +55,11 @@ class PlaybackDeviceSessionTest {
         val session = PlaybackDeviceSession()
         ContentRepository(http, playbackSession = session).streamLadder("123")
         ContentRepository(http, playbackSession = session).streamLadder("123")
-        assertEquals(1, registrations)
+        // 每次取址各注册一次：线上实测一份注册身份只放行有限几次取址，同一份被拒之后会一直回空，
+        // 换一份新注册的身份才立刻放行。所以这里不该再要求「整个进程只注册一次」。
+        assertTrue("两次取址没有各自重新注册：$registrations", registrations >= 2)
         assertEquals(2, requests.count { it.url.encodedPath == "/novel/player/multi_video_model/v1/" })
-        // 两个仓库共用同一个 cdid：重新注册会让平台看成另一台设备，播放进度和限流都对不上。
+        // 换的是注册身份，不是设备：同一个 session 的 cdid 始终一致，平台仍把它当同一台设备。
         assertEquals(1, requests.map { it.url.queryParameter("cdid") }.distinct().size)
     }
 
