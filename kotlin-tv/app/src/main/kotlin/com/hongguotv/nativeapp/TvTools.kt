@@ -50,7 +50,8 @@ class TvTools(private val activity: Activity) {
         val builder=AlertDialog.Builder(activity).setTitle(title).setItems(labels.toTypedArray()) { _,index-> onChoice(index) }.setNegativeButton("取消",null)
         if(extra!=null) builder.setNeutralButton(extra) { _,_-> onExtra() }
         val next=builder.create(); open(next,anchor)
-        if(compact) next.window?.setLayout(minOf(dp(620),(activity.resources.displayMetrics.widthPixels*.78f).toInt()),android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
+        // 只改宽度，高度交给 fitDialog：窗口给 WRAP_CONTENT 系统不认（上一版装机实测），留着只会盖掉收缩结果。
+        if(compact) next.window?.let { it.setLayout(minOf(dp(620),(activity.resources.displayMetrics.widthPixels*.78f).toInt()),it.attributes.height) }
         next.listView.requestFocus()
     }
     fun chooseGrid(title: String,labels: List<String>,selected: Int,anchor: View?,onChoice: (Int)->Unit) {
@@ -88,7 +89,7 @@ class TvTools(private val activity: Activity) {
         }
         next=AlertDialog.Builder(activity).setTitle(title).setView(content).setNegativeButton("返回",null).create()
         open(next,anchor)
-        next.window?.setLayout((activity.resources.displayMetrics.widthPixels*.85f).toInt(),android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
+        next.window?.let { it.setLayout((activity.resources.displayMetrics.widthPixels*.85f).toInt(),it.attributes.height) }
         choices.getOrNull(selected.coerceAtLeast(0))?.requestFocus()
     }
     fun episodePicker(count: Int,current: Int,anchor: View?,select: (Int)->Unit) {

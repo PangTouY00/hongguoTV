@@ -8,6 +8,8 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
+import android.widget.LinearLayout
 
 /** Shared native colors and shapes. The values follow the accepted 01 暗厅 · 取色洗底 direction
  * (ui-round-01/a-hall.html): a dark base with two large radial glows behind everything,
@@ -74,11 +76,13 @@ object TvStyle {
      * 86% 屏高的上限，让底部按钮留在屏内。选集侧栏是贴边的整列，尺寸由它自己定，不走这里。 */
     fun fitDialog(dialog: AlertDialog) {
         val window=dialog.window ?: return
-        val width=window.attributes.width
         val context=dialog.context
         val cap=(context.resources.displayMetrics.heightPixels*.86f).toInt()
         window.decorView.post {
             val decor=window.decorView
+            // 宽度在这里读：调用方可能在 fitDialog 之后才把窄尺寸设上去，早读会拿到主题的默认宽度。
+            val width=window.attributes.width
+            if(fitChoiceList(dialog,window,decor,width,cap,context)) return@post
             val content=decor.findViewById<View>(android.R.id.content) as? ViewGroup
             val panel=(content?.let { if(it.childCount>0) it.getChildAt(0) else null }) ?: decor
             if(panel.height<=0) return@post
@@ -87,6 +91,35 @@ object TvStyle {
             val height=(top+panel.height+decor.paddingBottom+dp(context,6)).coerceAtMost(cap)
             if(height<decor.height) window.setLayout(width,height)
         }
+    }
+
+    /** 选项列表那类（清晰度、倍速、弹幕设置）上一版收不动：Material 的 alert 布局把装列表那一截写成
+     * layout_weight="1"，窗口给固定高度时它被拉满，于是「内容层高度」量出来就是窗口高度本身，
+     * 上面那条收缩对它天然无效。这里改成按列表真正需要的高度收：把带 weight 的祖先层放开，列表高度
+     * 按已经显示出来的每一项相加——只有全部项都在屏上时才收，不然没测到的项会被算漏，宁可不动。
+     * 窗口按差值收，标题与按钮那两截不动，按钮自然跟上来。 */
+    private fun fitChoiceList(dialog: AlertDialog,window: Window,decor: View,width: Int,cap: Int,context: Context): Boolean {
+        val list=dialog.listView ?: return false
+        val adapter=list.adapter ?: return false
+        if(list.childCount==0 || list.childCount!=adapter.count) return false
+        var content=list.paddingTop+list.paddingBottom
+        for(index in 0 until list.childCount) content+=list.getChildAt(index).height
+        content+=list.dividerHeight*(list.childCount-1)
+        val shrink=list.height-content
+        if(shrink<=0) return false
+        var parent=list.parent
+        while(parent is View && parent!==decor) {
+            val params=parent.layoutParams
+            if(params is LinearLayout.LayoutParams && params.weight>0f) { params.weight=0f; params.height=ViewGroup.LayoutParams.WRAP_CONTENT; parent.layoutParams=params }
+            parent=parent.parent
+        }
+        list.layoutParams?.let {
+            if(it is LinearLayout.LayoutParams) it.weight=0f
+            it.height=content
+            list.layoutParams=it
+        }
+        window.setLayout(width,(decor.height-shrink).coerceAtLeast(dp(context,140)).coerceAtMost(cap))
+        return true
     }
 
     private fun dp(context: Context,value: Int)=(value*context.resources.displayMetrics.density).toInt()
