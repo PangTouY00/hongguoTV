@@ -128,7 +128,7 @@ class TvSocial(private val activity: Activity,private val player: ()->Player?,pr
                 val expanded=android.app.AlertDialog.Builder(activity).setTitle(author)
                     .setMessage(emoji.render(content,dp(24).toFloat())).setPositiveButton("关闭",null).create()
                 expanded.setOnDismissListener { if(card.isAttachedToWindow) card.requestFocus() }
-                expanded.show()
+                expanded.show(); TvStyle.fitDialog(expanded)
             }
             list.addView(card,LinearLayout.LayoutParams(-1,-2).apply { bottomMargin=dp(10) })
         }

@@ -216,7 +216,7 @@ class AccountController(private val activity: Activity,private val play: (CloudP
     }
     fun progress(id: String): CloudProgress? = if(credentials!=null) history.firstOrNull { it.series.id==id } else null
     private fun showDialog(builder: AlertDialog.Builder) {
-        dialog?.dismiss(); dialog=builder.create(); dialog?.show()
+        dialog?.dismiss(); dialog=builder.create(); dialog?.show(); dialog?.let { TvStyle.fitDialog(it) }
     }
     fun show() {
         if(closed) return

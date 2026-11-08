@@ -1140,7 +1140,8 @@ class MainActivity: Activity() {
         lateinit var updates: TextView
         updates=setting(device,"版本与更新  ·  ${BuildConfig.VERSION_NAME}") { updater.show(updates) }
         val license=setting(device,"开源许可") {
-            AlertDialog.Builder(this).setTitle("开源许可").setMessage("本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：tsukiyo-zero/hongguoTV。").setPositiveButton("关闭",null).show()
+            val licenseDialog=AlertDialog.Builder(this).setTitle("开源许可").setMessage("本原生版以 GPL-3.0 发布。\n内容协议与加密处理移植自 drpys（22261ad）。\nAndroidX Media3 / OkHttp：Apache-2.0\nKotlin：Apache-2.0\nBouncy Castle：MIT\n完整源码和许可证见 GitHub：tsukiyo-zero/hongguoTV。").setPositiveButton("关闭",null).create()
+            licenseDialog.show(); TvStyle.fitDialog(licenseDialog)
         }
         heading(playback,"红果账户","账户收藏、历史与预约随账号同步")
         val account=setting(playback,"登录与账户管理") { cloudAccount.show() }
@@ -1957,7 +1958,7 @@ class MainActivity: Activity() {
             speedDialog=null
             if(anchor.isAttachedToWindow) { anchor.requestFocus(); if(inPlayer) showHud() }
         }
-        dialog.show(); dialog.listView.setSelection(selected); dialog.listView.requestFocus()
+        dialog.show(); dialog.listView.setSelection(selected); dialog.listView.requestFocus(); TvStyle.fitDialog(dialog)
     }
     private fun showQualityPicker(anchor: TextView,inPlayer: Boolean) {
         val options=PlaybackQuality.options
@@ -1969,7 +1970,7 @@ class MainActivity: Activity() {
                 if(inPlayer && changed) playEpisode(episodeIndex,currentPosition(),player?.playWhenReady ?: requestedAutoplay)
             }.setNegativeButton("取消",null).create()
         dialog.setOnDismissListener { if(anchor.isAttachedToWindow) anchor.requestFocus() }
-        dialog.show()
+        dialog.show(); TvStyle.fitDialog(dialog)
     }
     /** 缓存队列只在第一次用到时建。HTTP 通道沿用播放那一份：同一组 CDN 复用连接，注册下发的 Cookie 也一并带上。 */
     private fun caches(): CacheManager {
