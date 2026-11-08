@@ -33,7 +33,13 @@ class MainActivity: Activity() {
     private val accent=TvStyle.accent; private val white=TvStyle.text; private val muted=TvStyle.muted
     private val main=Handler(Looper.getMainLooper())
     private val io=Executors.newFixedThreadPool(3)
-    private val repository=ContentRepository(playbackSession=PlaybackDeviceSession.shared)
+    // 取址已登录时带上账号 Cookie，并把每次尝试的形态写进日志：线上「有些集能播有些不能」
+    // 只有把「换没换身份、带没带账号 Cookie、结果是什么」写出来才查得清。
+    private val repository=ContentRepository(
+        playbackSession=PlaybackDeviceSession.shared,
+        accountCookie={ if(::cloudAccount.isInitialized) cloudAccount.accountCookie() else "" },
+        onPlaybackAttempt={ android.util.Log.i("HongguoTV","Playback address attempt: $it") },
+    )
     // 缓存落在应用自己的外部私有目录：不需要任何存储权限，电视上也不会弹权限框。
     // 代价是卸载即清，这一点在缓存管理里写明了。外部目录建不出来或写不进去时退回应用内部目录：
     // 两处都是应用私有、都不需要权限，只是内部目录在文件管理器里看不到。
@@ -1539,7 +1545,8 @@ class MainActivity: Activity() {
         cancelPrefetch(); prefetchedFor=key; prefetchAttemptAt=now; prefetchAttempts++
         val ticket=preparedNext.begin(key)
         val http=okhttp3.OkHttpClient.Builder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).callTimeout(20,java.util.concurrent.TimeUnit.SECONDS).build()
-        val source=ContentRepository(http,playbackSession=PlaybackDeviceSession.shared); prefetchHttp=http
+        val source=ContentRepository(http,playbackSession=PlaybackDeviceSession.shared,
+            accountCookie={ if(::cloudAccount.isInitialized) cloudAccount.accountCookie() else "" }); prefetchHttp=http
         val scope=RequestScope(); prefetchScope=scope
         prefetchJob=prefetchWorker.submit {
             var remote: RemoteVideo?=null

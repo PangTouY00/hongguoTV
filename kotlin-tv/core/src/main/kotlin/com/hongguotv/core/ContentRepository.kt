@@ -120,6 +120,14 @@ class ContentRepository(
     private val clock: () -> Long = System::currentTimeMillis,
     // 播放身份必须来自设备注册，并由调用方在首页与全屏之间共享同一份。
     private val playbackSession: PlaybackDeviceSession = PlaybackDeviceSession(),
+    /**
+     * 已登录时给出账号 Cookie（`sessionid` 等），取址会带上它。
+     * 实测对照：同一台设备、同一集，官方 App（带账号身份）一次就取到清晰度，
+     * 我们这种纯匿名请求约十次里只有三四次回 `code=0`，其余是 HTTP 200 空正文。
+     */
+    private val accountCookie: () -> String = { "" },
+    /** 每次取址尝试的形态（换没换身份、带没带账号 Cookie、结果如何）交给调用方记录。 */
+    private val onPlaybackAttempt: (String) -> Unit = {},
 ) {
     private val signer = Signer()
     // 取址结果的缓存，照主仓库的 streamCache：5 分钟、最多 100 集。签名地址在这之内还有效，
@@ -400,7 +408,8 @@ class ContentRepository(
         for(attempt in 0 until 3) {
             val signed=signer.sign("$PLAYER_HOST/novel/player/multi_video_model/v1/",identity.values,payload)
             val headers=linkedMapOf<String,String>()
-            if(identity.cookie.isNotBlank()) headers["Cookie"]=identity.cookie
+            val cookie=playbackCookie(identity.cookie,accountCookie())
+            if(cookie.isNotBlank()) headers["Cookie"]=cookie
             try {
                 val body=text(signed.url,signed,headers=headers)
                 if(body.isNotBlank()) return body
@@ -446,18 +455,24 @@ class ContentRepository(
     }
     private fun fetchLadder(id: String): StreamLadder {
         var tabError: IOException? = null
-        // 服务端会间歇性拒绝取址（HTTP 200 空 body 或 code=110001）。实测与参数组合、设备身份、
-        // Cookie 复用都无关，同一份请求隔一会儿重读就能回 code=0，所以按轮数递增退避重读。
+        val account=accountCookie()
+        // 服务端对**每份注册身份**只放行有限几次取址：同一份身份一旦被拒就一直回空，
+        // 换一份新注册的身份则立刻放行（实测：同一身份连试 8 次全空，换新身份第 1~2 次就成）。
+        // 所以每一轮都先作废手上这份，再取一份新的——首页试播、下一集预热和用户点播
+        // 共用同一份身份时，先跑掉的那几个请求会把后面那个的配额用光。
         for(round in 0 until 4) {
+            playbackSession.invalidate()
+            // 已登录时交替带账号 Cookie：匿名与带账号各试一轮，哪种能取到就用哪种。
+            val withAccount=account.isNotBlank() && round%2==1
             try {
-                tabLadder(id)?.let { return it }
+                val ladder=tabLadder(id,withAccount)
+                if(ladder!=null) { reportPlaybackAttempt(round,withAccount,"成功"); return ladder }
+                reportPlaybackAttempt(round,withAccount,"没有清晰度")
                 break
             } catch (error: IOException) {
                 tabError=error
+                reportPlaybackAttempt(round,withAccount,error.javaClass.simpleName)
                 if(!playbackRetryable(error) || round==3) break
-                // 同一份注册身份连续被拒时换一份新的：实测同一身份反复请求容易一直空，
-                // 换一份新注册的身份则更容易立刻放行。
-                playbackSession.invalidate()
                 try { Thread.sleep(700L*(round+1)) } catch (_: InterruptedException) {
                     Thread.currentThread().interrupt(); throw java.io.InterruptedIOException("请求已取消")
                 }
@@ -468,11 +483,28 @@ class ContentRepository(
             throw if(error is EmptyContentException && tabError!=null) tabError else error
         }
     }
+    private fun reportPlaybackAttempt(round: Int, withAccount: Boolean, outcome: String) =
+        onPlaybackAttempt("取址第${round+1}轮 新注册身份 账号Cookie=${if(withAccount) "带" else "不带"} → $outcome")
+    /** 注册下发的设备 Cookie 与账号 Cookie 并成一条；同名时以账号那份为准。 */
+    private fun playbackCookie(device: String, account: String): String {
+        if(account.isBlank()) return device
+        val merged=LinkedHashMap<String,String>()
+        fun parse(source: String) = source.split(';').mapNotNull { entry ->
+            val pair=entry.trim()
+            if(!pair.contains('=')) return@mapNotNull null
+            val name=pair.substringBefore('=').trim(); val value=pair.substringAfter('=').trim()
+            if(name.isEmpty() || value.isEmpty()) return@mapNotNull null
+            name to value
+        }
+        merged.putAll(parse(device)); merged.putAll(parse(account))
+        return merged.entries.joinToString("; ") { (name,value) -> "$name=$value" }
+    }
+
     /**
      * 官方 App 现行的取播放信息接口。参数缺任意一项服务端回 100103；`video_platform`
      * 只接受 1024，`device_level` 用 1 最稳（3 会把部分集下发成 bytevc2）。
      */
-    private fun tabLadder(id: String): StreamLadder? {
+    private fun tabLadder(id: String, withAccount: Boolean): StreamLadder? {
         val identity=playbackSession.profile(http)
         val params=linkedMapOf(
             "video_id" to id,"video_id_type" to "0","device_level" to "1",
@@ -483,7 +515,8 @@ class ContentRepository(
         // HTTP 200 + 0 字节：换域名、换 UA、换出口 IP、补参数都还是空，实测只有带签名两种回数据。
         val signed=signer.sign("$PLAYER_HOST/reading/bookapi/video_tab/multi_video_model/v1/",identity.values+params)
         val headers=linkedMapOf<String,String>()
-        if(identity.cookie.isNotBlank()) headers["Cookie"]=identity.cookie
+        val cookie=playbackCookie(identity.cookie,if(withAccount) accountCookie() else "")
+        if(cookie.isNotBlank()) headers["Cookie"]=cookie
         val body=text(signed.url,signed,headers=headers,retryTransient=true)
         val json=runCatching { JSONObject(body) }.getOrNull() ?: throw IOException("播放接口返回了无法解析的数据")
         val code=json.optInt("code",-1)
@@ -499,7 +532,7 @@ class ContentRepository(
     /** 只有这几类才值得换一轮新签名重读；参数/结构错误重读也没用。 */
     private fun playbackRetryable(error: IOException) =
         error is EmptyContentException || error is EmptyPlaybackResponseException ||
-            error is PlaybackRejectedException ||
+            error is PlaybackRejectedException || error is PlaybackDeviceRegistrationException ||
             error is java.net.SocketTimeoutException || error is java.net.SocketException ||
             error is java.net.UnknownHostException ||
             (error is ContentHttpException && error.statusCode in setOf(500,502,503,504))
