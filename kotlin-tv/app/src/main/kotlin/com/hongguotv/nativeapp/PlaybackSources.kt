@@ -18,6 +18,22 @@ internal data class OpenedStream(val video: VideoSource,val rendition: Rendition
 /** 在线那条路交出来的总是 RemoteVideo，缓存流由 openCached 单独给出。预热与首页试播需要
  *  warm() 这类只有在线才有的能力，所以它们从这个入口取。 */
 internal fun OpenedStream.remote(): RemoteVideo = video as RemoteVideo
+/**
+ * 源里确实有这一集，可它给的每一档这台设备都解不了。
+ *
+ * 和「取不到播放地址」「播放接口暂时不可用」是三类不同的事：后两种过一会儿再试就成了，
+ * 这一种再试一百次也一样，所以界面要写清源里给的是哪一档，并且不该挂着自动重试。
+ */
+internal class NoDecodableRenditionException(detail: String): java.io.IOException(detail)
+/** 把「解不了」说成具体是哪一档：只有一档时讲清只有这一档，多档时把尺寸列出来。 */
+internal fun unplayableRenditionMessage(renditions: List<Rendition>): String {
+    val sizes=renditions.mapNotNull { r -> r.width?.let { w -> r.height?.let { h -> "${w}×${h}" } } }.distinct()
+    return when {
+        sizes.size==1 -> "这一集只有 ${sizes.first()} 的一档，这台设备解不了，可以先看别的集。"
+        sizes.size>1 -> "这一集的 ${sizes.joinToString("、")} 这几档，这台设备都解不了，可以先看别的集。"
+        else -> "这一集没有这台设备能播放的清晰度，可以先看别的集。"
+    }
+}
 /** Opens the first rendition the device can actually decode: select by API metadata, then
  *  verify the coded size read from the MP4 header and step down the ladder on mismatch. */
 internal fun openStream(http: OkHttpClient,repository: ContentRepository,id: String,maxQuality: Int,
@@ -33,6 +49,8 @@ internal fun openStream(http: OkHttpClient,repository: ContentRepository,id: Str
             video.close()
         } catch(error: Exception) { video.close(); throw error }
     }
+    // 源里一档都没有是另一回事（地址查询本身没拿到资源），留给调用方按原来的说法报。
+    if(ladder.renditions.isNotEmpty()) throw NoDecodableRenditionException(unplayableRenditionMessage(ladder.renditions))
     return null
 }
 /**

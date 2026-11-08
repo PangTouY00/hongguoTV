@@ -44,6 +44,8 @@ class MainActivity: Activity() {
     private val episodeCache by lazy { EpisodeCache(cacheDirectory) }
     private var cacheQueue: CacheManager?=null
     private var detailCacheButton: TextView?=null
+    /** 详情页选集网格下面那行缓存摘要：格子上写「失败」的地方，就该在同一屏说明为什么失败。 */
+    private var detailCacheSummary: TextView?=null
     // 榜单专用并行加载通道：最多四榜各自在途、互不取消，与全局单飞 work() 隔离。
     private val rankWorker=Executors.newFixedThreadPool(3)
     private val networkCleanup=Executors.newSingleThreadExecutor()
@@ -1286,6 +1288,12 @@ class MainActivity: Activity() {
             addButton(notice,"加载全部剧集") { openDetail(data.series,forceRemote=true) }
             content.addView(notice)
         }
+        // 格子上写「失败」的地方，就该在同一屏说明为什么失败。这一行原来只在选集侧栏里有，
+        // 于是详情页看到一排失败标记却没有任何解释，只能猜是不是整个功能坏了。
+        val cacheSummaryLine=text("",13f,muted).apply { maxLines=2; visibility=View.GONE }
+        detailCacheSummary=cacheSummaryLine
+        content.addView(cacheSummaryLine,lp(-1,-2).apply { setMargins(0,dp(6),0,dp(2)) })
+        refreshCacheUi()
         val groupRow=row(); groupRow.setPadding(0,dp(3),0,dp(5))
         val maxGroup=data.episodes.lastIndex/20; group=group.coerceIn(0,maxGroup)
         val previous=addButton(groupRow,"‹ 上一组") { if(group>0) { group--; showDetail(true) } }.apply { isEnabled=group>0; isFocusable=group>0; alpha=if(group>0) 1f else .4f }
@@ -1418,8 +1426,8 @@ class MainActivity: Activity() {
         val requestedId=data.episodes[episodeIndex]; val maxQuality=library.maxQuality; val ticket=generation
         work({ val carried=claimWarmup(targetKey,warmupInFlight)
             carried.first?.let { OpenedStream(it,null,emptyList(),it.trackInfo(),carried.second) }
-                ?: openCached(episodeCache,requestedId,maxQuality) { it==null || CodecCapabilities.supports(it) }
-                ?: openStream(repository.http,repository,requestedId,maxQuality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) }
+                ?: openCached(episodeCache,requestedId,maxQuality) { it==null || CodecCapabilities.worthTrying(it) }
+                ?: openStream(repository.http,repository,requestedId,maxQuality,CodecCapabilities::worthTrying) { it==null || CodecCapabilities.worthTrying(it) }
                 ?: throw java.io.IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集") }, { opened ->
             val remote=opened.video; video=remote; val carriedOver=opened.http!=null
             if(carriedOver) playbackHttp=opened.http
@@ -1653,17 +1661,22 @@ class MainActivity: Activity() {
         }
         playError=true; player?.pause(); progressBar.visibility=View.GONE; hud.visibility=View.VISIBLE; controls.removeAllViews(); controls.visibility=View.VISIBLE; panel=true
         val decoding=problem is PlaybackException && problem.errorCode in 3000..4999
-        val retryable=if(problem is PlaybackException) problem.errorCode in 2000..2999 || problem.errorCode==PlaybackException.ERROR_CODE_TIMEOUT else problem is java.io.IOException
+        // 源里给的每一档都解不了，和「暂时取不到」是两件事：前者再试一百次也一样，
+        // 挂着自动重试只会让人对着屏幕等，所以它不进重试路径，也不给「试更低清晰度」这个按钮。
+        val unplayable=problem is NoDecodableRenditionException
+        val retryable=!unplayable && (if(problem is PlaybackException) problem.errorCode in 2000..2999 || problem.errorCode==PlaybackException.ERROR_CODE_TIMEOUT else problem is java.io.IOException)
         // 播放身份拿不到，和取不到播放地址是两件事：分开说清楚，别让人反复换清晰度。
         val registrationFailed=generateSequence(problem) { it.cause }.any { it is PlaybackDeviceRegistrationException }
+        val lowerQuality=if(unplayable) null else nextLowerQuality(if(attemptedQuality>0) attemptedQuality else library.maxQuality)
         playbackText.text=when {
-            decoding -> "电视无法解码当前视频，可尝试更低清晰度。"
+            unplayable -> problem.message ?: "这一集没有这台设备能播放的清晰度。"
+            decoding -> if(lowerQuality!=null) "电视无法解码当前视频，可尝试更低清晰度。" else "这台电视解不了这一集，可以试别的剧集。"
             registrationFailed -> "播放设备注册失败，请检查网络后重试。"
             else -> "播放失败，可重试或切换清晰度。"
         }
         val actions=row(); controls.addView(actions)
         addButton(actions,"立即重试") { playEpisode(episodeIndex,retryPosition,retryAutoplay) }.requestFocus()
-        nextLowerQuality(if(attemptedQuality>0) attemptedQuality else library.maxQuality)?.let { lower ->
+        lowerQuality?.let { lower ->
             addButton(actions,"尝试 ${lower}P") { library.maxQuality=lower; playEpisode(episodeIndex,retryPosition,retryAutoplay) }
         }
         addButton(actions,"返回选集") { returnToDetail(true) }
@@ -1982,6 +1995,13 @@ class MainActivity: Activity() {
     private fun refreshCacheUi() {
         episodePanel?.refresh()
         detailCacheButton?.text=detailCacheLabel()
+        // 摘要行只改文字，不重建整页：详情页重建一次会丢掉焦点与滚动位置，而队列每半秒就报一次进度。
+        val summary=cacheSummary()
+        detailCacheSummary?.let { line ->
+            val value=summary.orEmpty()
+            if(line.text.toString()!=value) line.text=value
+            line.visibility=if(summary==null) View.GONE else View.VISIBLE
+        }
         if(screen=="player" && playbackReady) updatePlaybackText()
         refreshDownloadLabels()
     }
@@ -2013,7 +2033,7 @@ class MainActivity: Activity() {
     }
     private fun cacheSummary(): String? {
         val queue=cacheQueue ?: return null
-        return cacheSummaryText(queue.pendingCount(),queue.cachedCount(),queue.bytesUsed(),queue.failures().map { it.episodeId to safeCacheError(it.message) })
+        return cacheSummaryText(queue.pendingCount(),queue.cachedCount(),queue.bytesUsed(),queue.failures().map { CacheFailure(it.episodeIndex,safeCacheError(it.message)) })
     }
     /** 还没看的分集下标：照观看进度往后算，和续播跳到下一集是同一套判断。 */
     private fun unwatchedIndexes(data: Detail): List<Int> =

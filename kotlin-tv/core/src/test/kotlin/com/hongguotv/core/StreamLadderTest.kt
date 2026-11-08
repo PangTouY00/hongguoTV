@@ -48,4 +48,11 @@ class StreamLadderTest {
     @Test fun emptyLadderSelectsNothing() {
         assertNull(ladder().select(1080)); assertTrue(ladder().playbackOrder(1080).isEmpty())
     }
+    /** 实测这部剧有二十来集源里只给 1924×1080 一档，比常见的 1920 上限宽 4 个像素。能力判定把它判否时
+     *  它仍然要留在尝试顺序里，由真解码给出结论——连试都不试就报失败，是这一版要修掉的行为。 */
+    @Test fun aSingleTierJustAboveTheReportedCeilingStillStaysInTheOrder() {
+        val order=ladder(rendition(1080, "bytevc1", 1924, 1080)).playbackOrder(1080) { false }
+        assertEquals(1, order.size)
+        assertEquals(1924, order.first().width); assertEquals(1080, order.first().height)
+    }
 }
