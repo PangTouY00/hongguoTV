@@ -18,36 +18,57 @@ internal data class OpenedStream(val video: VideoSource,val rendition: Rendition
 /** 在线那条路交出来的总是 RemoteVideo，缓存流由 openCached 单独给出。预热与首页试播需要
  *  warm() 这类只有在线才有的能力，所以它们从这个入口取。 */
 internal fun OpenedStream.remote(): RemoteVideo = video as RemoteVideo
-/** Opens the first rendition the device can actually decode: select by API metadata, then
- *  verify the coded size read from the MP4 header and step down the ladder on mismatch. */
+/**
+ * 源里确实有这一集，可它给的每一档这台设备都解不了。
+ *
+ * 和「取不到播放地址」「播放接口暂时不可用」是三类不同的事：后两种过一会儿再试就成了，
+ * 这一种再试一百次也一样，所以界面要写清源里给的是哪一档，并且不该挂着自动重试。
+ */
+internal class NoDecodableRenditionException(detail: String): java.io.IOException(detail)
+/** 把「解不了」说成具体是哪一档：只有一档时讲清只有这一档，多档时把尺寸列出来。 */
+internal fun unplayableRenditionMessage(renditions: List<Rendition>): String {
+    val sizes=renditions.mapNotNull { r -> r.width?.let { w -> r.height?.let { h -> "${w}×${h}" } } }.distinct()
+    return when {
+        sizes.size==1 -> "这一集只有 ${sizes.first()} 的一档，这台设备解不了，可以先看别的集。"
+        sizes.size>1 -> "这一集的 ${sizes.joinToString("、")} 这几档，这台设备都解不了，可以先看别的集。"
+        else -> "这一集没有这台设备能播放的清晰度，可以先看别的集。"
+    }
+}
+/**
+ * 按设置取最高的一档，取到就交给播放器；能不能解由播放器回答，不在这里预判。
+ *
+ * 这是主仓库那条路的顺序（resolveStream 直接给排序后的第一档）。原来这里先用 MediaCodecList
+ * 静态判一遍，把厂商报告上限之外的档跳过——实测正是它把 1924x1080 那一档连试都不试就排除了。
+ * [failed] 只改顺序：这台设备真解败过的档排在后面，但仍然会试。
+ * [fresh] 是失败重试：作废这一集缓存的取址结果，重新拿一份签名地址再试。
+ */
 internal fun openStream(http: OkHttpClient,repository: ContentRepository,id: String,maxQuality: Int,
-    supportsRendition: (Rendition)->Boolean,initialBytes: Int=256*1024,supportsTrack: (VideoTracks.Track?)->Boolean): OpenedStream? {
-    val ladder=repository.streamLadder(id)
-    for(rendition in ladder.playbackOrder(maxQuality,supportsRendition)) {
+    failed: (Rendition)->Boolean = { false },initialBytes: Int=256*1024,fresh: Boolean=false): OpenedStream? {
+    val ladder=repository.streamLadder(id,fresh)
+    for(rendition in ladder.playbackOrder(maxQuality,failed)) {
         val video=RemoteVideo(http,rendition.toStreamInfo())
         try {
             video.prepare(initialBytes)
-            val track=video.trackInfo()
-            if(supportsTrack(track)) return OpenedStream(video,rendition,ladder.renditions,track)
-            Log.i("HongguoTV","Skipped ${rendition.quality}P ${rendition.codec}: coded ${track?.width}x${track?.height} beyond decoder capability")
-            video.close()
+            return OpenedStream(video,rendition,ladder.renditions,video.trackInfo())
         } catch(error: Exception) { video.close(); throw error }
     }
+    // 源里一档都没有是另一回事（地址查询本身没拿到资源），留给调用方按原来的说法报。
+    if(ladder.renditions.isNotEmpty()) throw NoDecodableRenditionException(unplayableRenditionMessage(ladder.renditions))
     return null
 }
 /**
  * 已缓存的一集直接本地播放。
  *
  * 不查清晰度阶梯、不发任何请求：签名过期、限流、设备注册这些在线才会出的问题都不存在。
- * 缓存档能不能解码仍然照同一套 trackInfo 校验判；判不过就返回 null，让调用方回退在线，
- * 在线那条路会自己挑这台设备解得了的那一档。
+ * 只有这一集缓存的那一档真解败过才回退在线——那是这台设备的事实，不是猜测；
+ * 在线那条路会把它排在最后，优先挑没败过的那一档。
  */
-internal fun openCached(cache: EpisodeCache,id: String,maxQuality: Int,supportsTrack: (VideoTracks.Track?)->Boolean): OpenedStream? {
+internal fun openCached(cache: EpisodeCache,id: String,maxQuality: Int,failed: (VideoTracks.Track?)->Boolean = { false }): OpenedStream? {
     val video=cache.open(id,maxQuality) ?: return null
     try {
         video.prepare(256*1024)
         val track=video.trackInfo()
-        if(!supportsTrack(track)) { Log.i("HongguoTV","Cached ${video.record.quality}P is beyond decoder capability"); video.close(); return null }
+        if(failed(track)) { Log.i("HongguoTV","Cached ${video.record.quality}P has already failed to decode on this device; trying the online ladder instead"); video.close(); return null }
         return OpenedStream(video,null,emptyList(),track,null,true)
     } catch(error: Exception) { Log.w("HongguoTV","Cached episode could not be read: ${error.javaClass.simpleName}"); video.close(); return null }
 }

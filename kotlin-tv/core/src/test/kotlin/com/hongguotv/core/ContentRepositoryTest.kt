@@ -144,10 +144,17 @@ class ContentRepositoryTest {
         assertEquals("720P",repo.stream("123",720).quality)
     }
 
-    @Test fun capabilityPredicateDropsUndecodableTiers() {
+    @Test fun capabilityPredicateReordersButNeverDropsTiers() {
         val repo=streamRepository(Triple(1080,"bytevc1","https://example.com/hevc"),Triple(480,"h264","https://example.com/avc"))
+        // 只有 h264 那一档真解败过：先试没败过的，但谁都不被预先排除。
         val info=repo.stream("123",1080) { it.codec=="h264" }
-        assertEquals("480P",info.quality); assertEquals("https://example.com/avc",info.url)
+        assertEquals("1080P",info.quality); assertEquals("https://example.com/hevc",info.url)
+    }
+
+    @Test fun everyTierHavingFailedStillGivesTheBestOne() {
+        val repo=streamRepository(Triple(1080,"bytevc1","https://example.com/hevc"),Triple(480,"h264","https://example.com/avc"))
+        val info=repo.stream("123",1080) { true }
+        assertEquals("1080P",info.quality); assertEquals("https://example.com/hevc",info.url)
     }
 
     @Test fun streamLadderCarriesCodedDimensionsAndCodecs() {
@@ -162,8 +169,10 @@ class ContentRepositoryTest {
         val ladder=repo.streamLadder("123")
         val portrait=ladder.renditions.first { it.url.endsWith("/portrait") }
         assertEquals("h264",portrait.codec); assertEquals(1080,portrait.width); assertEquals(1920,portrait.height)
-        // A portrait 1080 tier is rejected by size while the smaller tier stays playable.
-        assertEquals(540,ladder.select(1080) { !(it.width==1080 && it.height==1920) }!!.quality)
+        // 竖屏 1080×1920 不再被静态判定排除：没有失败记录时它照旧是首选那一档。
+        assertEquals(1080,ladder.select(1080)!!.quality)
+        // 反过来把小档标成解败过，也只是排到后面，最高档不会被丢掉。
+        assertEquals(1080,ladder.select(1080) { !(it.width==1080 && it.height==1920) }!!.quality)
     }
 
     /** 未单独准备的测试一律把新接口当成不可用，让它们继续走旧接口的回退链路。 */

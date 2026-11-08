@@ -8,14 +8,17 @@ import android.media.MediaFormat
 import com.hongguotv.core.Rendition
 import com.hongguotv.core.VideoTracks
 
-/** Device decoder capability probe. TV boxes commonly cap AVC decoders near 1920x1088 with
- *  width/height checked independently, so portrait sizes like 1080x1920 are rejected while
- *  landscape 1920x1080 plays fine — and some boxes claim support they don't have. Learned
- *  runtime failures (persisted across restarts) override the static probe. */
+/**
+ * 这台设备真解败过哪些档。
+ *
+ * 选档不再预判设备能力（理由见 StreamLadder 的注释）：厂商报出来的上限和 isSizeSupported 会把
+ * 实际能解的尺寸判死，这部剧的 1924x1080 就是被它误杀的那一档。这里只留实测到的事实——
+ * 播放真失败过的那一档被记下来，跨重启保留，用来把它排在后面，不用来排除它。
+ * 设备能力仍然打一条日志，供排查，不参与任何判断。
+ */
 object CodecCapabilities {
     private val lessons=DecoderLessons()
     private var prefs: SharedPreferences?=null
-    private val verdicts=HashMap<String,Boolean>()
     @Volatile private var logged=false
     fun init(context: Context) {
         if(prefs!=null) return
@@ -23,36 +26,16 @@ object CodecCapabilities {
         prefs=store
         lessons.restore(store.getStringSet("failures",emptySet()) ?: emptySet())
     }
-    fun mime(codec: String): String? = when(codec.lowercase()) {
-        "h264","avc","avc1","avc3" -> MediaFormat.MIMETYPE_VIDEO_AVC
-        "bytevc1","hvc1","hev1","h265","hevc" -> MediaFormat.MIMETYPE_VIDEO_HEVC
-        else -> null
-    }
-    fun supports(codec: String,width: Int?,height: Int?): Boolean {
-        if(lessons.fails(codec,width,height)) return false
-        val type=mime(codec) ?: return true
-        if(width==null || height==null || width<=0 || height<=0) return true
-        val key="$type $width $height"
-        synchronized(verdicts) { verdicts[key]?.let { return it } }
-        val verdict=runCatching {
-            MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.any { info ->
-                !info.isEncoder && runCatching {
-                    info.getCapabilitiesForType(type).videoCapabilities.isSizeSupported(width,height)
-                }.getOrDefault(false)
-            }
-        }.getOrDefault(true)   // A broken ROM probe must not block playback.
-        synchronized(verdicts) { verdicts[key]=verdict }
-        return verdict
-    }
-    fun supports(rendition: Rendition)=supports(rendition.codec,rendition.width,rendition.height)
-    fun supports(track: VideoTracks.Track)=supports(track.fourcc,track.width,track.height)
-    /** Records a runtime decode failure; true when the static probe had claimed support (over-reporting). */
+    /** 这台设备真解败过这一档。只用于排序，不用于排除。 */
+    fun hasFailed(codec: String,width: Int?,height: Int?)=lessons.fails(codec,width,height)
+    fun hasFailed(rendition: Rendition)=hasFailed(rendition.codec,rendition.width,rendition.height)
+    fun hasFailed(track: VideoTracks.Track)=hasFailed(track.fourcc,track.width,track.height)
+    /** Records a runtime decode failure; true when this is a new lesson. */
     fun learnFailure(codec: String,width: Int?,height: Int?): Boolean {
-        val overReported=supports(codec,width,height)
         val key=lessons.remember(codec,width,height) ?: return false
         prefs?.edit()?.putStringSet("failures",lessons.keys())?.apply()
-        android.util.Log.w("HongguoTV","Learned decoder failure $key (static probe claimed support: $overReported)")
-        return overReported
+        android.util.Log.w("HongguoTV","Learned decoder failure $key")
+        return true
     }
     fun resetLearned() {
         lessons.reset()

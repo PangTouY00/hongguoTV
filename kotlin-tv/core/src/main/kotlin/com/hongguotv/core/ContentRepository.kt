@@ -60,22 +60,35 @@ data class StreamInfo(val url: String, val key: ByteArray?, val quality: String)
 data class Rendition(val quality: Int, val codec: String, val width: Int?, val height: Int?, val url: String, val key: ByteArray?) {
     fun toStreamInfo() = StreamInfo(url, key, if(quality > 0) "${quality}P" else "自动")
 }
-/** All playable renditions of one episode. Capability-first selection: TV boxes commonly cap
- *  AVC decoders at 1920x1088 with width/height checked independently, rejecting portrait sizes. */
+/**
+ * 一集的全部可播放清晰度。选档不预判设备能力。
+ *
+ * 主仓库那条路（server/vendor/hongguo.cjs 的 resolveStream）从不问设备解不解得了：按清晰度排好序，
+ * 直接给最高的一档，解不成再退。这部剧有二十来集源里只给 1924x1080 一档，主仓库在电视上播得开，
+ * 而照厂商报的 1920 上限做静态判定会连试都不试就判它失败。所以这里照主仓库的办法：
+ * 按设置取最高的一档，失败沿阶梯往下走，谁都不被预先排除。
+ *
+ * 唯一影响顺序的是「这台设备真解过、确实失败过」的档——那是实测到的事实，不是猜测，
+ * 所以它排在后面，但仍然会试：解码器偶尔在另一次数里就接住了。
+ */
 class StreamLadder(val renditions: List<Rendition>) {
     // Ascending order: a greater element is the better tier (higher quality, h264 over others).
     // maxWithOrNull picks the best tier; minWithOrNull yields the closest-below fallback.
     private val better = compareBy<Rendition> { it.quality }.thenBy { if(it.codec in AVC_LABELS) 1 else 0 }
-    fun select(maxQuality: Int, supported: (Rendition) -> Boolean = { true }): Rendition? {
-        val pool = renditions.filter(supported).ifEmpty { renditions }
-        return pool.filter { it.quality in 1..maxQuality }.maxWithOrNull(better)
-            ?: pool.filter { it.quality <= 0 }.maxWithOrNull(better)
-            ?: pool.minWithOrNull(better)
+    private val avcFirst = compareBy<Rendition> { if(it.codec in AVC_LABELS) 0 else 1 }
+    private fun bestOf(list: List<Rendition>) = list.maxWithOrNull(better)
+    /** [failed] only reorders. A rendition that really failed on this device is tried later, never dropped. */
+    fun select(maxQuality: Int, failed: (Rendition) -> Boolean = { false }): Rendition? {
+        val within = renditions.filter { it.quality in 1..maxQuality }
+        return bestOf(within.filterNot(failed)) ?: bestOf(within)
+            ?: bestOf(renditions.filter { it.quality <= 0 })
+            ?: renditions.minWithOrNull(better)
     }
-    /** select() first, then every lower or equal tier best-first for verified downgrade. */
-    fun playbackOrder(maxQuality: Int, supported: (Rendition) -> Boolean = { true }): List<Rendition> {
-        val pick = select(maxQuality, supported) ?: return emptyList()
-        val alternates = renditions.filter { it !== pick && it.quality <= pick.quality }.sortedWith(better.reversed())
+    /** select() first, then every lower or equal tier best-first. Nothing is filtered out. */
+    fun playbackOrder(maxQuality: Int, failed: (Rendition) -> Boolean = { false }): List<Rendition> {
+        val pick = select(maxQuality, failed) ?: return emptyList()
+        val alternates = renditions.filter { it !== pick && it.quality <= pick.quality }
+            .sortedWith(compareBy({ failed(it) }, { r: Rendition -> -r.quality }).thenComparing(avcFirst))
         return listOf(pick) + alternates
     }
     companion object { private val AVC_LABELS = setOf("h264", "avc", "avc1", "avc3") }
@@ -109,6 +122,11 @@ class ContentRepository(
     private val playbackSession: PlaybackDeviceSession = PlaybackDeviceSession(),
 ) {
     private val signer = Signer()
+    // 取址结果的缓存，照主仓库的 streamCache：5 分钟、最多 100 集。签名地址在这之内还有效，
+    // 失败重试会带 fresh 绕开它，所以缓存不会让重试变成拿同一个过期地址再试一次。
+    private val ladderCache = LinkedHashMap<String, Pair<Long, StreamLadder>>()
+    private val ladderTtlMs = 5 * 60 * 1000L
+    private val ladderCacheMax = 100
 
     // 榜单页偶发被 CDN 软拦截（空响应或挂起到超时）：收紧超时并单次重试，
     // 让整榜失败在最坏约 15 秒内暴露，而不是分钟级的全局超时。
@@ -362,8 +380,8 @@ class ContentRepository(
         if(episodes.isEmpty() || episodes.any { !it.matches(Regex("[0-9]{1,30}")) } || episodes.distinct().size!=episodes.size) throw IOException("分集数据异常")
         return Detail(card(o).copy(id=id),episodes)
     }
-    fun stream(id: String, maxQuality: Int = 1080, supported: (Rendition) -> Boolean = { true }): StreamInfo {
-        val selected=streamLadder(id).select(maxQuality,supported) ?: throw IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集")
+    fun stream(id: String, maxQuality: Int = 1080, failed: (Rendition) -> Boolean = { false }): StreamInfo {
+        val selected=streamLadder(id).select(maxQuality,failed) ?: throw IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集")
         val info=selected.toStreamInfo()
         return if(selected.quality>maxQuality) info.copy(quality=info.quality+"（兼容资源）") else info
     }
@@ -405,13 +423,28 @@ class ContentRepository(
     /**
      * 一集的可播放清晰度，优先走官方现行接口。
      *
+     * 取到的阶梯缓存 5 分钟、最多 100 集：同一集重播、换清晰度、自动重试都不必再走一遍取址。
+     * 主仓库的 streamCache 同样是 5 分钟加条数上限。失败重试传 `fresh=true` 作废这一集的缓存——
+     * 重试的意义就是重新取一次地址、拿一份新签名，照旧缓存再试第二次没有意义。
+     *
      * 旧的 `POST /novel/player/multi_video_model/v1/` 自 2026-11-02 起对第三方客户端一律回
      * HTTP 200 + 0 字节（换域名、UA、Cookie、完整签名、device_token 都一样），而官方客户端
      * 早已改用 `GET /reading/bookapi/video_tab/multi_video_model/v1/`。所以先读新接口，
      * 只有它拿不到清晰度时才回退旧接口，旧接口再给不出就报新接口的原因。
      */
-    fun streamLadder(id: String): StreamLadder {
+    fun streamLadder(id: String, fresh: Boolean = false): StreamLadder {
         require(id.matches(Regex("[0-9]{1,30}")))
+        if (!fresh) synchronized(ladderCache) {
+            ladderCache[id]?.let { (readAt, cached) -> if (clock() - readAt < ladderTtlMs) return cached }
+        }
+        val ladder = fetchLadder(id)
+        synchronized(ladderCache) {
+            ladderCache[id] = clock() to ladder
+            while (ladderCache.size > ladderCacheMax) ladderCache.remove(ladderCache.keys.first())
+        }
+        return ladder
+    }
+    private fun fetchLadder(id: String): StreamLadder {
         var tabError: IOException? = null
         // 服务端会间歇性拒绝取址（HTTP 200 空 body 或 code=110001）。实测与参数组合、设备身份、
         // Cookie 复用都无关，同一份请求隔一会儿重读就能回 code=0，所以按轮数递增退避重读。

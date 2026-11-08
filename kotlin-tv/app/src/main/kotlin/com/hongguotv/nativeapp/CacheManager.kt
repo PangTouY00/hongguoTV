@@ -34,7 +34,7 @@ class CacheManager(
     private val cache: EpisodeCache,
     private val repository: ContentRepository,
     private val http: OkHttpClient,
-    private val supportsRendition: (Rendition) -> Boolean,
+    private val failedRendition: (Rendition) -> Boolean,
     private val listener: () -> Unit,
 ) {
     enum class State { QUEUED, RUNNING, FAILED }
@@ -169,7 +169,7 @@ class CacheManager(
     private fun download(task: Task) {
         synchronized(this) { task.state = State.RUNNING; task.percent = 0 }
         val ladder = repository.streamLadder(task.episodeId)
-        val order = ladder.playbackOrder(task.quality, supportsRendition)
+        val order = ladder.playbackOrder(task.quality, failedRendition)
         if (order.isEmpty()) throw NoRenditionException("这一集没有可缓存的清晰度")
         var last: Exception? = null
         for (rendition in order) {
@@ -237,17 +237,29 @@ internal fun safeCacheError(message: String): String =
     message.replace(Regex("https?://\\S+"), "[地址]").take(120).ifBlank { "未知原因" }
 
 /**
+ * 摘要行要写的失败：哪一集、为什么。
+ *
+ * episodeIndex 是缓存元数据里那个从 0 起的真实集号，-1 表示这一集本来没记过集号（旧缓存），
+ * 那时只说「有一集」，不拿列表位置冒充集号。
+ */
+internal class CacheFailure(val episodeIndex: Int, val reason: String) {
+    val label: String get() = if (episodeIndex >= 0) "第 ${episodeIndex + 1} 集" else "有一集"
+}
+
+/**
  * 选集面板上方那一行摘要。
  *
  * 队列在跑就报进度；队列停下来是因为失败，就把失败写清楚、把原因带出来。原来这一行只在队列有任务
  * 时显示，失败之后整行空掉——用户只看到格子上一个「失败」，不知道为什么，也不知道还能不能再试。
+ * 集号只列前三个：失败十几集时把整串数字写进这一行，会把真正有用的原因挤到看不见。
  */
-internal fun cacheSummaryText(pending: Int, cached: Int, bytesUsed: Long, failures: List<Pair<String, String>>): String? {
+internal fun cacheSummaryText(pending: Int, cached: Int, bytesUsed: Long, failures: List<CacheFailure>): String? {
     val used = bytesUsed / 1024 / 1024
     if (pending > 0) return "缓存队列 · 还有 $pending 集 · 已缓存 $cached 集 · 占用 $used MB"
     val first = failures.firstOrNull() ?: return null
-    val more = if (failures.size > 1) " ${failures.size} 集" else ""
-    return "缓存失败$more · 原因：${first.second.ifBlank { "未知原因" }} · 再点一次可以重试"
+    val which = failures.map { it.label }.distinct().take(3).joinToString("、")
+    val rest = if (failures.size > 3) " 等 ${failures.size} 集" else ""
+    return "缓存失败 $which$rest · 原因：${first.reason.ifBlank { "未知原因" }} · 再点一次可以重试"
 }
 
 /**
