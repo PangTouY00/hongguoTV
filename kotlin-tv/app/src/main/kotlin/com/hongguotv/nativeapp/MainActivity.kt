@@ -8,6 +8,7 @@ import android.os.Handler
 import android.os.Looper
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.view.*
 import android.view.inputmethod.InputMethodManager
 import android.content.Context
@@ -1386,7 +1387,7 @@ class MainActivity: Activity() {
             }
             playerView=view; root.addView(view,FrameLayout.LayoutParams(-1,-1)); applyFrameScale()
             social.attach(root)
-            hud=column().apply { setPadding(dp(widthDp()*.05f),dp(20),dp(widthDp()*.05f),(resources.displayMetrics.heightPixels*.05f).toInt()); background=PlaybackScrim() }
+            hud=column().apply { setPadding(dp(widthDp()*.05f),dp(20),dp(widthDp()*.05f),(resources.displayMetrics.heightPixels*.05f).toInt()); background=GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,intArrayOf(Color.TRANSPARENT,TvStyle.scrim)) }
             playbackTitle=text("",23f).apply { maxLines=1; ellipsize=TextUtils.TruncateAt.END; setTypeface(null,Typeface.BOLD) }; hud.addView(playbackTitle)
             playbackText=text("",15f,muted).apply { setPadding(0,dp(10),0,dp(9)) }; hud.addView(playbackText)
             progressBar=(if(touchInput) SeekBar(this).apply { max=1000; progressTintList=android.content.res.ColorStateList.valueOf(accent); progressBackgroundTintList=android.content.res.ColorStateList.valueOf(surface); splitTrack=false; isFocusable=false; isFocusableInTouchMode=false; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -1767,31 +1768,6 @@ class MainActivity: Activity() {
             canvas.drawRoundRect(w/2f-gap/2f-bar,h*0.28f,w/2f-gap/2f,h*0.72f,radius,radius,paint)
             canvas.drawRoundRect(w/2f+gap/2f,h*0.28f,w/2f+gap/2f+bar,h*0.72f,radius,radius,paint)
         }
-    }
-    /** 播放界面底部的压暗层。原来是一条从全透明到 TvStyle.scrim 的线性渐变，终点正好落在 hud 最底，
-     *  于是进度条那一行只有约 58% 不透明度、进度条本身约 44%：视频画面直接透到按钮文字和字幕上。
-     *  这里把实色段提前：到 28% 高度处和原来逐点相同（标题区一点不改），28%→42% 之间升到接近实色，
-     *  进度条与整行控制从此落在实底上。颜色沿用 TvStyle.scrim（#070B12），与界面底色、弹窗那层玻璃
-     *  是同一个值，不引入第三种颜色。自绘而不用 GradientDrawable：minSdk 23 用不了带停靠位置的
-     *  setColors(offsets, colors)，只能把终点画在末尾。
-     *  自绘而不用 GradientDrawable：minSdk 23 用不了带停靠位置的 setColors(offsets, colors)，只能把
-     *  终点画在末尾。做成 Drawable 而不是 View：hud 要的是 background，View 不是 Drawable。
-     *  画的时候按 bounds 走——background 的 bounds 由宿主 View 给，它自己没有任何尺寸。 */
-    private class PlaybackScrim: android.graphics.drawable.Drawable() {
-        private val paint=android.graphics.Paint()
-        override fun draw(canvas: android.graphics.Canvas) {
-            val left=bounds.left.toFloat(); val top=bounds.top.toFloat()
-            val w=bounds.width().toFloat(); val h=bounds.height().toFloat()
-            if(w<=0f || h<=0f) return
-            paint.shader=android.graphics.LinearGradient(0f,top,0f,top+h,
-                intArrayOf(Color.TRANSPARENT,Color.argb(68,7,11,18),Color.argb(236,7,11,18),TvStyle.scrim),
-                floatArrayOf(0f,.28f,.42f,1f),android.graphics.Shader.TileMode.CLAMP)
-            canvas.drawRect(left,top,left+w,top+h,paint)
-        }
-        override fun setAlpha(alpha: Int) {}
-        override fun setColorFilter(filter: android.graphics.ColorFilter?) {}
-        @Deprecated("Drawable 仍要求实现这个方法；API 31 起它只是不再被系统调用。")
-        override fun getOpacity()=android.graphics.PixelFormat.TRANSLUCENT
     }
     private fun hidePlaybackOverlay() {
         main.removeCallbacks(hideHud)
