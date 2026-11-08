@@ -16,10 +16,16 @@ class StreamLadderTest {
         val pick=ladder(rendition(720, "bytevc1"), rendition(720, "h264")).select(1080)!!
         assertEquals("h264", pick.codec)
     }
-    @Test fun unsupportedTiersAreSkippedEvenWhenHigher() {
+    @Test fun failedTiersAreTriedLastButNeverDropped() {
         val pick=ladder(rendition(1080, "bytevc1", 1080, 1920), rendition(720, "h264", 720, 1280), rendition(480))
             .select(1080) { it.codec == "h264" }!!
-        assertEquals(720, pick.quality)
+        // 只有 h264 那一档真解败过：先给没败过的最高档，谁都不被预先排除。
+        assertEquals(1080, pick.quality)
+    }
+    @Test fun everyTierHavingFailedStillSelectsTheBestOne() {
+        val pick=ladder(rendition(1080, "bytevc1", 1924, 1080), rendition(720, "h264", 720, 1280))
+            .select(1080) { true }!!
+        assertEquals(1080, pick.quality); assertEquals(1924, pick.width)
     }
     @Test fun allUnsupportedFallsBackToBestRendition() {
         val pick=ladder(rendition(1080, "bytevc1", 1080, 1920), rendition(720, "h264", 720, 1280))
@@ -37,12 +43,12 @@ class StreamLadderTest {
     @Test fun playbackOrderLeadsWithSelectionThenLowerTiersBestFirst() {
         val order=ladder(rendition(1080, "bytevc1"), rendition(720, "bytevc1"), rendition(720, "h264"), rendition(480))
             .playbackOrder(1080) { it.codec == "h264" }
-        // Unverified alternates stay eligible: capability metadata can be missing or wrong.
-        assertEquals(listOf(720 to "h264", 720 to "bytevc1", 480 to "h264"), order.map { it.quality to it.codec })
+        // 首选是没败过的最高档；败过的只往后挪，整条阶梯一个都不少。
+        assertEquals(listOf(1080 to "bytevc1", 720 to "bytevc1", 720 to "h264", 480 to "h264"), order.map { it.quality to it.codec })
     }
     @Test fun playbackOrderKeepsSameQualityAlternatesRightAfterPick() {
         val order=ladder(rendition(720, "bytevc1"), rendition(720, "h264"), rendition(540, "bytevc1"))
-            .playbackOrder(720) { it.codec == "h264" }
+            .playbackOrder(720) { false }
         assertEquals(listOf("h264", "bytevc1", "bytevc1"), order.map { it.codec })
     }
     @Test fun emptyLadderSelectsNothing() {

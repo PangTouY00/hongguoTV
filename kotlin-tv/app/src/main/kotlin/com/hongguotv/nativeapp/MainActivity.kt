@@ -1377,6 +1377,9 @@ class MainActivity: Activity() {
         artwork.cancelPage(clearMemory=true)
         playbackHttp=null; video=null
         var firstReady=true; var firstFrame=true
+        // 重试那条路一定要重新取址（主仓库的 fresh 语义）：自动重试、自动降清、面板上的「立即重试」
+        // 都该拿一份新签名，照缓存的地址再试一次只是把同一个失败重复一遍。
+        val refetchAddress=recovering || autoDowngrade || playError
         if(!recovering) recovery.reset()
         autoRecovery=false; readySince=0; startPosition=position.coerceAtLeast(0); requestedAutoplay=autoplay
         if(autoplay) sleepStopped=false
@@ -1426,8 +1429,8 @@ class MainActivity: Activity() {
         val requestedId=data.episodes[episodeIndex]; val maxQuality=library.maxQuality; val ticket=generation
         work({ val carried=claimWarmup(targetKey,warmupInFlight)
             carried.first?.let { OpenedStream(it,null,emptyList(),it.trackInfo(),carried.second) }
-                ?: openCached(episodeCache,requestedId,maxQuality) { it==null || CodecCapabilities.worthTrying(it) }
-                ?: openStream(repository.http,repository,requestedId,maxQuality,CodecCapabilities::worthTrying) { it==null || CodecCapabilities.worthTrying(it) }
+                ?: openCached(episodeCache,requestedId,maxQuality) { it!=null && CodecCapabilities.hasFailed(it) }
+                ?: openStream(repository.http,repository,requestedId,maxQuality,CodecCapabilities::hasFailed,fresh=refetchAddress)
                 ?: throw java.io.IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集") }, { opened ->
             val remote=opened.video; video=remote; val carriedOver=opened.http!=null
             if(carriedOver) playbackHttp=opened.http
@@ -1542,7 +1545,7 @@ class MainActivity: Activity() {
             var remote: RemoteVideo?=null
             try {
                 val prepared=scope.run {
-                    val opened=openStream(http,source,id,quality,CodecCapabilities::supports) { it==null || CodecCapabilities.supports(it) }
+                    val opened=openStream(http,source,id,quality,CodecCapabilities::hasFailed)
                         ?: throw java.io.IOException("没有电视可播放的清晰度")
                     // 已经缓存的下一集在上面就不再预热，走到这里的一定是在线流。
                     opened.remote().also { remote=it; it.warm(warmBytes) }
@@ -1989,7 +1992,7 @@ class MainActivity: Activity() {
     private fun caches(): CacheManager {
         cacheQueue?.let { return it }
         val http=repository.http.newBuilder().readTimeout(60,java.util.concurrent.TimeUnit.SECONDS).build()
-        return CacheManager(episodeCache,repository,http,CodecCapabilities::supports,{ main.post { refreshCacheUi() } }).also { cacheQueue=it }
+        return CacheManager(episodeCache,repository,http,CodecCapabilities::hasFailed,{ main.post { refreshCacheUi() } }).also { cacheQueue=it }
     }
     /** 队列状态一变就画回界面：选集面板的标记、详情页的按钮文字、播放界面的进度、本机下载页的进度。 */
     private fun refreshCacheUi() {

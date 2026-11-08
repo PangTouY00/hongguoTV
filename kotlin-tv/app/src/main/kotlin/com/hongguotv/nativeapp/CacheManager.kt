@@ -34,7 +34,7 @@ class CacheManager(
     private val cache: EpisodeCache,
     private val repository: ContentRepository,
     private val http: OkHttpClient,
-    private val supportsRendition: (Rendition) -> Boolean,
+    private val failedRendition: (Rendition) -> Boolean,
     private val listener: () -> Unit,
 ) {
     enum class State { QUEUED, RUNNING, FAILED }
@@ -169,7 +169,7 @@ class CacheManager(
     private fun download(task: Task) {
         synchronized(this) { task.state = State.RUNNING; task.percent = 0 }
         val ladder = repository.streamLadder(task.episodeId)
-        val order = ladder.playbackOrder(task.quality, supportsRendition)
+        val order = ladder.playbackOrder(task.quality, failedRendition)
         if (order.isEmpty()) throw NoRenditionException("这一集没有可缓存的清晰度")
         var last: Exception? = null
         for (rendition in order) {
