@@ -6,6 +6,7 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.view.View
 import android.view.ViewGroup
 
 /** Shared native colors and shapes. The values follow the accepted 01 暗厅 · 取色洗底 direction
@@ -63,15 +64,29 @@ object TvStyle {
 
     /** 弹窗高度按内容收缩。Material 主题给对话框的是固定尺寸——横屏 90%、竖屏 70% 的屏幕高——
      * 两三行的面板也会撑满整屏，剩下的全是空白：实机截图里账号页和版本页各只有三五行正文，
-     * 面板却是 1560x972，正好是 1080p 横屏的 65% 宽和 90% 高。这里在窗口显示后把高度换成
-     * wrap_content，宽度沿用主题算出来的值不动；正文真的高过屏幕时退回一个上限，让底部按钮留在屏内。
-     * 选集侧栏是贴边的整列，尺寸由它自己定，不走这里。 */
+     * 面板却是 1560x972，正好是 1080p 横屏的 65% 宽和 90% 高。
+     * 第一版这里写的是 setLayout(width, WRAP_CONTENT)，装机实测无效：uiautomator 量到窗口还是
+     * 928 高（只是被兜底上限裁过一截），而真正装着正文的那层只有 564。对话框的 decor 是
+     * match_parent 的 FrameLayout，窗口给 wrap_content 系统不认，所以改成显示之后去量内容层的
+     * 实际高度，按具体像素设窗口高度。内容层就是 android.R.id.content 的第一个子节点——标题、
+     * 正文、按钮三截都在里面，它自己是 wrap_content，量出来的就是正文真需多少；这个 id 在
+     * android.R.id 里没有公开名字，只能顺着 content 取，不能按 id 找。正文真的高过屏幕时退回
+     * 86% 屏高的上限，让底部按钮留在屏内。选集侧栏是贴边的整列，尺寸由它自己定，不走这里。 */
     fun fitDialog(dialog: AlertDialog) {
         val window=dialog.window ?: return
         val width=window.attributes.width
-        val cap=(dialog.context.resources.displayMetrics.heightPixels*.86f).toInt()
-        window.setLayout(width,ViewGroup.LayoutParams.WRAP_CONTENT)
-        window.decorView.post { val height=window.decorView.height; if(height>cap) window.setLayout(width,cap) }
+        val context=dialog.context
+        val cap=(context.resources.displayMetrics.heightPixels*.86f).toInt()
+        window.decorView.post {
+            val decor=window.decorView
+            val content=decor.findViewById<View>(android.R.id.content) as? ViewGroup
+            val panel=(content?.let { if(it.childCount>0) it.getChildAt(0) else null }) ?: decor
+            if(panel.height<=0) return@post
+            var top=panel.top; var parent=panel.parent
+            while(parent is View && parent!==decor){ top+=parent.top; parent=parent.parent }
+            val height=(top+panel.height+decor.paddingBottom+dp(context,6)).coerceAtMost(cap)
+            if(height<decor.height) window.setLayout(width,height)
+        }
     }
 
     private fun dp(context: Context,value: Int)=(value*context.resources.displayMetrics.density).toInt()
