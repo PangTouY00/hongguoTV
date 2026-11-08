@@ -37,6 +37,7 @@ class TvTools(private val activity: Activity) {
         val previous=dialog; dialog=null; phone?.close(); phone=null; previous?.dismiss(); dialog=next
         next.setOnDismissListener { if(dialog===next) { phone?.close(); phone=null; dialog=null; if(anchor?.isAttachedToWindow==true) anchor.requestFocus() } }
         next.show()
+        TvStyle.fitDialog(next)
     }
     fun close() { dialog?.dismiss(); phone?.close(); phone=null }
     fun destroy() { close(); worker.shutdownNow() }

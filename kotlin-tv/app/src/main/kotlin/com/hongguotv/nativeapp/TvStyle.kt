@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.nativeapp
 
+import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.view.ViewGroup
 
 /** Shared native colors and shapes. The values follow the accepted 01 暗厅 · 取色洗底 direction
  * (ui-round-01/a-hall.html): a dark base with two large radial glows behind everything,
@@ -58,6 +60,19 @@ object TvStyle {
      * 主题里的 alertDialogTheme 已经指到同一份资源，自绘 Dialog 走这里，两处不会是两套颜色。 */
     fun backdropPanel(context: Context): Drawable=context.getDrawable(R.drawable.tv_backdrop_panel)
         ?: GradientDrawable().apply { setColor(Color.argb(102,7,11,18)); cornerRadius=12*context.resources.displayMetrics.density; setStroke(dp(context,1),Color.argb(74,143,166,196)) }
+
+    /** 弹窗高度按内容收缩。Material 主题给对话框的是固定尺寸——横屏 90%、竖屏 70% 的屏幕高——
+     * 两三行的面板也会撑满整屏，剩下的全是空白：实机截图里账号页和版本页各只有三五行正文，
+     * 面板却是 1560x972，正好是 1080p 横屏的 65% 宽和 90% 高。这里在窗口显示后把高度换成
+     * wrap_content，宽度沿用主题算出来的值不动；正文真的高过屏幕时退回一个上限，让底部按钮留在屏内。
+     * 选集侧栏是贴边的整列，尺寸由它自己定，不走这里。 */
+    fun fitDialog(dialog: AlertDialog) {
+        val window=dialog.window ?: return
+        val width=window.attributes.width
+        val cap=(dialog.context.resources.displayMetrics.heightPixels*.86f).toInt()
+        window.setLayout(width,ViewGroup.LayoutParams.WRAP_CONTENT)
+        window.decorView.post { val height=window.decorView.height; if(height>cap) window.setLayout(width,cap) }
+    }
 
     private fun dp(context: Context,value: Int)=(value*context.resources.displayMetrics.density).toInt()
 }

@@ -119,6 +119,7 @@ class AppUpdater(private val activity: Activity, private val idle: () -> Boolean
             if (from?.isAttachedToWindow == true) from.requestFocus()
         }
         next.show()
+        TvStyle.fitDialog(next)
         next.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener { when { ready -> install(); available != null -> download(true); else -> check(true) } }
         next.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener {
             available?.let { preferences.edit().putLong("deferred_code", it.versionCode).putLong("deferred_until", System.currentTimeMillis()+24*60*60*1000L).apply() }
