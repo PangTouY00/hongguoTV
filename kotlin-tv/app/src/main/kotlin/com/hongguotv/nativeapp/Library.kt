@@ -7,6 +7,8 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.hongguotv.core.*
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -29,6 +31,8 @@ class Library(context: Context) {
     private val homeWrites = LatestWriteQueue<String, () -> Any?>("hongguotv-home-write", write = { batch -> commit(homePrefs, batch) },
         failed = { Log.w("HongguoTV", "Home cache commit failed") })
     private var index: LibraryIndex? = null
+    // 逐集已看：播完一集记一笔，只存本机。云端上报的仍是「看到第几集」，这份不跟着走。
+    private val episodeIds = LinkedHashMap<String, MutableSet<String>>()
     private val homes = mutableMapOf<ContentType, CatalogPage>()
     private val homeSavedAt = mutableMapOf<ContentType, Long>()
     private var loading = false
@@ -46,12 +50,14 @@ class Library(context: Context) {
         if (loading) return
         loading = true
         loader.execute {
+            var episodes: Map<String, MutableSet<String>> = emptyMap()
             val result = runCatching {
                 val retired = synchronized(retiredWrites) { retiredWrites.toList() }
                 retired.forEach { check(it.awaitClosed(30, TimeUnit.SECONDS)) { "上次观看记录仍在保存，请稍后重试" } }
                 synchronized(retiredWrites) { retiredWrites.removeAll(retired.toSet()) }
                 val values = prefs.all
                 val loaded = LibraryDisk.decode(values)
+                episodes = decodeEpisodeWatched(values["watched-episodes"] as? String)
                 val now = System.currentTimeMillis()
                 val cached = mutableMapOf<ContentType, CatalogPage>()
                 val stamps = mutableMapOf<ContentType, Long>()
@@ -80,7 +86,7 @@ class Library(context: Context) {
                 val ready = readyCallbacks.toList(); readyCallbacks.clear()
                 val errors = errorCallbacks.toList(); errorCallbacks.clear()
                 result.onSuccess { (loaded, cached, stamps) ->
-                    index = loaded; homes.putAll(cached); homeSavedAt.putAll(stamps)
+                    index = loaded; homes.putAll(cached); homeSavedAt.putAll(stamps); episodeIds.putAll(episodes)
                     ready.forEach { it() }
                 }.onFailure { failure -> errors.forEach { it(failure) } }
             }
@@ -124,12 +130,46 @@ class Library(context: Context) {
     fun toggleLater(series: Series) = state().toggleLater(series).also { persist("later") }
     fun save(progress: WatchProgress) { if (state().save(progress)) persist("progress") }
     fun setWatched(id: String, value: Boolean) { if (state().setWatched(id, value)) persist("watched") }
+    /** 这一集在这台设备上播完过。和「整剧已看」是两件事：后者是手动标记，这个来自实际播放。 */
+    fun watchedEpisodes(seriesId: String): Set<String> = episodeIds[seriesId].orEmpty()
+    fun episodeWatched(seriesId: String, episodeId: String): Boolean = episodeIds[seriesId]?.contains(episodeId) == true
+    fun markEpisodeWatched(seriesId: String, episodeId: String) {
+        val ids = episodeIds.getOrPut(seriesId) { LinkedHashSet() }
+        if (!ids.add(episodeId)) return
+        while (ids.size > 2000) ids.remove(ids.iterator().next())
+        persistEpisodeWatched()
+    }
+    fun clearEpisodeWatched(seriesId: String) { if (episodeIds.remove(seriesId) != null) persistEpisodeWatched() }
+    private fun persistEpisodeWatched() { writes.submit(mapOf("watched-episodes" to { encodeEpisodeWatched() })) }
+    private fun encodeEpisodeWatched(): String = JSONArray(episodeIds.entries.take(200).map { (series, ids) ->
+        JSONObject().put("series", series).put("episodes", JSONArray(ids.toList()))
+    }).toString()
+    private fun decodeEpisodeWatched(raw: String?): Map<String, MutableSet<String>> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val rows = JSONArray(raw)
+            val decoded = LinkedHashMap<String, MutableSet<String>>()
+            for (row in 0 until rows.length()) {
+                val item = rows.optJSONObject(row) ?: continue
+                val series = item.optString("series")
+                val list = item.optJSONArray("episodes") ?: continue
+                if (series.isEmpty() || series.length > 30 || list.length() > 2000) continue
+                val ids = LinkedHashSet<String>()
+                for (position in 0 until list.length()) {
+                    val value = list.optString(position)
+                    if (value.isNotEmpty() && value.length <= 30) ids.add(value)
+                }
+                if (ids.isNotEmpty()) decoded[series] = ids
+            }
+            decoded
+        }.getOrDefault(emptyMap())
+    }
     fun hide(id: String) { state().hide(id); persist("hidden") }
     fun unhideAll() { state().unhideAll(); persist("hidden") }
     fun rememberSearch(query: String, type: ContentType) { state().rememberSearch(query, type); persist("searches") }
     fun clearSearches() { state().clearSearches(); persist("searches") }
-    fun removeHistory(id: String) { state().removeHistory(id); persist("progress", "watched") }
-    fun clearHistory() { state().clearHistory(); persist("progress", "watched") }
+    fun removeHistory(id: String) { state().removeHistory(id); clearEpisodeWatched(id); persist("progress", "watched") }
+    fun clearHistory() { state().clearHistory(); episodeIds.clear(); persist("progress", "watched") }
     fun observeFavorite(id: String, count: Int, now: Long, acknowledge: Boolean = false) {
         if (state().observeFavorite(id, count, now, acknowledge)) persist("favoriteUpdates")
     }
