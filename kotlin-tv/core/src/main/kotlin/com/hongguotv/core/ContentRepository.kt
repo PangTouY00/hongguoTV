@@ -102,10 +102,14 @@ class SearchIdentityException(cause: Throwable? = null): IOException("搜索需�
 /** 播放接口偶发 HTTP 200 空响应：换新签名重读，仍空才报成这个独立类别。 */
 class EmptyPlaybackResponseException: IOException("播放接口暂时返回空响应，请稍后重试")
 /**
- * 参数与签名都对，服务端仍拒绝下发清晰度（实测 code=110001）。与设备身份、Cookie、参数组合都无关：
- * 同一份身份同一套参数，隔一段时间重读就会回 code=0，所以按可重试处理，多轮退避重读。
+ * 参数与签名都对，服务端仍拒绝下发清晰度（实测 code=110001）。
+ * 2026-11-09 实测：这个接口对**匿名请求**每一集都回 110001——同一台手机上 3 部剧各前 3 集
+ * 加上之前那集全部被拒，换注册身份、换 Cookie 形态都不变；登录带上账号身份后同一集立刻能取到。
+ * 所以它只在已登录时按可重试处理，未登录时直接报成 [PlaybackLoginRequiredException]。
  */
 class PlaybackRejectedException(val code: Int): IOException("播放接口暂不可用（错误码 $code）")
+/** 取址接口不接受匿名请求：未登录时每一集都被回 110001，登录后同一集立刻取到清晰度。 */
+class PlaybackLoginRequiredException: IOException("播放需要登录红果账号")
 /** A board page never recovered; [partial] holds the rows that did load, labelled by pagesRead. */
 class IncompleteRankSnapshotException(message: String,val partial: RankSnapshot): IOException(message)
 
@@ -455,6 +459,7 @@ class ContentRepository(
     }
     private fun fetchLadder(id: String): StreamLadder {
         var tabError: IOException? = null
+        var anonymousRejected=false
         val account=accountCookie()
         // 服务端对**每份注册身份**只放行有限几次取址：同一份身份一旦被拒就一直回空，
         // 换一份新注册的身份则立刻放行（实测：同一身份连试 8 次全空，换新身份第 1~2 次就成）。
@@ -462,8 +467,9 @@ class ContentRepository(
         // 共用同一份身份时，先跑掉的那几个请求会把后面那个的配额用光。
         for(round in 0 until 4) {
             playbackSession.invalidate()
-            // 已登录时交替带账号 Cookie：匿名与带账号各试一轮，哪种能取到就用哪种。
-            val withAccount=account.isNotBlank() && round%2==1
+            // 已登录时第一轮就带账号 Cookie：实测只有带账号身份才下发清晰度。
+            // 带账号那轮失败再退回匿名，账号凭据失效时不至于整条路都走不通。
+            val withAccount=account.isNotBlank() && round==0
             try {
                 val ladder=tabLadder(id,withAccount)
                 if(ladder!=null) { reportPlaybackAttempt(round,withAccount,"成功"); return ladder }
@@ -472,6 +478,9 @@ class ContentRepository(
             } catch (error: IOException) {
                 tabError=error
                 reportPlaybackAttempt(round,withAccount,error.javaClass.simpleName)
+                // 未登录时这个接口对每一集都回 110001（实测 3 部剧各前 3 集全部被拒），
+                // 再退避三轮只是让人对着屏幕等；网络类失败照旧重试。
+                if(account.isBlank() && addressRefusal(error)) { anonymousRejected=true; break }
                 if(!playbackRetryable(error) || round==3) break
                 try { Thread.sleep(700L*(round+1)) } catch (_: InterruptedException) {
                     Thread.currentThread().interrupt(); throw java.io.InterruptedIOException("请求已取消")
@@ -479,10 +488,16 @@ class ContentRepository(
             }
         }
         try { return readLadder(id) } catch (error: IOException) {
+            // 两个取址接口都不接受匿名请求（实测新接口回 110001、旧接口回空 body）：
+            // 这时该说的是「去登录」，不是「暂时取不到」。
+            if(anonymousRejected && addressRefusal(error)) throw PlaybackLoginRequiredException()
             // 旧接口常态只有空 body，那种情况下新接口的错误码更有信息量；其它错误照旧抛。
             throw if(error is EmptyContentException && tabError!=null) tabError else error
         }
     }
+    /** 取址被服务端拒（网络失败不算）：未登录时这就是「需要登录」的信号。 */
+    private fun addressRefusal(error: IOException) =
+        error is PlaybackRejectedException || error is EmptyPlaybackResponseException || error is EmptyContentException
     private fun reportPlaybackAttempt(round: Int, withAccount: Boolean, outcome: String) =
         onPlaybackAttempt("取址第${round+1}轮 新注册身份 账号Cookie=${if(withAccount) "带" else "不带"} → $outcome")
     /** 注册下发的设备 Cookie 与账号 Cookie 并成一条；同名时以账号那份为准。 */

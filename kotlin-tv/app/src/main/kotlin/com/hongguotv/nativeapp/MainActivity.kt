@@ -251,16 +251,16 @@ class MainActivity: Activity() {
     private fun text(value: String,size: Float=16f,color: Int=white)=TextView(this).apply { text=value; textSize=size; setTextColor(color); includeFontPadding=false }
     private fun column()=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL }
     private fun row()=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
-    private fun focusStyle(view: View,selected: Boolean=false) {
+    private fun focusStyle(view: View,selected: Boolean=false,finished: Boolean=false) {
         view.id=View.generateViewId(); view.isSelected=selected; view.isFocusable=true; view.isFocusableInTouchMode=true
-        fun paint(focused: Boolean) { view.background=if(focused) TvStyle.card(this,true) else if(selected) TvStyle.shape(this,TvStyle.selected,TvStyle.edge,borderDp=1f) else TvStyle.card(this,false) }
+        fun paint(focused: Boolean) { view.background=if(focused) TvStyle.card(this,true) else if(selected) TvStyle.shape(this,TvStyle.selected,TvStyle.edge,borderDp=1f) else if(finished) TvStyle.shape(this,TvStyle.watchedEpisode,TvStyle.edge,borderDp=1f) else TvStyle.card(this,false) }
         paint(false); view.setOnFocusChangeListener { _,focused -> paint(focused) }
     }
-    private fun button(label: String,selected: Boolean=false,onClick: ()->Unit): TextView = text(label,15f).apply {
-        gravity=Gravity.CENTER; setPadding(dp(14),dp(10),dp(14),dp(10)); minHeight=dp(42); if(selected) setTextColor(accent); focusStyle(this,selected); setOnClickListener { onClick() }
+    private fun button(label: String,selected: Boolean=false,finished: Boolean=false,onClick: ()->Unit): TextView = text(label,15f).apply {
+        gravity=Gravity.CENTER; setPadding(dp(14),dp(10),dp(14),dp(10)); minHeight=dp(42); if(selected) setTextColor(accent); focusStyle(this,selected,finished); setOnClickListener { onClick() }
     }
     private fun addButton(parent: LinearLayout,label: String,selected: Boolean=false,onClick: ()->Unit): TextView {
-        val view=button(label,selected,onClick); parent.addView(view,lp().apply { width=LinearLayout.LayoutParams.WRAP_CONTENT; rightMargin=dp(8) }); return view
+        val view=button(label,selected,false,onClick); parent.addView(view,lp().apply { width=LinearLayout.LayoutParams.WRAP_CONTENT; rightMargin=dp(8) }); return view
     }
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
@@ -983,8 +983,10 @@ class MainActivity: Activity() {
         if(tab==5) return cloudAccount.reservationState(reservationOnline).rows.firstOrNull { it.series.id==series.id }?.let(::reservationDescription).orEmpty()
         if(isAccountHistory()) return cloudAccount.progress(series.id)?.let { "账号进度 · 第 ${it.episodeIndex+1} 集 · ${formatTime(it.position)}" }.orEmpty()
         val progress=library.progress(series.id)
+        val finished=library.watchedEpisodes(series.id).size
         return listOf(if(library.favorite(series.id)) "已在本机收藏" else "",if(library.queued(series.id)) "稍后看" else "",
-            if(library.watched(series.id)) "整剧已看完" else progress?.let { "上次第 ${it.episodeIndex+1} 集 · ${formatTime(it.position)}" }.orEmpty()).filter { it.isNotBlank() }.joinToString(" · ")
+            if(library.watched(series.id)) "整剧已看完" else if(finished>0) "已看完 $finished 集" else "",
+            progress?.let { "上次第 ${it.episodeIndex+1} 集 · ${formatTime(it.position)}" }.orEmpty()).filter { it.isNotBlank() }.joinToString(" · ")
     }
     private fun renderHome(body: LinearLayout,focusNav: Boolean,focusType: Boolean,loading: Boolean) {
         homeUpdateCount=library.updatedFavorites()
@@ -1312,7 +1314,12 @@ class MainActivity: Activity() {
         val episodes=mutableListOf<View>()
         (group*20 until minOf((group+1)*20,data.episodes.size)).toList().chunked(10).forEach { numbers ->
             val line=row()
-            numbers.forEach { index -> val item=button(episodeLabel(data,index)+(if(index==episodeIndex) "\n当前" else if(index==resumeIndex && progress!=null) if(progress.completed) "\n已看" else "\n上次" else "")+(cacheMark(data.episodes[index])?.let { "\n$it" }.orEmpty()),index==episodeIndex) { playEpisode(index,if(progress?.episodeId==data.episodes[index] && !progress.completed) progress.position else 0) }; item.textSize=12f;item.setPadding(dp(2),dp(3),dp(2),dp(3));item.contentDescription="第 ${episodeNumber(data,index)} 集"; line.addView(item,lp(0,dp(42)).apply { weight=1f; rightMargin=dp(6) }); episodes+=item }
+            numbers.forEach { index ->
+                val episodeId=data.episodes[index]
+                val finished=library.episodeWatched(data.series.id,episodeId)
+                val item=button(episodeLabel(data,index)+episodeMark(data,index,episodeIndex,resumeIndex,progress)+(cacheMark(episodeId)?.let { "\n$it" }.orEmpty()),index==episodeIndex,finished) { playEpisode(index,if(progress?.episodeId==episodeId && !progress.completed) progress.position else 0) }
+                item.textSize=12f;item.setPadding(dp(2),dp(3),dp(2),dp(3));item.contentDescription="第 ${episodeNumber(data,index)} 集"+(if(finished) "，已看完" else "")
+                line.addView(item,lp(0,dp(42)).apply { weight=1f; rightMargin=dp(6) }); episodes+=item }
             repeat(10-numbers.size) { line.addView(Space(this),lp(0,dp(42)).apply { weight=1f; rightMargin=dp(6) }) }
             content.addView(line,lp(-1,dp(49)))
         }
@@ -1596,6 +1603,7 @@ class MainActivity: Activity() {
         val old=WatchProgress(data.series,data.episodes[episodeIndex],episodeIndex,oldPosition.coerceAtLeast(0),
             maxOf(episodeDuration,oldPosition),completed,System.currentTimeMillis())
         library.save(old)
+        if(completed) library.markEpisodeWatched(data.series.id,data.episodes[episodeIndex])
         cloudAccount.upload(CloudProgress(old.series,old.episodeId,old.episodeIndex,old.position,old.duration,old.updatedAt),data.episodes.size,true)
         val previous=video;val previousHttp=playbackHttp
         social.reset()
@@ -1674,7 +1682,10 @@ class MainActivity: Activity() {
         // 源里给的每一档都解不了，和「暂时取不到」是两件事：前者再试一百次也一样，
         // 挂着自动重试只会让人对着屏幕等，所以它不进重试路径，也不给「试更低清晰度」这个按钮。
         val unplayable=problem is NoDecodableRenditionException
-        val retryable=!unplayable && (if(problem is PlaybackException) problem.errorCode in 2000..2999 || problem.errorCode==PlaybackException.ERROR_CODE_TIMEOUT else problem is java.io.IOException)
+        // 取址接口现在只认带账号身份的请求：未登录时每一集都被回 110001。这不是「暂时取不到」，
+        // 自动重试三轮也不会变，所以它单独报、单独给入口，不进重试路径。
+        val loginRequired=generateSequence(problem) { it.cause }.any { it is PlaybackLoginRequiredException }
+        val retryable=!unplayable && !loginRequired && (if(problem is PlaybackException) problem.errorCode in 2000..2999 || problem.errorCode==PlaybackException.ERROR_CODE_TIMEOUT else problem is java.io.IOException)
         // 播放身份拿不到，和取不到播放地址是两件事：分开说清楚，别让人反复换清晰度。
         val registrationFailed=generateSequence(problem) { it.cause }.any { it is PlaybackDeviceRegistrationException }
         val lowerQuality=if(unplayable) null else nextLowerQuality(if(attemptedQuality>0) attemptedQuality else library.maxQuality)
@@ -1682,10 +1693,12 @@ class MainActivity: Activity() {
             unplayable -> problem.message ?: "这一集没有这台设备能播放的清晰度。"
             decoding -> if(lowerQuality!=null) "电视无法解码当前视频，可尝试更低清晰度。" else "这台电视解不了这一集，可以试别的剧集。"
             registrationFailed -> "播放设备注册失败，请检查网络后重试。"
+            loginRequired -> "播放需要登录红果账号。登录后这一集马上能取到地址。"
             else -> "播放失败，可重试或切换清晰度。"
         }
         val actions=row(); controls.addView(actions)
-        addButton(actions,"立即重试") { playEpisode(episodeIndex,retryPosition,retryAutoplay) }.requestFocus()
+        if(loginRequired) addButton(actions,"登录红果") { cloudAccount.show() }.requestFocus()
+        else addButton(actions,"立即重试") { playEpisode(episodeIndex,retryPosition,retryAutoplay) }.requestFocus()
         lowerQuality?.let { lower ->
             addButton(actions,"尝试 ${lower}P") { library.maxQuality=lower; playEpisode(episodeIndex,retryPosition,retryAutoplay) }
         }
@@ -2046,8 +2059,11 @@ class MainActivity: Activity() {
         return cacheSummaryText(queue.pendingCount(),queue.cachedCount(),queue.bytesUsed(),queue.failures().map { CacheFailure(it.episodeIndex,safeCacheError(it.message)) })
     }
     /** 还没看的分集下标：照观看进度往后算，和续播跳到下一集是同一套判断。 */
-    private fun unwatchedIndexes(data: Detail): List<Int> =
-        UnwatchedEpisodes.indexes(data.episodes.size,library.progress(data.series.id)?.episodeId?.let { data.episodes.indexOf(it) })
+    private fun unwatchedIndexes(data: Detail): List<Int> {
+        val through=library.progress(data.series.id)?.episodeId?.let { data.episodes.indexOf(it) }
+        val done=library.watchedEpisodes(data.series.id).mapNotNull { id -> data.episodes.indexOf(id).takeIf { n -> n>=0 } }.toSet()
+        return UnwatchedEpisodes.indexes(data.episodes.size,through).filterNot { it in done }
+    }
     /** 本机下载列表的一行：已经落盘的集，加上还在排队或正在下载的集与当前这一集的百分比。 */
     private class DownloadRow(val series: Series,val cachedCount: Int,val bytes: Long,val queued: Int,val percent: Int)
     /**
@@ -2109,6 +2125,13 @@ class MainActivity: Activity() {
     private fun episodeNumber(data: Detail,index: Int): Int {
         val numbers=data.episodeNumbers
         return numbers?.getOrNull(index)?.takeIf { it>0 } ?: (index+1)
+    }
+    /** 这一集在选集列表上怎么标：当前 > 中途停下 > 播完过。前两个来自进度那一条，第三个是逐集记录。 */
+    private fun episodeMark(data: Detail,index: Int,current: Int,resumeIndex: Int,progress: WatchProgress?): String {
+        if(index==current) return "\n当前"
+        if(index==resumeIndex && progress!=null) return if(progress.completed) "\n已看" else "\n上次"
+        if(library.episodeWatched(data.series.id,data.episodes[index])) return "\n已看"
+        return ""
     }
     private fun episodeLabel(data: Detail,index: Int): String {
         // 取到局部变量再判空：episodeNumbers 是跨模块的公开属性，编译器不给它做 smart cast。
@@ -2172,7 +2195,7 @@ private fun showEpisodePanel(anchor: View) {
                     if(anchor.isAttachedToWindow) anchor.requestFocus()
                     if(overlayWasVisible) showHud() else hidePlaybackOverlay()
                 }
-            },lastWatched=library.progress(data.series.id)?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } },lastCompleted=library.progress(data.series.id)?.completed==true,cache=EpisodeCacheUi({ cacheMark(data.episodes[it]) },{ cacheSummary() },{ caches().enqueue(data.series,listOf(cacheEpisodeIndex(data,it) to data.episodes[it]),library.maxQuality) },{ caches().enqueue(data.series,episodePairs(data),library.maxQuality) },{ indexes -> caches().enqueue(data.series,episodePairs(data,indexes),library.maxQuality) }))
+            },lastWatched=library.progress(data.series.id)?.let { data.episodes.indexOf(it.episodeId).takeIf { n -> n>=0 } },lastCompleted=library.progress(data.series.id)?.completed==true,done={ library.episodeWatched(data.series.id,data.episodes[it]) },cache=EpisodeCacheUi({ cacheMark(data.episodes[it]) },{ cacheSummary() },{ caches().enqueue(data.series,listOf(cacheEpisodeIndex(data,it) to data.episodes[it]),library.maxQuality) },{ caches().enqueue(data.series,episodePairs(data),library.maxQuality) },{ indexes -> caches().enqueue(data.series,episodePairs(data,indexes),library.maxQuality) }))
         episodePanel=next; next.show(); updatePauseGlyph()
     }
     private fun hidePanel() { if(playError) return; panel=false; controls.visibility=View.GONE; controls.clearFocus(); showHud() }
@@ -2181,6 +2204,7 @@ private fun showEpisodePanel(anchor: View) {
         val p=player ?: return; val data=detail ?: return; if(!playbackReady || episodeIndex !in data.episodes.indices) return
         val progress=WatchProgress(data.series,data.episodes[episodeIndex],episodeIndex,p.currentPosition.coerceAtLeast(0),p.duration.coerceAtLeast(0),completed || p.playbackState==Player.STATE_ENDED,System.currentTimeMillis())
         library.save(progress)
+        if(progress.completed) library.markEpisodeWatched(data.series.id,data.episodes[episodeIndex])
         cloudAccount.upload(CloudProgress(progress.series,progress.episodeId,progress.episodeIndex,progress.position,progress.duration,progress.updatedAt),data.episodes.size,completed || !p.isPlaying || !foreground)
     }
     private fun releasePlayer() {

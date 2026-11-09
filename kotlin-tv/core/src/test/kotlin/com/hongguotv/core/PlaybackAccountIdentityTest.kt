@@ -10,14 +10,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 线上对照（2026-11-09 实测）：同一台设备、同一集，官方 App 一次就取到清晰度，
- * 我们这种纯匿名请求约十次里只有三四次回 `code=0`，其余是 HTTP 200 空正文。
- * 已登录时取址要带上账号 Cookie，并且每一轮都换一份新注册的身份。
+ * 线上对照（2026-11-09 实测）：同一台手机上未登录时，取址接口对每一集都回 `code=110001`——
+ * 3 部剧各前 3 集加上之前那集全部被拒，换注册身份、换 Cookie 形态都不变；登录带上账号身份后
+ * 同一集立刻能取到清晰度。所以已登录时第一轮就带账号 Cookie，未登录时试一次就说「需要登录」。
  */
 class PlaybackAccountIdentityTest {
     private val tabPath = "/reading/bookapi/video_tab/multi_video_model/v1/"
@@ -40,7 +39,7 @@ class PlaybackAccountIdentityTest {
         .request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK")
         .body(body.toResponseBody("application/json; charset=utf-8".toMediaType())).build()
 
-    /** 只有带账号 Cookie 的那次才给清晰度，照线上「匿名一直空、带账号就成」的形态。 */
+    /** 只有带账号 Cookie 的那次才给清晰度，照实测形态：匿名一律 `code=110001`。 */
     private fun accountOnlyHttp(seen: MutableList<String?>): OkHttpClient =
         OkHttpClient.Builder().addInterceptor { chain ->
             val request = chain.request()
@@ -48,13 +47,12 @@ class PlaybackAccountIdentityTest {
             val body = if (path != tabPath && path != legacyPath) "{}" else {
                 seen += request.header("Cookie")
                 if (seen.last()?.contains("sessionid") == true) payload("123")
-                else if (path == legacyPath) JSONObject().put("code", 110001).toString()
-                else ""
+                else JSONObject().put("code", 110001).toString()
             }
             respond(request, body)
         }.build()
 
-    @Test fun anonymousRejectionsRecoverOnceTheAccountCookieIsSent() {
+    @Test fun accountCookieIsCarriedFromTheFirstRound() {
         val seen = mutableListOf<String?>()
         val attempts = mutableListOf<String>()
         val repository = ContentRepository(
@@ -64,8 +62,8 @@ class PlaybackAccountIdentityTest {
             onPlaybackAttempt = { attempts += it },
         )
         assertEquals("https://example.com/signed", repository.streamLadder("123").renditions.single().url)
-        assertTrue("取址重读没有改带账号 Cookie：$seen", seen.any { it?.contains("sessionid") == true })
-        assertTrue("第一轮应该先按匿名试：$seen", seen.first()?.contains("sessionid") != true)
+        assertTrue("第一轮就应该带账号 Cookie：$seen", seen.first()?.contains("sessionid") == true)
+        assertTrue("带账号一次就成了，不该再退避重读：$seen", seen.size == 1)
         assertTrue("每次尝试的形态没有记录下来：$attempts", attempts.any { it.contains("账号Cookie=带") })
         assertTrue("每一轮都应该换身份：$attempts", attempts.all { it.contains("新注册身份") })
     }
@@ -94,15 +92,38 @@ class PlaybackAccountIdentityTest {
         assertTrue("账号 Cookie 没带上：$carried", carried!!.contains("sessionid=account-cookie"))
     }
 
-    @Test fun signedOutRequestsNeverCarryAnAccountCookie() {
+    /** 账号凭据失效时带账号那一轮也会被拒；这时仍要退回匿名试一次，不能整条路都不通。 */
+    @Test fun expiredAccountCookieStillFallsBackToAnAnonymousRound() {
+        val seen = mutableListOf<String?>()
+        val repository = ContentRepository(
+            OkHttpClient.Builder().addInterceptor { chain ->
+                val request = chain.request()
+                val path = request.url.encodedPath
+                val body = if (path != tabPath && path != legacyPath) "{}" else {
+                    seen += request.header("Cookie")
+                    // 带不带账号都回 110001：模拟账号凭据已失效。
+                    if (path == legacyPath) "" else JSONObject().put("code", 110001).toString()
+                }
+                respond(request, body)
+            }.build(),
+            System::currentTimeMillis,
+            PlaybackDeviceSession { DeviceRegister.Registered("1001", "2001") },
+            accountCookie = { "sessionid=expired-account-cookie" },
+        )
+        val failure = runCatching { repository.streamLadder("123") }.exceptionOrNull()
+        assertTrue("已登录时不该报「需要登录」：$failure", failure !is PlaybackLoginRequiredException)
+        assertTrue("带账号那一轮之后应该再匿名试一轮：$seen", seen.any { it?.contains("sessionid") != true })
+    }
+
+    @Test fun signedOutRequestsSayLoginAfterOneRejection() {
         val seen = mutableListOf<String?>()
         val repository = ContentRepository(
             accountOnlyHttp(seen), System::currentTimeMillis,
             PlaybackDeviceSession { DeviceRegister.Registered("1001", "2001") },
         )
         val failure = runCatching { repository.streamLadder("123") }.exceptionOrNull()
-        assertTrue("未登录时应该照旧报取址被拒：$failure", failure is PlaybackRejectedException)
+        assertTrue("未登录时应该报「需要登录红果账号」：$failure", failure is PlaybackLoginRequiredException)
         assertTrue("未登录却带上了账号 Cookie：$seen", seen.none { it?.contains("sessionid") == true })
-        assertNull("未登录时账号 Cookie 不该出现在任何一次请求里", seen.firstOrNull { it?.contains("sessionid") == true })
+        assertTrue("未登录时不该退避重读四轮，新接口一次、旧接口一次就够：$seen", seen.size == 2)
     }
 }

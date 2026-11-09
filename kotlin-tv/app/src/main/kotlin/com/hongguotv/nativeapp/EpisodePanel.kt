@@ -30,6 +30,8 @@ class EpisodePanel(
     private val locate: (Int,View,(Int)->Unit)->Unit,
     private val select: (Int)->Unit,private val closed: ()->Unit,
     private val lastWatched: Int?=null,private val lastCompleted: Boolean=false,
+    // 哪些集在这台设备上播完过。和 lastWatched 是两件事：那个是「中途停在哪一集」，这些是真看完了。
+    private val done: (Int) -> Boolean = { false },
     private val cache: EpisodeCacheUi?=null
 ) {
     private val dialog=Dialog(activity)
@@ -41,9 +43,9 @@ class EpisodePanel(
     private var summaryLine: TextView?=null
     private fun dp(n: Int)=(n*activity.resources.displayMetrics.density).toInt()
     private fun label(value: String,size: Float=17f)=TextView(activity).apply { text=value; textSize=size; setTextColor(TvStyle.text); setPadding(dp(8),dp(6),dp(8),dp(6)) }
-    private fun button(value: String,active: Boolean=false,action: ()->Unit)=label(value,16f).apply {
+    private fun button(value: String,active: Boolean=false,finished: Boolean=false,action: ()->Unit)=label(value,16f).apply {
         id=View.generateViewId(); gravity=Gravity.CENTER; minHeight=dp(46); isFocusable=true; isFocusableInTouchMode=true
-        fun paint(focus: Boolean) { background=TvStyle.shape(activity,if(focus) TvStyle.accent else if(active) TvStyle.watched else TvStyle.surface,if(focus) Color.TRANSPARENT else TvStyle.edge,radius=6,borderDp=1f); setTextColor(if(focus) TvStyle.background else TvStyle.text) }
+        fun paint(focus: Boolean) { background=TvStyle.shape(activity,if(focus) TvStyle.accent else if(active) TvStyle.watched else if(finished) TvStyle.watchedEpisode else TvStyle.surface,if(focus) Color.TRANSPARENT else TvStyle.edge,radius=6,borderDp=1f); setTextColor(if(focus) TvStyle.background else TvStyle.text) }
         paint(false); setOnFocusChangeListener { _,hasFocus -> paint(hasFocus) }; setOnClickListener { action() }
     }
     fun show() {
@@ -72,7 +74,7 @@ class EpisodePanel(
             val cell=cells[position]
             val label=cellLabel(index)
             if(cell.text.toString()!=label) cell.text=label
-            val description="第 ${index+1} 集"+(if(index==current) "，当前播放" else "")+cacheMark(index)
+            val description="第 ${index+1} 集"+(if(index==current) "，当前播放" else "")+(if(done(index)) "，已看完" else "")+cacheMark(index)
             if(cell.contentDescription?.toString()!=description) cell.contentDescription=description
         }
         summaryLine?.let { line ->
@@ -82,10 +84,13 @@ class EpisodePanel(
         }
     }
     private fun cacheMark(index: Int): String = cache?.label?.invoke(index)?.let { " $it" }.orEmpty()
-    /** 还没看的集：上次看到的那一集之后。没有观看记录就是整部都没看过。 */
-    private fun unwatchedIndexes(): List<Int> = UnwatchedEpisodes.indexes(count,lastWatched)
+    /** 还没看的集：上次看到那一集之后、而且没有单独记成播完过的。两个来源都要算，漏一个就会把看过的重新下一遍。 */
+    private fun unwatchedIndexes(): List<Int> = UnwatchedEpisodes.indexes(count,lastWatched).filterNot { done(it) }
     private fun cellLabel(index: Int): String = "${index+1}${cacheMark(index)}"+when {
-        index==current -> " · 当前";index==lastWatched -> if(lastCompleted) " · 已看" else " · 上次";else -> ""
+        index==current -> " · 当前"
+        index==lastWatched && !lastCompleted -> " · 上次"
+        done(index) || (index==lastWatched && lastCompleted) -> " · 已看"
+        else -> ""
     }
     private fun render() {
         val content=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(14),dp(12),dp(14),dp(12)) }
@@ -138,8 +143,8 @@ class EpisodePanel(
             val row=LinearLayout(activity)
             indexes.forEach { index ->
                 val mark=cacheMark(index)
-                val cell=button(cellLabel(index),index==current) { select(index) }
-                cell.contentDescription="第 ${index+1} 集"+(if(index==current) "，当前播放" else "")+mark
+                val cell=button(cellLabel(index),index==current,done(index)) { select(index) }
+                cell.contentDescription="第 ${index+1} 集"+(if(index==current) "，当前播放" else "")+(if(done(index)) "，已看完" else "")+mark
                 row.addView(cell,LinearLayout.LayoutParams(0,-2,1f).apply { setMargins(dp(3),dp(3),dp(3),dp(3)) }); cells+=cell; cellIndexes+=index
             }
             repeat(5-indexes.size) { row.addView(Space(activity),LinearLayout.LayoutParams(0,1,1f)) }

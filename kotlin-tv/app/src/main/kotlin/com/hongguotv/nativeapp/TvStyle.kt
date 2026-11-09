@@ -41,8 +41,10 @@ object TvStyle {
     val edge=Color.argb(41,255,255,255)
     val edgeFocus=Color.argb(155,255,170,130)
     val scrim=Color.argb(242,7,11,18)
-    /** 已看过的集走绿色语义，和「已看完」一致；半透明绿压在暗底上仍够白字对比。 */
+    /** 中途停下的那一集走绿色语义：它等着人回来接着看，所以比「看完」更醒目。 */
     val watched=Color.argb(96,95,200,166)
+    /** 播完过的集走灰蓝：和「没看」的中性玻璃、和「中途停下」的青绿都分得开，也不跟当前这一集抢注意力。 */
+    val watchedEpisode=Color.argb(92,120,140,165)
     const val POSTER_ASPECT=.7f
 
     fun shape(context: Context,color: Int,border: Int=Color.TRANSPARENT,radius: Int=10,borderDp: Float=2f)=GradientDrawable().apply {
