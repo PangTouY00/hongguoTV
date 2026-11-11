@@ -21,15 +21,21 @@ class PlaybackDeviceRegistrationException(cause: Throwable? = null):
  */
 class PlaybackDeviceSession(
     private val register: (OkHttpClient) -> DeviceRegister.Registered? = { http ->
+        val url=DeviceRegister.url()
         val body=DeviceRegister.payload(VendorConstants.device)
-        val request=Request.Builder().url(DeviceRegister.url())
+        val request=Request.Builder().url(url)
         DeviceRegister.headers(body,VendorConstants.device).forEach { (key,value) -> request.header(key,value) }
         request.post(body.toRequestBody("application/octet-stream".toMediaType()))
         // 注册本身不带账号 Cookie；取消由发起方的 RequestScope 负责。
         val transport=http.newBuilder().cookieJar(CookieJar.NO_COOKIES).build()
-        RequestScope.execute(transport.newCall(request.build())) { response ->
-            DeviceRegister.parse(cloudResponse(response),response.headers("Set-Cookie"))
-        }
+        try {
+            val registered=RequestScope.execute(transport.newCall(request.build())) { response ->
+                DeviceRegister.parse(cloudResponse(response),response.headers("Set-Cookie"))
+            }
+            DeviceRegister.markReachable(url)
+            registered
+        } catch (error: InterruptedIOException) { throw error
+        } catch (error: IOException) { DeviceRegister.markUnreachable(url); throw error }
     }
 ) {
     companion object { val shared=PlaybackDeviceSession() }
