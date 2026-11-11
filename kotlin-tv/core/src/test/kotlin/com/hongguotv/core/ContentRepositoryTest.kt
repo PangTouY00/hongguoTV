@@ -91,8 +91,10 @@ class ContentRepositoryTest {
         }
         for(request in requests) {
             assertEquals("POST",request.method)
-            // 播放取址和搜索、推荐一样要官方那套签名头：裸 query 的请求服务端只回空 body。
-            for(header in listOf("x-gorgon","x-medusa","x-argus","x-ladon","x-khronos")) assertNotNull(request.header(header))
+            // 播放取址要的是真签名（argus/ladon 由 PlayerSigner 按最终 query 生成）；
+            // 占位的 x-gorgon / x-medusa / x-helios 会被服务端当作伪造痕迹，必须不再出现。
+            for(header in listOf("x-argus","x-ladon","x-khronos","x-ss-req-ticket")) assertNotNull(request.header(header))
+            for(header in listOf("x-gorgon","x-medusa","x-helios")) assertNull(request.header(header))
             // 取址走的是播放器那一套请求形态（主仓库 2026-11-06 起同样如此），UA 用 PLAYER_UA。
             assertEquals(VendorConstants.PLAYER_UA,request.header("User-Agent"))
             for(key in listOf("iid","device_id")) {

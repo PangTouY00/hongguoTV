@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -401,6 +402,12 @@ class ContentRepository(
      * 取址请求的公共形态：签名器由**这份注册身份**构造并在同一会话里复用，
      * 于是 query 里的 `device_id` / `iid` 和 medusa 明文里的那一对始终一致（服务端按身份核对两者）。
      * 版本参数与 UA 换成播放器那一套（主仓库 2026-11-06 起同样如此），query 不再带 `ts`。
+     *
+     * 2026-11-11 起服务端进一步校验**真签名**：`Signer` 那套 `x-argus` 只是 `base64(时间戳)`，
+     * 和伪造的 `x-gorgon` / `x-helios` / `x-medusa` 一起出现时请求被判不可信，
+     * 直接回 HTTP 200 + 0 字节（详情、注册都正常，只有播放模型被静默丢弃）。
+     * 所以这里按最终 query 用 `PlayerSigner`（fqapp 的 argus/ladon 移植）重生成签名头，
+     * 并把占位头全部去掉——真头与占位头同时出现必然被拒。
      */
     private fun playbackRequest(
         base: String,
@@ -413,7 +420,21 @@ class ContentRepository(
             "update_version_code" to "73932", "pv_player" to "73932",
             "version_name" to "7.3.9.32",
         )
-        return identity.signer(clock, profile).signPlayback(base, profile + extra, body, now = clock())
+        val signed = identity.signer(clock, profile).signPlayback(base, profile + extra, body, now = clock())
+        val query = signed.url.substringAfter('?', "")
+        val ticket = query.split('&')
+            .firstOrNull { it.startsWith("_rticket=") }
+            ?.substringAfter('=')
+            ?.toLongOrNull()
+        // x-khronos 必须与 URL 的 _rticket 同源，否则签名与 query 对不上。
+        val real = if (ticket != null) PlayerSigner.headers(query, body, ts = ticket / 1000, ticket = ticket)
+        else PlayerSigner.headers(query, body)
+        val placeholder = setOf(
+            "x-gorgon", "x-helios", "x-medusa", "x-argus", "x-ladon", "x-khronos",
+            "x-ss-stub", "x-ss-req-ticket", "x-medias", "x-tt-dt",
+        )
+        val kept = signed.headers.filterKeys { it.lowercase() !in placeholder }
+        return signed.copy(headers = kept + real)
     }
     /**
      * 读取一集的播放信息。
@@ -607,8 +628,19 @@ class ContentRepository(
         val raw=model.opt("fallback_api")
         val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
         if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")
-        val info=JSONObject(text(fallback,retryTransient=true)).optJSONObject("video_info")?.optJSONObject("data") ?: throw IOException("没有播放资源")
-        val videoList=info.optJSONObject("video_list") ?: throw IOException("没有可用清晰度")
+        var info=JSONObject(text(fallback,retryTransient=true)).optJSONObject("video_info")?.optJSONObject("data") ?: throw IOException("没有播放资源")
+        var videoList=info.optJSONObject("video_list") ?: throw IOException("没有可用清晰度")
+        // 有些集服务端只发 bytevc2（Android 的 MP4 解不出视频轨）。官方播放器对这种内容还有一条
+        // 兼容请求：codec_type=0&force_codec=h264。参数不保证一定回 h264，取到之后仍按实际 codec 选档。
+        val offered=videoList.keys().asSequence().mapNotNull { videoList.optJSONObject(it) }.toList()
+        if(offered.isNotEmpty() && offered.all {
+                it.str("main_url").isNotBlank() && it.str("codec_type").lowercase() in setOf("bytevc2","bvc2") }) {
+            val compatible=fallback.toHttpUrl().newBuilder()
+                .setQueryParameter("codec_type","0").setQueryParameter("force_codec","h264").build().toString()
+            // 整份 data 都要换成兼容请求那一份：解密 main_url 用的 key_seed 跟着响应走，混用必然解不开。
+            info=JSONObject(text(compatible,retryTransient=true)).optJSONObject("video_info")?.optJSONObject("data") ?: throw IOException("没有播放资源")
+            videoList=info.optJSONObject("video_list") ?: throw IOException("没有可用清晰度")
+        }
         // ByteVC2 resources can expose playable audio but no video track in Android's MP4 extractor.
         // Keep missing legacy codec labels usable, but never select a known incompatible variant.
         val rows=videoList.keys().asSequence().mapNotNull { k -> videoList.optJSONObject(k)?.let { k to it } }.filter {
