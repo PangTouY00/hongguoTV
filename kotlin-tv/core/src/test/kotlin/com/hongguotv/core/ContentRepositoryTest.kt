@@ -93,7 +93,8 @@ class ContentRepositoryTest {
             assertEquals("POST",request.method)
             // 播放取址和搜索、推荐一样要官方那套签名头：裸 query 的请求服务端只回空 body。
             for(header in listOf("x-gorgon","x-medusa","x-argus","x-ladon","x-khronos")) assertNotNull(request.header(header))
-            assertEquals(VendorConstants.VIDEO_UA,request.header("User-Agent"))
+            // 取址走的是播放器那一套请求形态（主仓库 2026-11-06 起同样如此），UA 用 PLAYER_UA。
+            assertEquals(VendorConstants.PLAYER_UA,request.header("User-Agent"))
             for(key in listOf("iid","device_id")) {
                 val value=request.url.queryParameter(key)!!
                 // 播放只认注册下发的身份，不再自己编 19 位随机数字。

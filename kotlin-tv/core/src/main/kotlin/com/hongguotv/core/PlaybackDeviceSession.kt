@@ -34,7 +34,18 @@ class PlaybackDeviceSession(
 ) {
     companion object { val shared=PlaybackDeviceSession() }
 
-    internal data class Profile(val values: Map<String,String>,val cookie: String)
+    internal data class Profile(val values: Map<String,String>,val cookie: String) {
+        /**
+         * 同一份注册会话复用同一个签名器：medusa 明文里的「进程 nonce」与「进程启动时间」保持不动，
+         * 逐次变化的只有时间戳、正文摘要与签名。签名器必须用**这份身份**构造——medusa 里写死的
+         * device_id 和 query 里带的那一对不一致时，服务端按身份核对会直接拒。
+         */
+        private var playbackSigner: Signer?=null
+
+        @Synchronized
+        fun signer(clock: () -> Long, values: Map<String,String>): Signer =
+            playbackSigner ?: Signer(clock,values).also { playbackSigner=it }
+    }
 
     private val cdid=UUID.randomUUID().toString()
     private var ready: Profile?=null

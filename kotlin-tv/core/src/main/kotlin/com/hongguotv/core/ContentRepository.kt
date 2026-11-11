@@ -398,6 +398,24 @@ class ContentRepository(
         return if(selected.quality>maxQuality) info.copy(quality=info.quality+"（兼容资源）") else info
     }
     /**
+     * 取址请求的公共形态：签名器由**这份注册身份**构造并在同一会话里复用，
+     * 于是 query 里的 `device_id` / `iid` 和 medusa 明文里的那一对始终一致（服务端按身份核对两者）。
+     * 版本参数与 UA 换成播放器那一套（主仓库 2026-11-06 起同样如此），query 不再带 `ts`。
+     */
+    private fun playbackRequest(
+        base: String,
+        identity: PlaybackDeviceSession.Profile,
+        extra: Map<String, String> = emptyMap(),
+        body: ByteArray? = null,
+    ): Signer.Request {
+        val profile = identity.values + mapOf(
+            "version_code" to "73932", "manifest_version_code" to "73932",
+            "update_version_code" to "73932", "pv_player" to "73932",
+            "version_name" to "7.3.9.32",
+        )
+        return identity.signer(clock, profile).signPlayback(base, profile + extra, body, now = clock())
+    }
+    /**
      * 读取一集的播放信息。
      *
      * 只认注册下发的匿名设备身份：随机编的 device_id 换回的就是 HTTP 200 空响应。
@@ -410,7 +428,7 @@ class ContentRepository(
         val identity=playbackSession.profile(http)
         var last: IOException?=null
         for(attempt in 0 until 3) {
-            val signed=signer.sign("$PLAYER_HOST/novel/player/multi_video_model/v1/",identity.values,payload)
+            val signed=playbackRequest("$PLAYER_HOST/novel/player/multi_video_model/v1/",identity,body=payload)
             val headers=linkedMapOf<String,String>()
             val cookie=playbackCookie(identity.cookie,accountCookie())
             if(cookie.isNotBlank()) headers["Cookie"]=cookie
@@ -518,17 +536,18 @@ class ContentRepository(
     /**
      * 官方 App 现行的取播放信息接口。参数缺任意一项服务端回 100103；`video_platform`
      * 只接受 1024，`device_level` 用 1 最稳（3 会把部分集下发成 bytevc2）。
+     * `from_video_id` 是官方 `GetVideoModelRequest` 里的字段，只取一集时留空也要带上。
      */
     private fun tabLadder(id: String, withAccount: Boolean): StreamLadder? {
         val identity=playbackSession.profile(http)
         val params=linkedMapOf(
             "video_id" to id,"video_id_type" to "0","device_level" to "1",
             "need_all_video_definition" to "1","need_mp4_align" to "0","use_os_player" to "0",
-            "video_platform" to "1024","source" to "0",
+            "video_platform" to "1024","source" to "0","from_video_id" to "",
         )
         // 这个接口和搜索、推荐一样要官方那套签名头。不带签名的请求自 2026-11-05 起一律回
         // HTTP 200 + 0 字节：换域名、换 UA、换出口 IP、补参数都还是空，实测只有带签名两种回数据。
-        val signed=signer.sign("$PLAYER_HOST/reading/bookapi/video_tab/multi_video_model/v1/",identity.values+params)
+        val signed=playbackRequest("$PLAYER_HOST/reading/bookapi/video_tab/multi_video_model/v1/",identity,params)
         val headers=linkedMapOf<String,String>()
         val cookie=playbackCookie(identity.cookie,if(withAccount) accountCookie() else "")
         if(cookie.isNotBlank()) headers["Cookie"]=cookie

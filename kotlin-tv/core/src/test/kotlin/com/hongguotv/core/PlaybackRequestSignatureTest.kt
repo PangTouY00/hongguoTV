@@ -67,11 +67,12 @@ class PlaybackRequestSignatureTest {
         assertEquals("123", tab.url.queryParameter("video_id"))
         assertEquals("1024", tab.url.queryParameter("video_platform"))
         assertEquals("1", tab.url.queryParameter("device_level"))
-        assertNotNull(tab.url.queryParameter("ts"))
+        // 官方取播放信息的请求不带 ts，只带 _rticket（主仓库的播放签名同此）。
+        assertNull(tab.url.queryParameter("ts"))
         assertNotNull(tab.url.queryParameter("_rticket"))
     }
 
-    @Test fun tabRequestDoesNotSendEmptyParameters() {
+    @Test fun tabRequestSendsOnlyTheOfficialParameterSet() {
         val requests = mutableListOf<Request>()
         val repository = repository { request ->
             requests += request
@@ -79,9 +80,9 @@ class PlaybackRequestSignatureTest {
         }
         repository.streamLadder("123")
         val tab = requests.single { it.url.encodedPath == tabPath }
-        // 空值参数（from_video_id=）不是官方请求的一部分，服务端会把它当成异常客户端。
-        assertNull(tab.url.queryParameter("from_video_id"))
-        assertTrue(tab.url.queryParameterNames.none { tab.url.queryParameter(it).isNullOrEmpty() })
+        // from_video_id 是官方 GetVideoModelRequest 里的字段，只取一集时留空也要带上；其余参数一律非空。
+        assertTrue(tab.url.queryParameterNames.contains("from_video_id"))
+        assertTrue(tab.url.queryParameterNames.filter { it != "from_video_id" }.all { tab.url.queryParameter(it)?.isNotEmpty() == true })
     }
 
     @Test fun legacyPlaybackModelRequestIsSignedWithItsBody() {
