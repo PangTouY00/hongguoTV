@@ -25,7 +25,7 @@ import java.util.zip.GZIPOutputStream
  * ## 协议（照抓包逐字段复现）
  *
  * ```
- * POST https://log5-applog-lf.fqnovel.com/service/2/device_register/
+ * POST https://is.snssdk.com/service/2/device_register/
  *      ?tt_data=a&cronet_version=…&ttnet_version=…&use_store_region_cookie=1
  * Content-Type: application/octet-stream;tt-data=a
  * log-encode-type: gzip
@@ -49,8 +49,14 @@ import java.util.zip.GZIPOutputStream
  *    `x-helios` / `x-medusa`，query 里也没有 `ts` / `_rticket`。带上签名头反而会被判异常客户端。
  */
 object DeviceRegister {
-    /** 注册接口的域名。`is.snssdk.com` 与 `log5-applog-lf` 等价，抓包里两个都在用。 */
-    private const val HOST = "https://log5-applog-lf.fqnovel.com"
+    /**
+     * 注册接口的域名。两个都在官方抓包里出现过。
+     *
+     * 2026-11-11 实测 `log5-applog-lf.fqnovel.com` 与 `log5-applog-sinfonlineb.fqnovel.com` 的 A 记录
+     * 都变成了 `0.0.0.0`（连接直接失败），同一时刻 `is.snssdk.com` 照常下发 `device_id` / `install_id`。
+     * 所以按顺序试，并把这个进程里已经证明连不上的那个记下来，不再让每次播放都先撞一遍。
+     */
+    internal val HOSTS = listOf("https://is.snssdk.com", "https://log5-applog-lf.fqnovel.com")
     private const val PATH = "/service/2/device_register/"
     private const val QUERY = "?tt_data=a&cronet_version=8d40f833_2026-03-03&ttnet_version=4.2.243.31-douyin&use_store_region_cookie=1"
     /** ttEncrypt 的固定前缀（`libEncryptor.so` 的魔数）。 */
@@ -160,7 +166,17 @@ object DeviceRegister {
         "x-ss-stub" to digest("MD5", body).hex().uppercase()
     )
 
-    fun url() = HOST + PATH + QUERY
+    /** 这个进程里已经证明连不上（或对该路径回非 2xx）的注册域名。 */
+    private val unreachable = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    private fun hostOf(requestUrl: String) = HOSTS.firstOrNull { requestUrl.startsWith(it) }
+
+    /** 当前该用的注册地址：跳过这个进程里已经证明连不上的那些，全都不通时回到第一个再试。 */
+    fun url() = (HOSTS.firstOrNull { it !in unreachable } ?: HOSTS.first()) + PATH + QUERY
+
+    /** 网络层失败的那个域名记下来；能走到解析这一步说明域名本身是通的。 */
+    fun markUnreachable(requestUrl: String) { hostOf(requestUrl)?.let { unreachable.add(it) } }
+    fun markReachable(requestUrl: String) { hostOf(requestUrl)?.let { unreachable.remove(it) } }
 
     /**
      * 解析注册响应。

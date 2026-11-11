@@ -48,13 +48,18 @@ data class CloudReservation(val series: Series,val online: Boolean,val publishAt
 
 class CloudAccountClient(private val http: OkHttpClient) {
     fun registerDevice(): DeviceRegister.Registered? {
+        val url=DeviceRegister.url()
         val body=DeviceRegister.payload(VendorConstants.device)
-        val request=Request.Builder().url(DeviceRegister.url())
+        val request=Request.Builder().url(url)
         DeviceRegister.headers(body,VendorConstants.device).forEach { (k,v) -> request.header(k,v) }
         request.post(body.toRequestBody("application/octet-stream".toMediaType()))
-        return http.newCall(request.build()).execute().use {
-            DeviceRegister.parse(cloudResponse(it),it.headers("Set-Cookie"))
-        }
+        try {
+            val registered=http.newCall(request.build()).execute().use {
+                DeviceRegister.parse(cloudResponse(it),it.headers("Set-Cookie"))
+            }
+            DeviceRegister.markReachable(url)
+            return registered
+        } catch (error: IOException) { DeviceRegister.markUnreachable(url); throw error }
     }
     private fun json(credentials: AccountCredentials,path: String,params: Map<String,String> = emptyMap(),body: ByteArray? = null,gzip: Boolean=false): JSONObject {
         val device=VendorConstants.device.toMutableMap().apply {
