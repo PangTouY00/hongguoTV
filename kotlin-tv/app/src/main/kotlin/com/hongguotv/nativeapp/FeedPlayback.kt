@@ -44,7 +44,9 @@ internal class PublicFeedBackend(
     }
     private val closed=java.util.concurrent.atomic.AtomicBoolean(false)
     private val repository=ContentRepository(http,playbackSession=playbackSession,
-        accountCookie={ account?.cookie.orEmpty() })
+        accountCookie={ account?.cookie.orEmpty() },
+        // 首页试播失败界面上什么都不显示（卡片照常出），不接进日志就没人知道它取址没成。
+        onPlaybackAttempt={ DiagLog.info("Home address: $it") })
     private val recommendationAccount=account
     private val cacheIdentity=account?.let {
         java.security.MessageDigest.getInstance("SHA-256").digest(it.cookie.toByteArray(Charsets.UTF_8)).joinToString("") { b -> "%02x".format(b.toInt() and 255) }

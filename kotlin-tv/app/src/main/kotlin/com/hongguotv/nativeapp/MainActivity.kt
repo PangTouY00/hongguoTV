@@ -38,7 +38,7 @@ class MainActivity: Activity() {
     private val repository=ContentRepository(
         playbackSession=PlaybackDeviceSession.shared,
         accountCookie={ if(::cloudAccount.isInitialized) cloudAccount.accountCookie() else "" },
-        onPlaybackAttempt={ DiagLog.info("Playback address attempt: $it") },
+        onPlaybackAttempt={ DiagLog.info("Playback address: $it") },
     )
     // 缓存落在应用自己的外部私有目录：不需要任何存储权限，电视上也不会弹权限框。
     // 代价是卸载即清，这一点在缓存管理里写明了。外部目录建不出来或写不进去时退回应用内部目录：
