@@ -95,8 +95,23 @@ class StreamLadder(val renditions: List<Rendition>) {
     companion object { private val AVC_LABELS = setOf("h264", "avc", "avc1", "avc3") }
 }
 class ContentHttpException(val statusCode: Int): IOException("内容请求失败（HTTP $statusCode）")
-/** HTTP 200 with no body: the website renderer failed transiently; safe to retry. */
-internal class EmptyContentException: IOException("内容响应为空")
+/**
+ * HTTP 200 with no body: the website renderer failed transiently; safe to retry.
+ *
+ * 状态码、字节数与服务端 logid 都带上：同一个「播不了」背后可能是 CDN 软拦、身份不被认、
+ * 或这一集本身没有资源，只有这三行数字能把它们分开。logid 是字节系网关给每次请求的编号，
+ * 拿着它才能确认服务端真的收到并处理了这个请求。
+ */
+internal class EmptyContentException(
+    val statusCode: Int = 0,
+    val bytes: Int = -1,
+    val serverLogId: String = "",
+): IOException(
+    "内容响应为空" + (if (statusCode > 0)
+        "（HTTP $statusCode，响应 $bytes 字节" +
+            (if (serverLogId.isNotBlank()) "，服务端 logid $serverLogId" else "") + "）"
+    else "")
+)
 class SearchSessionExpiredException: IOException("搜索结果已过期，请从第 1 页重新搜索")
 /** 搜索和播放一样只认注册下发的身份；注册失败时单独报，别显示成「网络失败」或 HTTP 5xx。 */
 class SearchIdentityException(cause: Throwable? = null): IOException("搜索需要先完成设备注册，请稍后重试", cause)
@@ -172,14 +187,15 @@ class ContentRepository(
         // 榜单用收紧超时的专用客户端，其余请求沿用默认客户端。
         fun fetch() = RequestScope.execute(client.newCall(request.build())) { response ->
             if (!response.isSuccessful) throw ContentHttpException(response.code)
-            val body = response.body ?: throw EmptyContentException()
+            val body = response.body ?: throw EmptyContentException(response.code)
             if (body.contentLength() > 16*1024*1024) throw IOException("内容响应过大")
             val input=body.byteStream(); val out=java.io.ByteArrayOutputStream(); val buffer=ByteArray(8192)
             while(out.size()<=16*1024*1024) { val n=input.read(buffer); if(n<0) break; out.write(buffer,0,n) }; val bytes=out.toByteArray()
             if(bytes.size > 16*1024*1024) throw IOException("内容响应过大")
             // Ranking pages intermittently answer HTTP 200 with an empty body while the
             // server renderer restarts; retry it instead of reporting broken content.
-            if(bytes.isEmpty()) throw EmptyContentException()
+            if(bytes.isEmpty()) throw EmptyContentException(
+                response.code, bytes.size, response.header("x-tt-logid").orEmpty())
             String(bytes,Charsets.UTF_8)
         }
         var attempt=0
@@ -505,6 +521,9 @@ class ContentRepository(
         var tabError: IOException? = null
         var anonymousRejected=false
         val account=accountCookie()
+        // 请求的是哪一集、手上有没有账号凭据、这台机器的时钟读数：这三件事不写下来，后面每一行失败都只能写成「取不到」。
+        // 签名里的时间戳用的就是这个 clock，它和日志行首的时间对不上时，问题在时钟而不在接口。
+        onPlaybackAttempt("取址目标 video_id=$id 账号凭据=${if(account.isBlank()) "无" else "有"} 本机epochSec=${clock() / 1000}")
         // 服务端对**每份注册身份**只放行有限几次取址：同一份身份一旦被拒就一直回空，
         // 换一份新注册的身份则立刻放行（实测：同一身份连试 8 次全空，换新身份第 1~2 次就成）。
         // 所以每一轮都先作废手上这份，再取一份新的——首页试播、下一集预热和用户点播
@@ -529,7 +548,7 @@ class ContentRepository(
                 break
             } catch (error: IOException) {
                 tabError=error
-                reportPlaybackAttempt(round,withAccount,error.javaClass.simpleName)
+                reportPlaybackAttempt(round,withAccount,describeError(error))
                 // 未登录时这个接口对每一集都回 110001（实测 3 部剧各前 3 集全部被拒），
                 // 再退避三轮只是让人对着屏幕等；网络类失败照旧重试。
                 if(account.isBlank() && addressRefusal(error)) { anonymousRejected=true; break }
@@ -544,7 +563,12 @@ class ContentRepository(
             // 这时该说的是「去登录」，不是「暂时取不到」。
             if(anonymousRejected && addressRefusal(error)) throw PlaybackLoginRequiredException()
             // 旧接口常态只有空 body，那种情况下新接口的错误码更有信息量；其它错误照旧抛。
-            throw if(error is EmptyContentException && tabError!=null) tabError else error
+            if(error is EmptyContentException && tabError!=null) {
+                // 换掉抛出的异常可以，把旧接口那条丢掉就分不清「两个接口都空」和「只有新接口空」了。
+                onPlaybackAttempt("备用接口同样失败 → ${describeError(error)}")
+                throw tabError
+            }
+            throw error
         }
     }
     /** 取址被服务端拒（网络失败不算）：未登录时这就是「需要登录」的信号。 */
@@ -552,6 +576,9 @@ class ContentRepository(
         error is PlaybackRejectedException || error is EmptyPlaybackResponseException || error is EmptyContentException
     private fun reportPlaybackAttempt(round: Int, withAccount: Boolean, outcome: String) =
         onPlaybackAttempt("取址第${round+1}轮 新注册身份 账号Cookie=${if(withAccount) "带" else "不带"} → $outcome")
+    /** 只报类名不够：同一个类名背后可能是 CDN 软拦、身份不被认，或这一集本身没有资源。 */
+    private fun describeError(error: IOException) =
+        "${error.javaClass.simpleName}: ${error.message ?: "无详细信息"}"
     /** 注册下发的设备 Cookie 与账号 Cookie 并成一条；同名时以账号那份为准。 */
     private fun playbackCookie(device: String, account: String): String {
         if(account.isBlank()) return device
@@ -610,7 +637,7 @@ class ContentRepository(
     private fun compatibleLadder(id: String, withAccount: Boolean, ladder: StreamLadder): StreamLadder? {
         if(ladder.renditions.isEmpty() || ladder.renditions.any { !vendorOnlyCodecs.contains(it.codec) }) return null
         val alternative=try { tabLadder(id,withAccount,compatible = true) } catch (error: IOException) {
-            reportPlaybackAttempt(0,false,"全档私有编码，兼容请求失败 ${error.javaClass.simpleName}")
+            reportPlaybackAttempt(0,false,"全档私有编码，兼容请求失败 ${describeError(error)}")
             return null
         }
         if(alternative==null || alternative.renditions.isEmpty() ||

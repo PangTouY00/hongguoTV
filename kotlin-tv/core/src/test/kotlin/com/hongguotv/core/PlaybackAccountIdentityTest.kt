@@ -65,7 +65,8 @@ class PlaybackAccountIdentityTest {
         assertTrue("第一轮就应该带账号 Cookie：$seen", seen.first()?.contains("sessionid") == true)
         assertTrue("带账号一次就成了，不该再退避重读：$seen", seen.size == 1)
         assertTrue("每次尝试的形态没有记录下来：$attempts", attempts.any { it.contains("账号Cookie=带") })
-        assertTrue("每一轮都应该换身份：$attempts", attempts.all { it.contains("新注册身份") })
+        assertTrue("取址目标与本机时钟应该记下来：$attempts", attempts.any { it.contains("取址目标 video_id=123") && it.contains("本机epochSec=") })
+        assertTrue("每一轮都应该换身份：$attempts", attempts.filter { it.startsWith("取址第") }.all { it.contains("新注册身份") })
     }
 
     @Test fun deviceAndAccountCookiesAreMergedIntoOneHeader() {
