@@ -45,12 +45,20 @@ internal fun unplayableRenditionMessage(renditions: List<Rendition>): String {
 internal fun openStream(http: OkHttpClient,repository: ContentRepository,id: String,maxQuality: Int,
     failed: (Rendition)->Boolean = { false },initialBytes: Int=256*1024,fresh: Boolean=false): OpenedStream? {
     val ladder=repository.streamLadder(id,fresh)
-    for(rendition in ladder.playbackOrder(maxQuality,failed)) {
+    // 这一行是排查的起点：源里到底给了哪几档、每档是什么编码、有没有带解密密钥。
+    DiagLog.info("Stream ladder episode=$id want=${maxQuality}P fresh=$fresh tiers=${if(ladder.renditions.isEmpty()) "无" else DiagLog.ladderSummary(ladder.renditions)}")
+    val order=ladder.playbackOrder(maxQuality,failed)
+    DiagLog.info("Stream attempt order episode=$id ${if(order.isEmpty()) "无" else order.joinToString(" -> ") { "${it.quality}P ${it.codec}" }}")
+    for(rendition in order) {
         val video=RemoteVideo(http,rendition.toStreamInfo())
         try {
             video.prepare(initialBytes)
+            DiagLog.info("Stream opened episode=$id ${rendition.quality}P ${rendition.codec}")
             return OpenedStream(video,rendition,ladder.renditions,video.trackInfo())
-        } catch(error: Exception) { video.close(); throw error }
+        } catch(error: Exception) {
+            DiagLog.warn("Stream attempt failed episode=$id ${rendition.quality}P ${rendition.codec} ${DiagLog.describe(error)}")
+            video.close(); throw error
+        }
     }
     // 源里一档都没有是另一回事（地址查询本身没拿到资源），留给调用方按原来的说法报。
     if(ladder.renditions.isNotEmpty()) throw NoDecodableRenditionException(unplayableRenditionMessage(ladder.renditions))
@@ -68,9 +76,9 @@ internal fun openCached(cache: EpisodeCache,id: String,maxQuality: Int,failed: (
     try {
         video.prepare(256*1024)
         val track=video.trackInfo()
-        if(failed(track)) { Log.i("HongguoTV","Cached ${video.record.quality}P has already failed to decode on this device; trying the online ladder instead"); video.close(); return null }
+        if(failed(track)) { DiagLog.info("Cached ${video.record.quality}P has already failed to decode on this device; trying the online ladder instead"); video.close(); return null }
         return OpenedStream(video,null,emptyList(),track,null,true)
-    } catch(error: Exception) { Log.w("HongguoTV","Cached episode could not be read: ${error.javaClass.simpleName}"); video.close(); return null }
+    } catch(error: Exception) { DiagLog.warn("Cached episode could not be read: ${error.javaClass.simpleName}"); video.close(); return null }
 }
 /** Next manual retry tier: only offer a lower option than what was already attempted. */
 internal fun nextLowerQuality(attempted: Int): Int? = PlaybackQuality.options.filter { it<attempted }.maxOrNull()

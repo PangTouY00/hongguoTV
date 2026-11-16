@@ -149,7 +149,7 @@ class CacheManager(
                     synchronized(this) { task.state = State.FAILED; task.percent = 0
                         task.message = error.message ?: error.javaClass.simpleName }
                     failures++
-                    android.util.Log.w("HongguoTV", "Episode cache failed episode=${task.episodeId}: ${error.javaClass.simpleName} ${error.message}")
+                    DiagLog.warn( "Episode cache failed episode=${task.episodeId}: ${error.javaClass.simpleName} ${error.message}")
                 }
                 synchronized(this) { running = null; if (task.canceled) known.remove(task.episodeId) }
                 notifyUi()
@@ -176,7 +176,7 @@ class CacheManager(
             try { store(task, rendition); return }
             catch (error: Exception) {
                 last = error
-                android.util.Log.w("HongguoTV", "Cache attempt failed episode=${task.episodeId} quality=${rendition.quality} codec=${rendition.codec}: ${error.javaClass.simpleName} ${error.message}")
+                DiagLog.warn( "Cache attempt failed episode=${task.episodeId} quality=${rendition.quality} codec=${rendition.codec}: ${error.javaClass.simpleName} ${error.message}")
                 // 取消、空间不足、目录不可用、这一集本来就没有资源：换清晰度不会改变结果，别白试一遍。
                 if (task.canceled || error is NotEnoughSpace || error is CacheStorageException || error is NoRenditionException) throw error
             }
@@ -211,7 +211,7 @@ class CacheManager(
                 seriesId = task.series.id, seriesTitle = task.series.title, cover = task.series.cover,
                 episodeIndex = task.episodeIndex)
             synchronized(this) { known.remove(task.episodeId) }
-            android.util.Log.i("HongguoTV", "Episode cached episode=${task.episodeId} quality=${rendition.quality} bytes=${video.total}")
+            DiagLog.info( "Episode cached episode=${task.episodeId} quality=${rendition.quality} bytes=${video.total}")
         } finally {
             video.close(); synchronized(this) { if (activeVideo === video) activeVideo = null }
         }

@@ -34,7 +34,7 @@ object CodecCapabilities {
     fun learnFailure(codec: String,width: Int?,height: Int?): Boolean {
         val key=lessons.remember(codec,width,height) ?: return false
         prefs?.edit()?.putStringSet("failures",lessons.keys())?.apply()
-        android.util.Log.w("HongguoTV","Learned decoder failure $key")
+        DiagLog.warn("Learned decoder failure $key")
         return true
     }
     fun resetLearned() {
@@ -54,6 +54,6 @@ object CodecCapabilities {
                     }
             }
         }.getOrNull() ?: return
-        android.util.Log.i("HongguoTV","Decoder capabilities: ${lines.joinToString("; ")}")
+        DiagLog.info("Decoder capabilities: ${lines.joinToString("; ")}")
     }
 }

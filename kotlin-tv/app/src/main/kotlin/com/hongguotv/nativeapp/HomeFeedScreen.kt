@@ -253,7 +253,7 @@ internal class HomeFeedScreen(
         else if(prefetchTarget==series.id && prefetchJob!=null) {
             // Promote the in-flight download instead of cancelling and resolving the same URL again.
             loading=true
-            android.util.Log.i("HongguoTV","Home promoted in-flight preload")
+            DiagLog.info("Home promoted in-flight preload")
         } else request({ backend.trial(series) },{ it.close() },::attach)
     }
     private fun attach(next: TrialClip) {

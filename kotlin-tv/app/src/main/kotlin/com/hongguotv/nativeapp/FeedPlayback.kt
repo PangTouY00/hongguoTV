@@ -60,13 +60,13 @@ internal class PublicFeedBackend(
     }
     private fun <T> timed(stage: String, action: ()->T): T {
         val start=android.os.SystemClock.elapsedRealtime()
-        try { return action() } finally { android.util.Log.i("HongguoTV","Home $stage elapsedMs=${android.os.SystemClock.elapsedRealtime()-start}") }
+        try { return action() } finally { DiagLog.info("Home $stage elapsedMs=${android.os.SystemClock.elapsedRealtime()-start}") }
     }
     private fun page(source: String,page: Int,cursor: RecommendationCursor,fetch: ()->CatalogPage): CatalogPage {
         if(page==1) startupCache?.load(cacheIdentity,source)?.let { cached ->
             if(cursor.restoreStarter(cached)) {
                 synchronized(trialHints) { startupPages[source]=cached }
-                android.util.Log.i("HongguoTV","Home starter-cache hit")
+                DiagLog.info("Home starter-cache hit")
                 return rememberHints(cached)
             }
         }
@@ -195,7 +195,7 @@ internal class Media3TrialPlayback(context: Context): TrialPlayback {
             }
             override fun onPlayerError(error: PlaybackException) { if(active()) status?.invoke(TrialStatus.ERROR) }
             override fun onRenderedFirstFrame() {
-                if(active()) android.util.Log.i("HongguoTV","Home first-frame elapsedMs=${android.os.SystemClock.elapsedRealtime()-startedAt}")
+                if(active()) DiagLog.info("Home first-frame elapsedMs=${android.os.SystemClock.elapsedRealtime()-startedAt}")
             }
         })
     }

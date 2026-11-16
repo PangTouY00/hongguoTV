@@ -27,9 +27,9 @@ class Library(context: Context) {
     private val prefs by lazy { app.getSharedPreferences("native-library-v1", Context.MODE_PRIVATE) }
     private val homePrefs by lazy { app.getSharedPreferences("native-home-cache-v1", Context.MODE_PRIVATE) }
     private val writes = LatestWriteQueue<String, () -> Any?>("hongguotv-library-write", write = { batch -> commit(prefs, batch) },
-        failed = { Log.w("HongguoTV", "Local library commit failed; pending changes retained for retry") })
+        failed = { DiagLog.warn( "Local library commit failed; pending changes retained for retry") })
     private val homeWrites = LatestWriteQueue<String, () -> Any?>("hongguotv-home-write", write = { batch -> commit(homePrefs, batch) },
-        failed = { Log.w("HongguoTV", "Home cache commit failed") })
+        failed = { DiagLog.warn( "Home cache commit failed") })
     private var index: LibraryIndex? = null
     // 逐集已看：播完一集记一笔，只存本机。云端上报的仍是「看到第几集」，这份不跟着走。
     private val episodeIds = LinkedHashMap<String, MutableSet<String>>()
@@ -42,7 +42,7 @@ class Library(context: Context) {
     val isLoaded get() = index != null
 
     /** Call before showing the first page. Successful/error callbacks run on the main thread. */
-    fun loadAsync(onFailure: (Throwable) -> Unit = { Log.e("HongguoTV", "Local library failed to load", it) }, onReady: () -> Unit) {
+    fun loadAsync(onFailure: (Throwable) -> Unit = { DiagLog.error( "Local library failed to load", it) }, onReady: () -> Unit) {
         check(!closed)
         if (isLoaded) { onReady(); return }
         readyCallbacks += onReady

@@ -38,7 +38,7 @@ class MainActivity: Activity() {
     private val repository=ContentRepository(
         playbackSession=PlaybackDeviceSession.shared,
         accountCookie={ if(::cloudAccount.isInitialized) cloudAccount.accountCookie() else "" },
-        onPlaybackAttempt={ android.util.Log.i("HongguoTV","Playback address attempt: $it") },
+        onPlaybackAttempt={ DiagLog.info("Playback address attempt: $it") },
     )
     // 缓存落在应用自己的外部私有目录：不需要任何存储权限，电视上也不会弹权限框。
     // 代价是卸载即清，这一点在缓存管理里写明了。外部目录建不出来或写不进去时退回应用内部目录：
@@ -165,7 +165,7 @@ class MainActivity: Activity() {
         if(foreground && screen=="player" && playError && autoRecovery) {
             if(!networkAvailable()) scheduleRecovery()
             else if(recovery.consume()) {
-                android.util.Log.i("HongguoTV","Automatic playback recovery ${recovery.attempts}/3 at ${retryPosition}ms")
+                DiagLog.info("Automatic playback recovery ${recovery.attempts}/3 at ${retryPosition}ms")
                 playEpisode(episodeIndex,retryPosition,retryAutoplay,recovering=true)
             }
         }
@@ -336,7 +336,7 @@ class MainActivity: Activity() {
         // 蜂窝网络下只预热当前默认榜，其余榜单留给用户真正打开时再读，避免后台跑掉二十页流量。
         val metered=connectivity.isActiveNetworkMetered
         val boards=if(metered) listOf(rankBrowser.board) else RankBoard.entries.toList()
-        android.util.Log.i("HongguoTV","Rank prefetch starting boards=${boards.size} metered=$metered")
+        DiagLog.info("Rank prefetch starting boards=${boards.size} metered=$metered")
         boards.forEach { board -> warmRankBoard(board) }
     }
     /** 与排行榜页共用同一个状态机：同榜在途自动去重，所以预取和手动刷新不会互相重复。 */
@@ -352,7 +352,7 @@ class MainActivity: Activity() {
                 if(snapshot!=null) rankPrefetched=true
                 // 预取完成时用户可能已经停在这个榜上：把已经拿到的数据补进界面，而不是让他继续等。
                 if(board==rankBrowser.board) rankScreen?.boardUpdated(board)
-                android.util.Log.i("HongguoTV","Rank prefetch board=${board.label} ok=${snapshot!=null} items=${snapshot?.items?.size ?: 0} pages=${snapshot?.pagesRead ?: 0}/${snapshot?.pagesTotal ?: 0} problem=${result.exceptionOrNull()?.message ?: ""}")
+                DiagLog.info("Rank prefetch board=${board.label} ok=${snapshot!=null} items=${snapshot?.items?.size ?: 0} pages=${snapshot?.pagesRead ?: 0}/${snapshot?.pagesTotal ?: 0} problem=${result.exceptionOrNull()?.message ?: ""}")
             }
         }
     }
@@ -1005,11 +1005,11 @@ class MainActivity: Activity() {
         if(focusNav) nav[0].requestFocus() else if(focusType) typeButtons.getValue(library.contentType).requestFocus()
         if(hot.isNotEmpty() && !homeContentLogged) {
             homeContentLogged=true
-            body.post { android.util.Log.i("HongguoTV","Home content ready cached=$homeFromCache elapsedMs=${android.os.SystemClock.elapsedRealtime()-activityStarted}") }
+            body.post { DiagLog.info("Home content ready cached=$homeFromCache elapsedMs=${android.os.SystemClock.elapsedRealtime()-activityStarted}") }
         }
         if(launchStarted>0) {
             val started=launchStarted; launchStarted=0
-            body.post { android.util.Log.i("HongguoTV","Home displayed cached=$homeFromCache elapsedMs=${android.os.SystemClock.elapsedRealtime()-started}") }
+            body.post { DiagLog.info("Home displayed cached=$homeFromCache elapsedMs=${android.os.SystemClock.elapsedRealtime()-started}") }
         }
     }
     private fun homeShelves(): List<HomeScreen.Shelf> {
@@ -1155,7 +1155,9 @@ class MainActivity: Activity() {
         }
         heading(playback,"红果账户","账户收藏、历史与预约随账号同步")
         val account=setting(playback,"登录与账户管理") { cloudAccount.show() }
-        val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,account); val right=listOf(updates,license)
+        heading(device,"诊断","播放失败时记下的过程，一键复制给别人")
+        val diagnostics=setting(device,"诊断日志  ·  ${DiagLog.count()} 条") { showDiagnostics() }
+        val left=listOf(qualityButton,defaultSpeed,frame,autoNextButton,account); val right=listOf(updates,license,diagnostics)
         listOf(left,right).forEach { items -> items.forEachIndexed { index,view ->
             view.nextFocusUpId=items.getOrNull(index-1)?.id ?: nav[tab].id
             view.nextFocusDownId=items.getOrNull(index+1)?.id ?: view.id
@@ -1165,6 +1167,29 @@ class MainActivity: Activity() {
         nav.forEach { it.nextFocusDownId=qualityButton.id }
         parent.addView(text("红果 TV  /  ${BuildConfig.VERSION_NAME}    ·    本机记录独立保存，账户内容随登录账号切换",12f,muted).apply { setPadding(dp(2),dp(18),0,dp(10)) })
         nav[tab].requestFocus()
+    }
+    /**
+     * 播放过程的诊断日志：先整份复制到剪贴板，再把最近的部分显示出来。
+     *
+     * 界面上出现「解不了」「取不到地址」「需要登录」这类提示时，光看那一句分不出败在哪一步。
+     * 这里记的是从取址、选档到落败的完整过程，复制一份就能拿去问。内容只含设备与流程事实，
+     * 不含 Cookie、令牌、账号，所以贴出去没有隐私问题。
+     */
+    private fun showDiagnostics() {
+        val text=DiagLog.dump()
+        if(text.isNotEmpty()) getSystemService(android.content.ClipboardManager::class.java)
+            .setPrimaryClip(android.content.ClipData.newPlainText("红果 TV 诊断日志",text))
+        android.widget.Toast.makeText(this,
+            if(text.isEmpty()) "还没有记录，播放一集后再回来" else "已复制 ${DiagLog.count()} 行到剪贴板",
+            android.widget.Toast.LENGTH_LONG).show()
+        val preview=text.lines().takeLast(120).joinToString("\n")
+        val dialog=AlertDialog.Builder(this)
+            .setTitle("诊断日志")
+            .setMessage(if(preview.isEmpty()) "这里记录取址、选档与播放失败的过程。播放一集后再回来看。" else preview)
+            .setNeutralButton("清空",{ _,_ -> DiagLog.clear() })
+            .setNegativeButton("关闭",null)
+            .create()
+        dialog.show(); TvStyle.fitDialog(dialog)
     }
     private fun saveDiscoveryDraft() { (searchInput as? EditText)?.let { searchDraft=it.text.toString() } }
     private fun returnToDiscovery() {
@@ -1375,7 +1400,7 @@ class MainActivity: Activity() {
         // A warm-up for this very episode that is still running is worth waiting a moment for:
         // starting another one would pay for the same address lookup and index twice.
         val warmupInFlight=position==0L && !recovering && prefetchedFor==targetKey && prefetchJob?.isDone==false
-        android.util.Log.i("HongguoTV","Episode transition target=${selectedIndex+1} warmupWaiting=$warmupInFlight warmupAttempts=$prefetchAttempts warmupRunning=${prefetchJob?.isDone==false}")
+        DiagLog.info("Episode transition target=${selectedIndex+1} warmupWaiting=$warmupInFlight warmupAttempts=$prefetchAttempts warmupRunning=${prefetchJob?.isDone==false}")
         saveProgress(); library.flush(); invalidatePage(); favoriteMonitor.stop(); releaseCatalogViews()
         if(reuse) {
             // Keeping the in-flight warm-up must still drop any other queued source: a leftover
@@ -1470,7 +1495,7 @@ class MainActivity: Activity() {
                             return
                         }
                         playbackReady=true;episodeDuration=p.duration.coerceAtLeast(0)
-                        if(firstReady) { firstReady=false; readySince=android.os.SystemClock.elapsedRealtime(); android.util.Log.i("HongguoTV","Playback ready episode=${episodeIndex+1} carried=$carriedOver reused=$reuse elapsedMs=${readySince-playbackStarted}") }
+                        if(firstReady) { firstReady=false; readySince=android.os.SystemClock.elapsedRealtime(); DiagLog.info("Playback ready episode=${episodeIndex+1} carried=$carriedOver reused=$reuse elapsedMs=${readySince-playbackStarted}") }
                         if(hud.visibility==View.VISIBLE) updatePlaybackText()
                     }
                     syncMediaSession()
@@ -1487,11 +1512,11 @@ class MainActivity: Activity() {
                     if(rendered==episodeIndex) {
                         if(!firstFrame) return
                         firstFrame=false
-                        android.util.Log.i("HongguoTV","Playback first frame episode=${episodeIndex+1} carried=$carriedOver reused=$reuse elapsedMs=${android.os.SystemClock.elapsedRealtime()-playbackStarted}")
+                        DiagLog.info("Playback first frame episode=${episodeIndex+1} carried=$carriedOver reused=$reuse elapsedMs=${android.os.SystemClock.elapsedRealtime()-playbackStarted}")
                     } else if(rendered>=0) {
                         // A queued episode renders its first frame before the queue switch is applied, so
                         // that frame belongs to the next episode and must not be timed against this one.
-                        android.util.Log.i("HongguoTV","Next episode rendered its first frame before the queue switch episode=${rendered+1}")
+                        DiagLog.info("Next episode rendered its first frame before the queue switch episode=${rendered+1}")
                     }
                 }
                 override fun onIsPlayingChanged(playing: Boolean) { if(active()) { if(hud.visibility==View.VISIBLE) showHud(); updatePauseGlyph(); syncMediaSession() } }
@@ -1529,7 +1554,7 @@ class MainActivity: Activity() {
     private fun claimWarmup(key: String,waiting: Boolean): Pair<RemoteVideo?,okhttp3.OkHttpClient?> {
         val warm=if(waiting) preparedNext.await(key,1_500) else preparedNext.take(key)
         if(warm==null) { if(waiting) cancelPrefetch(); return Pair(null,null) }
-        if(waiting) android.util.Log.i("HongguoTV","Episode transition carried a warm-up that was still running")
+        if(waiting) DiagLog.info("Episode transition carried a warm-up that was still running")
         if(waiting) prefetchJob?.cancel(true)
         prefetchJob=null
         return Pair(warm,prefetchHttp.also { prefetchHttp=null })
@@ -1565,13 +1590,13 @@ class MainActivity: Activity() {
                     opened.remote().also { remote=it; it.warm(warmBytes) }
                 }
                 if(preparedNext.complete(ticket,key,prepared)) {
-                    android.util.Log.i("HongguoTV","Next episode opening buffered bytes=$warmBytes metered=$metered")
+                    DiagLog.info("Next episode opening buffered bytes=$warmBytes metered=$metered")
                     main.post { queuePreparedEpisode(key) }
                 }
             } catch(error: Exception) {
                 remote?.close()
-                if(scope.isCancelled()) android.util.Log.i("HongguoTV","Next episode warmup cancelled by an episode change")
-                else android.util.Log.i("HongguoTV","Next episode warmup failed: ${error.javaClass.simpleName}")
+                if(scope.isCancelled()) DiagLog.info("Next episode warmup cancelled by an episode change")
+                else DiagLog.warn("Next episode warmup failed ${DiagLog.describe(error)}")
             }
         }
     }
@@ -1587,7 +1612,7 @@ class MainActivity: Activity() {
         val remote=preparedNext.take(key) ?: return
         queuedNext=remote;queuedHttp=prefetchHttp;prefetchHttp=null;queuedEpisode=next
         p.addMediaSource(episodeSource(remote,data.episodes[next]))
-        android.util.Log.i("HongguoTV","Next episode added to playback queue target=${next+1}")
+        DiagLog.info("Next episode added to playback queue target=${next+1}")
     }
     private fun clearQueuedEpisode() {
         val p=player
@@ -1618,7 +1643,7 @@ class MainActivity: Activity() {
         playbackTitle.text="${data.series.title}  ·  第 ${episodeNumber(data,episodeIndex)} 集"
         controls.removeAllViews();controls.visibility=View.GONE;panel=false;transportPlay=null
         saveProgress();syncMediaSession()
-        android.util.Log.i("HongguoTV","Playback queue transition episode=${episodeIndex+1}")
+        DiagLog.info("Playback queue transition episode=${episodeIndex+1}")
         if(completed && sleepTimer.episodeEnded()) stopForSleep()
         return true
     }
@@ -1627,7 +1652,7 @@ class MainActivity: Activity() {
     private fun cancelRecovery() { main.removeCallbacks(retryRunnable); retryPending=false; autoRecovery=false }
     private fun scheduleRecovery() {
         if(!foreground || !playError || !autoRecovery || retryPending) return
-        if(!recovery.remaining) { autoRecovery=false; playbackText.text="已自动重试 3 次，仍无法播放。可手动重试或切换清晰度。"; return }
+        if(!recovery.remaining) { autoRecovery=false; DiagLog.warn("Playback recovery exhausted episode=${episodeIndex+1} after 3 automatic attempts"); playbackText.text="已自动重试 3 次，仍无法播放。可手动重试或切换清晰度。"; return }
         if(!networkAvailable()) { playbackText.text="网络已断开，联网后自动续播 · 第 ${episodeIndex+1} 集 ${formatTime(retryPosition)}"; return }
         val delay=recovery.delayMillis ?: return
         playbackText.text="${if(retryAutoplay) "准备恢复播放" else "准备恢复暂停位置"} · ${delay/1000f} 秒后重试 ${recovery.attempts+1}/3 · ${formatTime(retryPosition)}"
@@ -1641,10 +1666,10 @@ class MainActivity: Activity() {
         return object: AnalyticsListener {
             override fun onVideoFrameProcessingOffset(eventTime: AnalyticsListener.EventTime,totalProcessingOffsetUs: Long,frameCount: Int) {
                 val window=guard.offer(totalProcessingOffsetUs,frameCount,p.isPlaying) ?: return
-                android.util.Log.i("HongguoTV","Video frame offset ${window.averageUs/1000}ms")
+                DiagLog.info("Video frame offset ${window.averageUs/1000}ms")
                 if(window.resync) main.post {
                     if(player===p && playbackReady && p.isPlaying && pendingSeek==null && !playError) {
-                        android.util.Log.w("HongguoTV","Resync after audio/video drift ${window.averageUs/1000}ms at ${formatTime(p.currentPosition)}")
+                        DiagLog.warn("Resync after audio/video drift ${window.averageUs/1000}ms at ${formatTime(p.currentPosition)}")
                         p.seekTo(p.currentPosition)
                     }
                 }
@@ -1672,7 +1697,7 @@ class MainActivity: Activity() {
             }
             if(shouldAutoDowngrade(autoDowngrades,2,currentTiers,attemptedQuality)) {
                 autoDowngrades++
-                android.util.Log.w("HongguoTV","Auto downgrading after decoder failure (attempt $autoDowngrades, was ${attemptedQuality}P)")
+                DiagLog.warn("Auto downgrading after decoder failure (attempt $autoDowngrades, was ${attemptedQuality}P)")
                 playEpisode(episodeIndex,retryPosition,retryAutoplay,autoDowngrade=true)
                 return
             }
@@ -1707,7 +1732,8 @@ class MainActivity: Activity() {
             addButton(controls,"停止自动重试") { cancelRecovery(); playbackText.text="自动重试已停止，观看位置已保留。" }
             autoRecovery=true; scheduleRecovery()
         }
-        android.util.Log.w("HongguoTV","Playback failure: ${problem.javaClass.simpleName}"+(if(problem is PlaybackException) " code=${problem.errorCodeName}" else ""))
+        // 只打最外层类名分不出「解不了」和「取不到地址」：真正的下一层在原因链里。
+        DiagLog.error("Playback failure episode=${episodeIndex+1} quality=${attemptedQuality}P", problem)
     }
     /** Touch entry point for phones: one tap opens the same control panel the remote opens with ↑ or
      *  MENU, and a tap while the panel is open collapses it. A double tap in the middle third toggles
@@ -1927,7 +1953,7 @@ class MainActivity: Activity() {
                         5 -> {
                             val count=CodecCapabilities.learnedCount()
                             CodecCapabilities.resetLearned()
-                            android.util.Log.i("HongguoTV","Decoder capability lessons reset ($count entries)")
+                            DiagLog.info("Decoder capability lessons reset ($count entries)")
                             playbackText.text=if(count>0) "已清除 $count 条设备能力记录，重新按解码器实际能力选流" else "暂无设备能力记录"
                         }
                         6 -> showCacheManager(more)
