@@ -38,7 +38,12 @@ class MainActivity: Activity() {
     private val repository=ContentRepository(
         playbackSession=PlaybackDeviceSession.shared,
         accountCookie={ if(::cloudAccount.isInitialized) cloudAccount.accountCookie() else "" },
-        onPlaybackAttempt={ DiagLog.info("Playback address: $it") },
+        onPlaybackAttempt={ message ->
+            DiagLog.info("Playback address: $message")
+            // 「账号Cookie=带」只说明本地存着凭据，不说明服务端还认它。取址一开始就把账号侧的事实写出来：
+            // 凭据在不在、账号资料能不能刷新出来，是判断「登录已经失效」的唯一依据。
+            if(message.startsWith("取址目标")) DiagLog.info("Playback account: ${if(::cloudAccount.isInitialized) cloudAccount.playbackDiagnostic else "账号控制器尚未初始化"}")
+        },
     )
     // 缓存落在应用自己的外部私有目录：不需要任何存储权限，电视上也不会弹权限框。
     // 代价是卸载即清，这一点在缓存管理里写明了。外部目录建不出来或写不进去时退回应用内部目录：
