@@ -534,7 +534,8 @@ class ContentRepository(
             // 带账号那轮失败再退回匿名，账号凭据失效时不至于整条路都走不通。
             val withAccount=account.isNotBlank() && round==0
             try {
-                val ladder=tabLadder(id,withAccount)
+                // 带账号那轮先试 POST video_model：这条是同类项目实测「只有带账号身份才下发清晰度」的那条。
+                val ladder=(if(withAccount) postVideoModel(id,withAccount) else null) ?: tabLadder(id,withAccount)
                 if(ladder!=null) {
                     val compatible=compatibleLadder(id,withAccount,ladder)
                     if(compatible!=null) {
@@ -629,6 +630,58 @@ class ContentRepository(
         return ladderFromModel(model)
     }
     /**
+     * 官方播放器的另一条取址路径：`POST /novel/player/video_model/v1/`。
+     *
+     * 同类项目 HGTV 记录 2026-10 起带场景段的 `multi_video_model/:dr_scene/v1/` 一律回空正文，
+     * 现在能用的是这条，而且请求体形态不同：要 `video_id` 单值，给 `mixed_video_id_map` /
+     * `vid` / `video_ids` 都回 100001。它同样不接受匿名请求（匿名一律 HTTP 200 + 0 字节），
+     * 所以只在带账号的那轮试。
+     *
+     * 模型的位置有两种：新路由在 `data.video_model`，带场景段与旧路径在 `data[<vid>].video_model`；
+     * 值可能是对象也可能是字符串化的 JSON，两种都要接住。
+     */
+    private fun postVideoModel(id: String, withAccount: Boolean): StreamLadder? {
+        val identity=playbackSession.profile(http)
+        val payload=("""{"video_id":"$id","biz_param":{"detail_page_version":0,"device_level":3,""" +
+            """"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,""" +
+            """"use_os_player":false,"use_server_dns":false,"video_platform":1024}}""").toByteArray()
+        val signed=playbackRequest("$PLAYER_HOST/novel/player/video_model/v1/",identity,body=payload)
+        val headers=linkedMapOf<String,String>()
+        val cookie=playbackCookie(identity.cookie,if(withAccount) accountCookie() else "")
+        if(cookie.isNotBlank()) headers["Cookie"]=cookie
+        val ladder=try {
+            val body=text(signed.url,signed,headers=headers,retryTransient=true)
+            val json=runCatching { JSONObject(body) }.getOrNull() ?: throw IOException("播放接口返回了无法解析的数据")
+            val code=json.optInt("Code",json.optInt("code",-1))
+            if(code!=0) throw playbackCodeError(code)
+            val model=videoModelOf(json) ?: throw IOException("播放信息为空")
+            ladderFromModel(model) ?: fallbackUrl(model)?.let { ladderFromFallbackApi(it) }
+        } catch (error: IOException) {
+            reportPlaybackAttempt(0,withAccount,"POST video_model 失败 ${describeError(error)}")
+            return null
+        }
+        if(ladder==null) reportPlaybackAttempt(0,withAccount,"POST video_model 没有给出清晰度")
+        else reportPlaybackAttempt(0,withAccount,"POST video_model 成功")
+        return ladder
+    }
+    /** 新路由把模型放在 `data.video_model`，带场景段与旧路径放在 `data[<vid>].video_model`。 */
+    private fun videoModelOf(root: JSONObject): JSONObject? {
+        val data=root.optJSONObject("data") ?: return null
+        modelOf(data.opt("video_model"))?.let { return it }
+        val entry=data.keys().asSequence().mapNotNull { data.optJSONObject(it) }.firstOrNull() ?: return null
+        return modelOf(entry.opt("video_model"))
+    }
+    private fun modelOf(value: Any?): JSONObject? = when(value) {
+        is JSONObject -> value
+        is String -> runCatching { JSONObject(value) }.getOrNull()
+        else -> null
+    }
+    private fun fallbackUrl(model: JSONObject): String? {
+        val raw=model.opt("fallback_api")
+        val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
+        return fallback.takeIf { it.startsWith("https://") }
+    }
+    /**
      * 这一集每一档都是厂商私有编码时，照官方播放器那样再要一次兼容模型。
      *
      * 这里不预判设备能力：只有**每一档**都解不出时才多要一次。兼容请求给不出可解码的档，
@@ -688,9 +741,10 @@ class ContentRepository(
         // The current model already carries plain media URLs, dimensions and CENC keys.
         // Only use the legacy fallback endpoint when this shape has no usable rendition.
         ladderFromModel(model)?.let { return it }
-        val raw=model.opt("fallback_api")
-        val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
-        if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")
+        return ladderFromFallbackApi(fallbackUrl(model) ?: throw IOException("播放地址格式异常"))
+    }
+    /** 模型没带内联清晰度时，照官方播放器那样再取一次 `fallback_api` 指向的媒体清单。 */
+    private fun ladderFromFallbackApi(fallback: String): StreamLadder {
         var info=JSONObject(text(fallback,retryTransient=true)).optJSONObject("video_info")?.optJSONObject("data") ?: throw IOException("没有播放资源")
         var videoList=info.optJSONObject("video_list") ?: throw IOException("没有可用清晰度")
         // 有些集服务端只发厂商私有编码（Android 的 MP4 解不出视频轨）。官方播放器对这种内容还有一条
