@@ -152,6 +152,11 @@ class ContentRepository(
     }
     private val site = "https://hongguoduanju.com"
     private val PLAYER_HOST = "https://api5-normal-sinfonlineb.fqnovel.com"
+    /**
+     * 要靠厂商自带解码库才解得出视频轨的私有编码。官方 App 包里带着这两个解码器
+     * （libByteVC1_dec.so、libbyteVC2dec.so）配它自己的播放器，系统播放器没有。
+     */
+    private val vendorOnlyCodecs = setOf("bytevc1","bvc1","bytevc2","bvc2")
     private val suggestionWebId = UUID.randomUUID().toString()
     private data class SearchCursor(val searchId: String, val passback: String, val offset: Int?, val updatedAt: Long)
     private val searchCursors=linkedMapOf<Triple<ContentType,String,Int>,SearchCursor>()
@@ -511,7 +516,15 @@ class ContentRepository(
             val withAccount=account.isNotBlank() && round==0
             try {
                 val ladder=tabLadder(id,withAccount)
-                if(ladder!=null) { reportPlaybackAttempt(round,withAccount,"成功"); return ladder }
+                if(ladder!=null) {
+                    val compatible=compatibleLadder(id,withAccount,ladder)
+                    if(compatible!=null) {
+                        reportPlaybackAttempt(round,withAccount,"全档私有编码 → 兼容请求改档成功")
+                        return compatible
+                    }
+                    reportPlaybackAttempt(round,withAccount,"成功")
+                    return ladder
+                }
                 reportPlaybackAttempt(round,withAccount,"没有清晰度")
                 break
             } catch (error: IOException) {
@@ -558,14 +571,18 @@ class ContentRepository(
      * 官方 App 现行的取播放信息接口。参数缺任意一项服务端回 100103；`video_platform`
      * 只接受 1024，`device_level` 用 1 最稳（3 会把部分集下发成 bytevc2）。
      * `from_video_id` 是官方 `GetVideoModelRequest` 里的字段，只取一集时留空也要带上。
+     *
+     * `compatible=true` 就是官方播放器对厂商私有编码的那条兼容请求（`codec_type=0` +
+     * `force_codec=h264`）。参数不保证一定回 h264，取到之后仍按实际下发的 codec 选档。
      */
-    private fun tabLadder(id: String, withAccount: Boolean): StreamLadder? {
+    private fun tabLadder(id: String, withAccount: Boolean, compatible: Boolean = false): StreamLadder? {
         val identity=playbackSession.profile(http)
         val params=linkedMapOf(
             "video_id" to id,"video_id_type" to "0","device_level" to "1",
             "need_all_video_definition" to "1","need_mp4_align" to "0","use_os_player" to "0",
             "video_platform" to "1024","source" to "0","from_video_id" to "",
         )
+        if(compatible) { params["codec_type"]="0"; params["force_codec"]="h264" }
         // 这个接口和搜索、推荐一样要官方那套签名头。不带签名的请求自 2026-11-05 起一律回
         // HTTP 200 + 0 字节：换域名、换 UA、换出口 IP、补参数都还是空，实测只有带签名两种回数据。
         val signed=playbackRequest("$PLAYER_HOST/reading/bookapi/video_tab/multi_video_model/v1/",identity,params)
@@ -583,6 +600,25 @@ class ContentRepository(
         val raw=entry.opt("video_model") ?: throw IOException("播放信息为空")
         val model=if(raw is JSONObject) raw else runCatching { JSONObject(raw.toString()) }.getOrNull() ?: throw IOException("播放信息格式已变化")
         return ladderFromModel(model)
+    }
+    /**
+     * 这一集每一档都是厂商私有编码时，照官方播放器那样再要一次兼容模型。
+     *
+     * 这里不预判设备能力：只有**每一档**都解不出时才多要一次。兼容请求给不出可解码的档，
+     * 就退回原来那份阶梯，选档流程照旧往下走——多要一次不会让情况变得更坏。
+     */
+    private fun compatibleLadder(id: String, withAccount: Boolean, ladder: StreamLadder): StreamLadder? {
+        if(ladder.renditions.isEmpty() || ladder.renditions.any { !vendorOnlyCodecs.contains(it.codec) }) return null
+        val alternative=try { tabLadder(id,withAccount,compatible = true) } catch (error: IOException) {
+            reportPlaybackAttempt(0,false,"全档私有编码，兼容请求失败 ${error.javaClass.simpleName}")
+            return null
+        }
+        if(alternative==null || alternative.renditions.isEmpty() ||
+            alternative.renditions.all { vendorOnlyCodecs.contains(it.codec) }) {
+            reportPlaybackAttempt(0,false,"全档私有编码，兼容请求没有给出可解码档")
+            return null
+        }
+        return alternative
     }
     /** 只有这几类才值得换一轮新签名重读；参数/结构错误重读也没用。 */
     private fun playbackRetryable(error: IOException) =
@@ -630,11 +666,11 @@ class ContentRepository(
         if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")
         var info=JSONObject(text(fallback,retryTransient=true)).optJSONObject("video_info")?.optJSONObject("data") ?: throw IOException("没有播放资源")
         var videoList=info.optJSONObject("video_list") ?: throw IOException("没有可用清晰度")
-        // 有些集服务端只发 bytevc2（Android 的 MP4 解不出视频轨）。官方播放器对这种内容还有一条
+        // 有些集服务端只发厂商私有编码（Android 的 MP4 解不出视频轨）。官方播放器对这种内容还有一条
         // 兼容请求：codec_type=0&force_codec=h264。参数不保证一定回 h264，取到之后仍按实际 codec 选档。
         val offered=videoList.keys().asSequence().mapNotNull { videoList.optJSONObject(it) }.toList()
         if(offered.isNotEmpty() && offered.all {
-                it.str("main_url").isNotBlank() && it.str("codec_type").lowercase() in setOf("bytevc2","bvc2") }) {
+                it.str("main_url").isNotBlank() && it.str("codec_type").lowercase() in vendorOnlyCodecs }) {
             val compatible=fallback.toHttpUrl().newBuilder()
                 .setQueryParameter("codec_type","0").setQueryParameter("force_codec","h264").build().toString()
             // 整份 data 都要换成兼容请求那一份：解密 main_url 用的 key_seed 跟着响应走，混用必然解不开。
