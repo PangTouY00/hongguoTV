@@ -624,7 +624,8 @@ class ContentRepository(
      */
     private fun v5Ladder(id: String): StreamLadder? {
         val identity = playbackSession.profile(http)
-        for ((index, path) in listOf(MobilePlayback.PRIMARY_PATH, MobilePlayback.FALLBACK_PATH).withIndex()) {
+        val paths = listOf(MobilePlayback.PRIMARY_PATH, MobilePlayback.FALLBACK_PATH)
+        for ((index, path) in paths.withIndex()) {
             val entry = try {
                 MobilePlayback.model(id, identity.values, http, MobilePlayback.signer, clock(), path)
             } catch (error: IOException) {
@@ -632,7 +633,8 @@ class ContentRepository(
                     reportPlaybackAttempt(0, false, "v5 取址失败 ${describeError(error)}")
                     return null
                 }
-                reportPlaybackAttempt(0, false, "当前取址写法没有结果 ${describeError(error)} → 换 $path")
+                // 这一行要写的是「换到哪一条写法」，不是刚失败的那一条。
+                reportPlaybackAttempt(0, false, "当前取址写法没有结果 ${describeError(error)} → 换 ${paths[index + 1]}")
                 continue
             }
             val model = modelOf(entry.opt("video_model")) ?: return null
