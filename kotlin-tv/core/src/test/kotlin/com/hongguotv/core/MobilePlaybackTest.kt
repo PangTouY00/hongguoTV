@@ -61,6 +61,24 @@ class MobilePlaybackTest {
         }, signing, 1000)
     }
 
+    /** 两条取址写法必须只差 path：正文、签名、请求头都同一份，换写法才谈得上是同一件事。 */
+    @Test fun bothPathsSendTheSameBodyAndDifferOnlyInPath() {
+        val bodies = mutableListOf<ByteArray>()
+        val paths = mutableListOf<String>()
+        val signing = MobilePlaybackSigner { url, bytes, _ ->
+            bodies += bytes.copyOf(); MobileSignedRequest(url, mapOf("x-medusa" to "synthetic"))
+        }
+        for (path in listOf(MobilePlayback.PRIMARY_PATH, MobilePlayback.FALLBACK_PATH)) {
+            MobilePlayback.model("123", device, http(model(false, false)) { request ->
+                paths += request.url.encodedPath
+                assertEquals("synthetic", request.header("x-medusa"))
+                assertEquals("123456", request.url.queryParameter("device_id"))
+            }, signing, 1000, path)
+        }
+        assertEquals(listOf(MobilePlayback.PRIMARY_PATH, MobilePlayback.FALLBACK_PATH), paths)
+        assertArrayEquals(bodies[0], bodies[1])
+    }
+
     @Test fun businessFailureEmptyOversizedAndMalformedBodiesRemainFailures() {
         for (body in listOf("{\"code\":110001}", "bad json", " ".repeat(2*1024*1024+1))) {
             assertThrows(IOException::class.java) { MobilePlayback.model("123", device, http(body), signer, 1000) }

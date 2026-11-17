@@ -546,8 +546,9 @@ class ContentRepository(
             val withAccount=account.isNotBlank() && round==0
             try {
                 // 先走 v5：2026-11-16 起只有这条实测能下发清晰度（同一接口同一身份只换签名，
-                // 旧签名回 0 字节、v5 回完整模型，见 kotlin-tv/PLAYBACK_V5.md）。
-                // 它不给结果时才退回先前那两条：带账号先试 POST video_model，再试 video_tab GET。
+                // 旧签名回 0 字节、v5 回完整模型，见 kotlin-tv/PLAYBACK_V5.md）。它内部还带一次
+                // 当场换写法：当前写法没有结果时先换另一条 v5 写法（同一份正文与签名，只有 path 不同），
+                // 两条都不给结果才退回先前那两条：带账号先试 POST video_model，再试 video_tab GET。
                 val ladder=(if(allowV5) v5Ladder(id) else null) ?: (if(withAccount) postVideoModel(id,withAccount) else null) ?: tabLadder(id,withAccount)
                 if(ladder!=null) {
                     val compatible=compatibleLadder(id,withAccount,ladder)
@@ -615,29 +616,53 @@ class ContentRepository(
      * 换这条的理由只有一条实测对照：同一接口、同一份新注册匿名身份、同一集号、同一 gzip 正文，
      * 旧签名回 HTTP 200 + 0 字节，这套签名回完整模型。它不需要账号 Cookie，所以匿名也能取到。
      * 请求里的设备身份仍来自我们自己的注册会话，只有版本号与机型是协议常量。
+     *
+     * 这条写法挂掉时（空正文、5xx、连接失败）当场换 [MobilePlayback.FALLBACK_PATH] 再要一次：
+     * 2026-11-17 的对照里同一份签名与同一个正文只有那条写法回数据（见 kotlin-tv/PLAYBACK_V5.md）。
+     * 两条用的是同一份设备身份、同一份正文，只有 path 不同；业务码非 0 与响应结构不对不算「挂了」，
+     * 换写法不会改变结果，不为此多花一次请求。
      */
     private fun v5Ladder(id: String): StreamLadder? {
         val identity = playbackSession.profile(http)
-        val entry = try {
-            MobilePlayback.model(id, identity.values, http, MobilePlayback.signer, clock())
-        } catch (error: IOException) {
-            reportPlaybackAttempt(0, false, "v5 取址失败 ${describeError(error)}")
-            return null
+        for ((index, path) in listOf(MobilePlayback.PRIMARY_PATH, MobilePlayback.FALLBACK_PATH).withIndex()) {
+            val entry = try {
+                MobilePlayback.model(id, identity.values, http, MobilePlayback.signer, clock(), path)
+            } catch (error: IOException) {
+                if (!playbackPathSwitchable(error) || index == 1) {
+                    reportPlaybackAttempt(0, false, "v5 取址失败 ${describeError(error)}")
+                    return null
+                }
+                reportPlaybackAttempt(0, false, "当前取址写法没有结果 ${describeError(error)} → 换 $path")
+                continue
+            }
+            val model = modelOf(entry.opt("video_model")) ?: return null
+            ladderFromModel(model)?.let {
+                reportPlaybackAttempt(0, false, if (index == 0) "v5 取址成功" else "v5 取址成功（备用写法）")
+                return it
+            }
+            // 模型没带内联清晰度时照旧走 fallback_api，不把 v5 成功取到模型当成没有结果。
+            val fallback = fallbackUrl(model) ?: return null
+            val ladder = try { ladderFromFallbackApi(fallback) } catch (error: IOException) {
+                reportPlaybackAttempt(0, false, "v5 只给出备用地址，读取失败 ${describeError(error)}")
+                return null
+            }
+            reportPlaybackAttempt(0, false, "v5 取址成功（备用地址）")
+            return ladder
         }
-        val model = modelOf(entry.opt("video_model")) ?: return null
-        ladderFromModel(model)?.let {
-            reportPlaybackAttempt(0, false, "v5 取址成功")
-            return it
-        }
-        // 模型没带内联清晰度时照旧走 fallback_api，不把 v5 成功取到模型当成没有结果。
-        val fallback = fallbackUrl(model) ?: return null
-        val ladder = try { ladderFromFallbackApi(fallback) } catch (error: IOException) {
-            reportPlaybackAttempt(0, false, "v5 只给出备用地址，读取失败 ${describeError(error)}")
-            return null
-        }
-        reportPlaybackAttempt(0, false, "v5 取址成功（备用地址）")
-        return ladder
+        return null
     }
+    /**
+     * 「这条写法挂了」的判定：服务端没给出结果，或请求根本没到服务端——换一条写法才有意义的情况。
+     *
+     * 404 也算：写法本身不存在时换写法正是对症。业务码非 0（[PlaybackRejectedException] 那类）是
+     * 账号侧的拒绝，两条写法都会同样被拒，不在这里多花一次请求。
+     */
+    private fun playbackPathSwitchable(error: IOException) =
+        error is EmptyPlaybackResponseException || error is EmptyContentException ||
+            error is java.net.SocketTimeoutException || error is java.net.SocketException ||
+            error is java.net.UnknownHostException ||
+            (error is ContentHttpException && error.statusCode in setOf(404, 408, 500, 502, 503, 504))
+
     /**
      * 官方 App 现行的取播放信息接口。参数缺任意一项服务端回 100103；`video_platform`
      * 只接受 1024，`device_level` 用 1 最稳（3 会把部分集下发成 bytevc2）。

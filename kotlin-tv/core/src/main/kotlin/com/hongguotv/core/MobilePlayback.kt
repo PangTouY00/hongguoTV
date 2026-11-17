@@ -23,6 +23,18 @@ internal fun interface MobilePlaybackSigner {
 }
 
 internal object MobilePlayback {
+    /** 官方 App 当前在用的取址写法，2026-11-16 起实测能下发清晰度。 */
+    internal const val PRIMARY_PATH = "/novel/player/multi_video_model/player/v1"
+    /**
+     * 同一份签名、同一个正文下的另一条取址写法：不带 `player` 那一段、结尾带斜杠。
+     *
+     * 2026-11-17 用只依赖标准库的脚本对照过（[PRIMARY_PATH] 一律回 HTTP 200 + 0 字节，
+     * 这条在 reading.snssdk.com 与两个 fqnovel 域名上都回 code=0 与五档模型）。
+     * 上游 N3urda/hongguoTV 的 `PlayerSource.PHOENIX_URL` 保留的也是这条写法。
+     */
+    internal const val FALLBACK_PATH = "/novel/player/multi_video_model/v1/"
+    private const val HOST = "https://api5-normal-sinfonlinea.fqnovel.com"
+
     private val v5Signer = Signer(mobileV5 = true)
     val signer = MobilePlaybackSigner { url, body, _ ->
         val parsed = url.toHttpUrl()
@@ -32,8 +44,10 @@ internal object MobilePlayback {
         MobileSignedRequest(request.url, request.headers)
     }
 
-    fun model(id: String, device: Map<String, String>, http: OkHttpClient,
-               signer: MobilePlaybackSigner, now: Long): JSONObject {
+    /** `path` 决定用哪一条取址写法，正文与签名两种写法完全相同。 */
+    @JvmOverloads fun model(id: String, device: Map<String, String>, http: OkHttpClient,
+               signer: MobilePlaybackSigner, now: Long,
+               path: String = PRIMARY_PATH): JSONObject {
         require(id.matches(Regex("[0-9]{1,30}")))
         RequestScope.ensureActive()
         val query = linkedMapOf("aid" to "8662", "app_name" to "novelread",
@@ -42,8 +56,7 @@ internal object MobilePlayback {
             "device_type" to "PGT-AN10", "os_version" to "12", "update_version_code" to "74332",
             "iid" to device.getValue("iid"), "cdid" to device.getValue("cdid"),
             "device_id" to device.getValue("device_id"), "_rticket" to now.toString())
-        val url = "https://api5-normal-sinfonlinea.fqnovel.com/novel/player/multi_video_model/player/v1"
-            .toHttpUrl().newBuilder().apply { query.forEach { (k,v) -> addQueryParameter(k,v) } }.build()
+        val url = (HOST + path).toHttpUrl().newBuilder().apply { query.forEach { (k,v) -> addQueryParameter(k,v) } }.build()
         // 电视使用系统解码器，以等级 1 协商兼容资源；仍需按返回的实际编码过滤。
         val payload = JSONObject("""{"biz_param":{"detail_page_version":0,"device_level":1,"disable_digg_stat":false,"disable_video_relate_book":false,"need_all_video_definition":true,"need_mp4_align":false,"use_os_player":false,"use_server_dns":false,"video_platform":1024},"mixed_video_id_map":{"1004":["$id"]},"dr_scene":"player"}""")
         val output = ByteArrayOutputStream()
@@ -60,7 +73,8 @@ internal object MobilePlayback {
         request.post(bytes.toRequestBody("application/json; charset=utf-8".toMediaType()))
         val transport = http.newBuilder().cookieJar(CookieJar.NO_COOKIES).build()
         return RequestScope.execute(transport.newCall(request.build())) { response ->
-            if (!response.isSuccessful) throw IOException("播放接口 HTTP ${response.code}")
+            // 状态码要留在异常里：上层判断「这条写法挂了、换一条」靠的就是它，5xx 与 404 不是一回事。
+            if (!response.isSuccessful) throw ContentHttpException(response.code)
             val body = response.body ?: throw IOException("播放信息格式异常")
             val limit = 2 * 1024 * 1024L
             if (body.contentLength() > limit) throw IOException("播放信息过大")

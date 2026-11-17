@@ -21,7 +21,8 @@
 固定做法，按顺序：
 
 1. **先做同接口对照，确认变量只有签名。** 同一条 path、同一份新注册匿名身份、同一集号、同一 gzip 正文，只换签名。本仓库留了这个对照：正式路径是 v5，旧签名在 `ContentRepository.legacyStreamLadder` 里，只供离线回归。两条各跑一次，正文从 0 字节变成几 KB 就证明是签名；两条都空就不是 A。
-2. **查上游有没有已经修好的版本。** 这条链上有两个活跃仓库，签名代码与本仓库同源（同一份 drpys `22261ad` 的移植），所以它们的 diff 能直接落进来：
+2. **同一条接口有两种 path 写法，先分清用的是哪一种。** `POST /novel/player/multi_video_model/player/v1` 与 `POST /novel/player/multi_video_model/v1/`（不带 `player` 那一段、结尾带斜杠）共用同一份 gzip 正文与同一套 v5 签名，服务端对它们的反应不同：2026-11-17 的对照里前者在三个域名上一律 HTTP 200 + 0 字节，后者一律回 code=0 与五档模型。App 里当前写法没有结果时会当场换另一条（`ContentRepository.v5Ladder`，测试见 [PlaybackPathFallbackTest.kt](core/src/test/kotlin/com/hongguotv/core/PlaybackPathFallbackTest.kt)），所以诊断日志里出现「当前取址写法没有结果 → 换 …」紧接着取到，是预期行为。反过来，做签名对照时必须固定在同一条写法上，别把两条写法的差异读成签名的差异。
+3. **查上游有没有已经修好的版本。** 这条链上有两个活跃仓库，签名代码与本仓库同源（同一份 drpys `22261ad` 的移植），所以它们的 diff 能直接落进来：
    - `N3urda/hongguoTV`（GPL-3.0-only，签名协议的原始出处，v5 出自它的 `18c37c2`）
    - `tsukiyo-zero/hongguoTV`（本仓库的 fork 源，v5 出自它的 `d3389947` / PR #109）
 
@@ -33,8 +34,8 @@
    ```
 
    协议常量、分支要求、license 号都写在那份文档里，照抄即可。**别自己猜新常量。**
-3. **移植完先对拍，再联网。** 上游随代码一起给出合成向量（`core/src/test/resources/signing-v5-carrier.json`、`signing-v5-f13.json`），先跑 [SignerV5Test.kt](core/src/test/kotlin/com/hongguotv/core/SignerV5Test.kt) 与 [MobilePlaybackTest.kt](core/src/test/kotlin/com/hongguotv/core/MobilePlaybackTest.kt)。逐字节对得上才说明移植没错；对不上先修移植，不要开始试网络。
-4. **上游也没有时，去找 oracle，不要硬猜。** 官方 App 能播说明协议本身可用，缺的是观察手段。可用的观察手段按成本排：
+4. **移植完先对拍，再联网。** 上游随代码一起给出合成向量（`core/src/test/resources/signing-v5-carrier.json`、`signing-v5-f13.json`），先跑 [SignerV5Test.kt](core/src/test/kotlin/com/hongguotv/core/SignerV5Test.kt) 与 [MobilePlaybackTest.kt](core/src/test/kotlin/com/hongguotv/core/MobilePlaybackTest.kt)。逐字节对得上才说明移植没错；对不上先修移植，不要开始试网络。
+5. **上游也没有时，去找 oracle，不要硬猜。** 官方 App 能播说明协议本身可用，缺的是观察手段。可用的观察手段按成本排：
    - 这台手机上读红果 `base.apk` 的 dex 字符串（`pm path com.phoenix.read` 取路径，python 解可打印字符串），能拿到接口 path、参数名、版本号；
    - 读 logcat 里红果自己打的 tag；
    - 官方 SDK 的摘要可以用 VM 类研究工具观察（v5 就是这么找到的：`it00021hot/hongguo-desktop` 的 VM 工具当 oracle，把 VM 里的分支归约成普通旋转/加法/XOR/查表写回 `Signer.hashF13`，那份实现是 PolyForm 许可，不复制进仓库）。
