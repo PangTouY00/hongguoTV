@@ -77,7 +77,7 @@ class ByteVc2FallbackTest {
         val repository = ContentRepository(http, System::currentTimeMillis,
             PlaybackDeviceSession { DeviceRegister.Registered("333", "444") })
 
-        val ladder = repository.streamLadder("123")
+        val ladder = repository.legacyStreamLadder("123")
         assertEquals("https://example.com/playable.mp4", ladder.renditions.single().url)
 
         val compatible = requests.single { it.url.queryParameter("force_codec") != null }

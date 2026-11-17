@@ -503,30 +503,32 @@ class ContentRepository(
         throw last ?: EmptyPlaybackResponseException()
     }
     /**
-     * 一集的可播放清晰度，优先走官方现行接口。
+     * 一集的可播放清晰度。先走 v5（见 [MobilePlayback]），它给不出结果才退回旧的两条路径。
      *
      * 取到的阶梯缓存 5 分钟、最多 100 集：同一集重播、换清晰度、自动重试都不必再走一遍取址。
      * 主仓库的 streamCache 同样是 5 分钟加条数上限。失败重试传 `fresh=true` 作废这一集的缓存——
      * 重试的意义就是重新取一次地址、拿一份新签名，照旧缓存再试第二次没有意义。
-     *
-     * 旧的 `POST /novel/player/multi_video_model/v1/` 自 2026-11-02 起对第三方客户端一律回
-     * HTTP 200 + 0 字节（换域名、UA、Cookie、完整签名、device_token 都一样），而官方客户端
-     * 早已改用 `GET /reading/bookapi/video_tab/multi_video_model/v1/`。所以先读新接口，
-     * 只有它拿不到清晰度时才回退旧接口，旧接口再给不出就报新接口的原因。
      */
-    fun streamLadder(id: String, fresh: Boolean = false): StreamLadder {
+    @JvmOverloads fun streamLadder(id: String, fresh: Boolean = false): StreamLadder =
+        cachedLadder(id, fresh) { fetchLadder(it) }
+
+    /** 旧传输（video_tab GET 与旧 POST）保留给离线回归与既有测试；正式播放只走 [streamLadder]。 */
+    @JvmOverloads internal fun legacyStreamLadder(id: String, fresh: Boolean = false): StreamLadder =
+        cachedLadder(id, fresh) { fetchLadder(it, allowV5 = false) }
+
+    private fun cachedLadder(id: String, fresh: Boolean, fetch: (String) -> StreamLadder): StreamLadder {
         require(id.matches(Regex("[0-9]{1,30}")))
         if (!fresh) synchronized(ladderCache) {
             ladderCache[id]?.let { (readAt, cached) -> if (clock() - readAt < ladderTtlMs) return cached }
         }
-        val ladder = fetchLadder(id)
+        val ladder = fetch(id)
         synchronized(ladderCache) {
             ladderCache[id] = clock() to ladder
             while (ladderCache.size > ladderCacheMax) ladderCache.remove(ladderCache.keys.first())
         }
         return ladder
     }
-    private fun fetchLadder(id: String): StreamLadder {
+    private fun fetchLadder(id: String, allowV5: Boolean = true): StreamLadder {
         var tabError: IOException? = null
         var anonymousRejected=false
         val account=accountCookie()
@@ -543,8 +545,10 @@ class ContentRepository(
             // 带账号那轮失败再退回匿名，账号凭据失效时不至于整条路都走不通。
             val withAccount=account.isNotBlank() && round==0
             try {
-                // 带账号那轮先试 POST video_model：这条是同类项目实测「只有带账号身份才下发清晰度」的那条。
-                val ladder=(if(withAccount) postVideoModel(id,withAccount) else null) ?: tabLadder(id,withAccount)
+                // 先走 v5：2026-11-16 起只有这条实测能下发清晰度（同一接口同一身份只换签名，
+                // 旧签名回 0 字节、v5 回完整模型，见 kotlin-tv/PLAYBACK_V5.md）。
+                // 它不给结果时才退回先前那两条：带账号先试 POST video_model，再试 video_tab GET。
+                val ladder=(if(allowV5) v5Ladder(id) else null) ?: (if(withAccount) postVideoModel(id,withAccount) else null) ?: tabLadder(id,withAccount)
                 if(ladder!=null) {
                     val compatible=compatibleLadder(id,withAccount,ladder)
                     if(compatible!=null) {
@@ -604,6 +608,36 @@ class ContentRepository(
         return merged.entries.joinToString("; ") { (name,value) -> "$name=$value" }
     }
 
+    /**
+     * 2026-11-16 起生效的取址路径：`POST /novel/player/multi_video_model/player/v1`，正文 gzip，
+     * 签名用 Android v04.10.03 的 Medusa/Helios/Khronos（摘要分支要求原始值 12）。
+     *
+     * 换这条的理由只有一条实测对照：同一接口、同一份新注册匿名身份、同一集号、同一 gzip 正文，
+     * 旧签名回 HTTP 200 + 0 字节，这套签名回完整模型。它不需要账号 Cookie，所以匿名也能取到。
+     * 请求里的设备身份仍来自我们自己的注册会话，只有版本号与机型是协议常量。
+     */
+    private fun v5Ladder(id: String): StreamLadder? {
+        val identity = playbackSession.profile(http)
+        val entry = try {
+            MobilePlayback.model(id, identity.values, http, MobilePlayback.signer, clock())
+        } catch (error: IOException) {
+            reportPlaybackAttempt(0, false, "v5 取址失败 ${describeError(error)}")
+            return null
+        }
+        val model = modelOf(entry.opt("video_model")) ?: return null
+        ladderFromModel(model)?.let {
+            reportPlaybackAttempt(0, false, "v5 取址成功")
+            return it
+        }
+        // 模型没带内联清晰度时照旧走 fallback_api，不把 v5 成功取到模型当成没有结果。
+        val fallback = fallbackUrl(model) ?: return null
+        val ladder = try { ladderFromFallbackApi(fallback) } catch (error: IOException) {
+            reportPlaybackAttempt(0, false, "v5 只给出备用地址，读取失败 ${describeError(error)}")
+            return null
+        }
+        reportPlaybackAttempt(0, false, "v5 取址成功（备用地址）")
+        return ladder
+    }
     /**
      * 官方 App 现行的取播放信息接口。参数缺任意一项服务端回 100103；`video_platform`
      * 只接受 1024，`device_level` 用 1 最稳（3 会把部分集下发成 bytevc2）。

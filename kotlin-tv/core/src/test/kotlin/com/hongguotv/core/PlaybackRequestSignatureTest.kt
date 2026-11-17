@@ -69,7 +69,7 @@ class PlaybackRequestSignatureTest {
             requests += request
             if (request.url.encodedPath == tabPath) tabPayload("123") else "{}"
         }
-        assertEquals("https://example.com/signed", repository.streamLadder("123").renditions.single().url)
+        assertEquals("https://example.com/signed", repository.legacyStreamLadder("123").renditions.single().url)
 
         val tab = requests.single { it.url.encodedPath == tabPath }
         for (name in signatureHeaders) assertNotNull("播放取址缺少签名头 $name", tab.header(name))
@@ -95,7 +95,7 @@ class PlaybackRequestSignatureTest {
             requests += request
             if (request.url.encodedPath == tabPath) tabPayload("123") else "{}"
         }
-        repository.streamLadder("123")
+        repository.legacyStreamLadder("123")
         val tab = requests.single { it.url.encodedPath == tabPath }
         // from_video_id 是官方 GetVideoModelRequest 里的字段，只取一集时留空也要带上；其余参数一律非空。
         assertTrue(tab.url.queryParameterNames.contains("from_video_id"))
@@ -108,7 +108,7 @@ class PlaybackRequestSignatureTest {
             requests += request
             if (request.url.encodedPath == tabPath) """{"code":100103,"message":"PARAM_INVALID"}""" else legacyPayload("123")
         }
-        assertEquals("https://example.com/legacy", repository.streamLadder("123").renditions.single().url)
+        assertEquals("https://example.com/legacy", repository.legacyStreamLadder("123").renditions.single().url)
 
         val legacy = requests.single { it.url.encodedPath == legacyPath }
         for (name in signatureHeaders) assertNotNull("旧播放接口缺少签名头 $name", legacy.header(name))
@@ -127,8 +127,8 @@ class PlaybackRequestSignatureTest {
         val repository = repository { request ->
             if (request.url.encodedPath == tabPath) { tabArgus += request.header("x-argus"); tabPayload("123") } else "{}"
         }
-        repository.streamLadder("123", fresh = true)
-        repository.streamLadder("123", fresh = true)
+        repository.legacyStreamLadder("123", fresh = true)
+        repository.legacyStreamLadder("123", fresh = true)
         assertEquals(2, tabArgus.size)
         assertNotEquals(tabArgus[0], tabArgus[1])
         assertNotEquals(tabArgus[0]?.let { Argus.recover551Field3(it) }, tabArgus[1]?.let { Argus.recover551Field3(it) })

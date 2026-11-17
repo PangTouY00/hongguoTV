@@ -54,7 +54,7 @@ class StreamLadderIdentityRotationTest {
             PlaybackDeviceSession { DeviceRegister.Registered("${1000 + registrations.incrementAndGet()}", "2000") },
             accountCookie = { "sessionid=account-cookie" },
         )
-        assertEquals("https://example.com/signed", repository.streamLadder("123").renditions.single().url)
+        assertEquals("https://example.com/signed", repository.legacyStreamLadder("123").renditions.single().url)
         val distinct = devices.filter { it.isNotBlank() }.distinct()
         assertTrue("取址重读没有换过注册身份：$devices", distinct.size >= 2)
     }
@@ -78,7 +78,7 @@ class StreamLadderIdentityRotationTest {
             PlaybackDeviceSession { DeviceRegister.Registered("${1000 + registrations.incrementAndGet()}", "2000") },
             accountCookie = { "sessionid=account-cookie" },
         )
-        val failure = runCatching { repository.streamLadder("123") }.exceptionOrNull()
+        val failure = runCatching { repository.legacyStreamLadder("123") }.exceptionOrNull()
         assertTrue("已登录时取址被拒不该报成「需要登录」：$failure", failure is PlaybackRejectedException)
         assertEquals(110001, (failure as PlaybackRejectedException).code)
         assertTrue("110001 的重读没有换过注册身份：$codes", codes.filter { it.isNotBlank() }.distinct().size >= 2)

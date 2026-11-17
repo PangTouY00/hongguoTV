@@ -61,7 +61,7 @@ class PlaybackAccountIdentityTest {
             accountCookie = { "sessionid=account-cookie" },
             onPlaybackAttempt = { attempts += it },
         )
-        assertEquals("https://example.com/signed", repository.streamLadder("123").renditions.single().url)
+        assertEquals("https://example.com/signed", repository.legacyStreamLadder("123").renditions.single().url)
         assertTrue("第一轮就应该带账号 Cookie：$seen", seen.first()?.contains("sessionid") == true)
         assertTrue("带账号一次就成了，不该再退避重读：$seen", seen.size == 1)
         assertTrue("每次尝试的形态没有记录下来：$attempts", attempts.any { it.contains("账号Cookie=带") })
@@ -87,7 +87,7 @@ class PlaybackAccountIdentityTest {
             },
             accountCookie = { "sessionid=account-cookie" },
         )
-        assertEquals("https://example.com/signed", repository.streamLadder("123").renditions.single().url)
+        assertEquals("https://example.com/signed", repository.legacyStreamLadder("123").renditions.single().url)
         assertNotNull("带账号那一轮没有发出请求", carried)
         assertTrue("注册下发的设备 Cookie 被丢了：$carried", carried!!.contains("ttreq=device-cookie"))
         assertTrue("账号 Cookie 没带上：$carried", carried!!.contains("sessionid=account-cookie"))
@@ -111,7 +111,7 @@ class PlaybackAccountIdentityTest {
             PlaybackDeviceSession { DeviceRegister.Registered("1001", "2001") },
             accountCookie = { "sessionid=expired-account-cookie" },
         )
-        val failure = runCatching { repository.streamLadder("123") }.exceptionOrNull()
+        val failure = runCatching { repository.legacyStreamLadder("123") }.exceptionOrNull()
         assertTrue("已登录时不该报「需要登录」：$failure", failure !is PlaybackLoginRequiredException)
         assertTrue("带账号那一轮之后应该再匿名试一轮：$seen", seen.any { it?.contains("sessionid") != true })
     }
@@ -122,7 +122,7 @@ class PlaybackAccountIdentityTest {
             accountOnlyHttp(seen), System::currentTimeMillis,
             PlaybackDeviceSession { DeviceRegister.Registered("1001", "2001") },
         )
-        val failure = runCatching { repository.streamLadder("123") }.exceptionOrNull()
+        val failure = runCatching { repository.legacyStreamLadder("123") }.exceptionOrNull()
         assertTrue("未登录时应该报「需要登录红果账号」：$failure", failure is PlaybackLoginRequiredException)
         assertTrue("未登录却带上了账号 Cookie：$seen", seen.none { it?.contains("sessionid") == true })
         assertTrue("未登录时不该退避重读四轮，新接口一次、旧接口一次就够：$seen", seen.size == 2)

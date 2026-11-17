@@ -63,7 +63,7 @@ class PostVideoModelAddressTest {
     @Test fun accountRoundTriesThePostModelFirst() {
         val requests = mutableListOf<Request>()
         val log = mutableListOf<String>()
-        val ladder = repository(requests, postResponds = true, log = log).streamLadder("123")
+        val ladder = repository(requests, postResponds = true, log = log).legacyStreamLadder("123")
 
         assertEquals("https://example.com/post-model.mp4", ladder.renditions.single().url)
         val post = requests.single { it.url.encodedPath == postPath }
@@ -80,7 +80,7 @@ class PostVideoModelAddressTest {
     @Test fun emptyPostModelStillFallsBackToTheExistingEndpoint() {
         val requests = mutableListOf<Request>()
         val log = mutableListOf<String>()
-        val ladder = repository(requests, postResponds = false, log = log).streamLadder("123")
+        val ladder = repository(requests, postResponds = false, log = log).legacyStreamLadder("123")
 
         assertEquals("https://example.com/tab-model.mp4", ladder.renditions.single().url)
         assertTrue(requests.any { it.url.encodedPath == postPath })

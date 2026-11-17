@@ -25,7 +25,7 @@ class ContentRepositoryTest {
             JSONObject().put("data",JSONObject().put("123",JSONObject().put("video_model",
                 JSONObject().put("video_list",JSONArray().put(row)).put("fallback_api","https://example.com/fallback")))).toString()
         }
-        val tier=repo.streamLadder("123").renditions.single()
+        val tier=repo.legacyStreamLadder("123").renditions.single()
         assertEquals(1,requests.count { it.url.encodedPath=="/novel/player/multi_video_model/v1/" })
         assertEquals("https://example.com/inline",tier.url)
         assertEquals(720,tier.quality);assertEquals(1280,tier.height)
@@ -42,7 +42,7 @@ class ContentRepositoryTest {
                         .put("video_meta",JSONObject().put("definition","720p").put("codec_type","h264").put("vwidth",720).put("vheight",1280)).put("encrypt_info",encryption)))
                     .put("fallback_api","https://example.com/fallback")))).toString()
             }
-            assertEquals("https://example.com/valid",repo.streamLadder("123").renditions.single().url)
+            assertEquals("https://example.com/valid",repo.legacyStreamLadder("123").renditions.single().url)
             // 新接口那次由上面的拦截器直接挡掉、不计入 respond；这里是旧接口一次 + 降级地址一次
             assertEquals(2,calls)
         }
@@ -86,7 +86,7 @@ class ContentRepositoryTest {
             """{"Code":110001}"""
         }
         repeat(2) {
-            val error=assertThrows(IOException::class.java) { repo.stream("123") }
+            val error=assertThrows(IOException::class.java) { repo.legacyStreamLadder("123") }
             assertTrue(error.message.orEmpty().contains("110001"))
         }
         for(request in requests) {
@@ -169,7 +169,7 @@ class ContentRepositoryTest {
                 JSONObject().put("video_info",JSONObject().put("data",JSONObject().put("video_list",rows))).toString()
             } else """{"data":{"123":{"video_model":{"fallback_api":"https://example.com/stream"}}}}"""
         }
-        val ladder=repo.streamLadder("123")
+        val ladder=repo.legacyStreamLadder("123")
         val portrait=ladder.renditions.first { it.url.endsWith("/portrait") }
         assertEquals("h264",portrait.codec); assertEquals(1080,portrait.width); assertEquals(1920,portrait.height)
         // 竖屏 1080×1920 不再被静态判定排除：没有失败记录时它照旧是首选那一档。
@@ -288,7 +288,7 @@ class ContentRepositoryTest {
             if(calls<=2) "" else JSONObject().put("data",JSONObject().put("123",JSONObject().put("video_model",
                 JSONObject().put("video_list",JSONArray().put(row))))).toString()
         }
-        val ladder=repo.streamLadder("123")
+        val ladder=repo.legacyStreamLadder("123")
         assertEquals(3,calls)
         assertEquals("https://example.com/inline",ladder.renditions.single().url)
     }
@@ -297,7 +297,7 @@ class ContentRepositoryTest {
     fun playerApiStaysEmptyAfterBoundedRetriesInsteadOfRetryingForever() {
         var calls=0
         val repo=repository { _ -> calls+=1; "" }
-        assertThrows(IOException::class.java) { repo.streamLadder("123") }
+        assertThrows(IOException::class.java) { repo.legacyStreamLadder("123") }
         assertEquals(3,calls)
     }
 
@@ -485,7 +485,7 @@ class ContentRepositoryTest {
             System::currentTimeMillis,
             PlaybackDeviceSession { DeviceRegister.Registered("333","444") }
         )
-        val rendition=repo.streamLadder("123").renditions.single()
+        val rendition=repo.legacyStreamLadder("123").renditions.single()
         assertEquals("https://example.com/tab",rendition.url)
         assertEquals(1080,rendition.quality)
         val tab=requests.single()
