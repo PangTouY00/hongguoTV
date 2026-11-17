@@ -46,14 +46,14 @@ class PlaybackPathFallbackTest {
                 .put("main_url", "https://example.com/tab")
                 .put("video_meta", JSONObject().put("definition", "720p").put("codec_type", "h264")
                     .put("vwidth", 720).put("vheight", 1280))
-                .put("encrypt_info", JSONObject().put("encrypt", false)))))))
+                .put("encrypt_info", JSONObject().put("encrypt", false))))))))
         .toString()
 
     private fun respond(request: okhttp3.Request, body: String) = Response.Builder()
         .request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK")
         .body(body.toResponseBody("application/json; charset=utf-8".toMediaType())).build()
 
-    private fun repository(paths: MutableMap<String, String>, seen: MutableList<String>,
+    private fun playbackRepository(paths: MutableMap<String, String>, seen: MutableList<String>,
                           attempts: MutableList<String> = mutableListOf()): ContentRepository =
         ContentRepository(
             OkHttpClient.Builder().addInterceptor { chain ->
@@ -70,7 +70,7 @@ class PlaybackPathFallbackTest {
     @Test fun emptyPrimaryPathSwitchesToTheOtherPathInSameRound() {
         val seen = mutableListOf<String>()
         val attempts = mutableListOf<String>()
-        val repository = repository(linkedMapOf(
+        val repository = playbackRepository(linkedMapOf(
             primaryPath to "",
             fallbackPath to model("123"),
         ), seen, attempts)
@@ -84,7 +84,7 @@ class PlaybackPathFallbackTest {
 
     @Test fun bothPathsEmptyOnlyThenFallsBackToTheLegacyEndpoint() {
         val seen = mutableListOf<String>()
-        val repository = repository(linkedMapOf(
+        val repository = playbackRepository(linkedMapOf(
             primaryPath to "",
             fallbackPath to "",
             tabPath to tabPayload("123"),
@@ -97,7 +97,7 @@ class PlaybackPathFallbackTest {
     /** 服务端明确拒绝（业务码非 0）不是「接口挂了」：换写法同样会被拒，不该为此多花一次请求。 */
     @Test fun businessCodeFailureDoesNotSwitchPath() {
         val seen = mutableListOf<String>()
-        val repository = repository(linkedMapOf(
+        val repository = playbackRepository(linkedMapOf(
             primaryPath to JSONObject().put("code", 110001).toString(),
             fallbackPath to model("123"),
             tabPath to tabPayload("123"),
