@@ -55,7 +55,7 @@ class ByteVc1CompatibleRequestTest {
                 else -> tabBody("123", row("https://example.com/only-bytevc1.mp4", "bytevc1", "1080p"))
             }
         }
-        val ladder = repository.streamLadder("123")
+        val ladder = repository.legacyStreamLadder("123")
         assertEquals("https://example.com/playable.mp4", ladder.renditions.single().url)
 
         val compatible = requests.single { it.url.queryParameter("force_codec") != null }
@@ -71,7 +71,7 @@ class ByteVc1CompatibleRequestTest {
                 row("https://example.com/only-bytevc1.mp4", "bytevc1", "1080p"),
                 row("https://example.com/playable.mp4", "h264", "720p"))
         }
-        val ladder = repository.streamLadder("123")
+        val ladder = repository.legacyStreamLadder("123")
         assertEquals(2, ladder.renditions.size)
         assertTrue(ladder.renditions.any { it.codec == "h264" })
         assertEquals(0, requests.count { it.url.queryParameter("force_codec") != null })
@@ -87,7 +87,7 @@ class ByteVc1CompatibleRequestTest {
                 else -> tabBody("123", row("https://example.com/only-bytevc1.mp4", "bytevc1", "1080p"))
             }
         }
-        val ladder = repository.streamLadder("123")
+        val ladder = repository.legacyStreamLadder("123")
         assertEquals("https://example.com/only-bytevc1.mp4", ladder.renditions.single().url)
         assertEquals(1, requests.count { it.url.queryParameter("force_codec") != null })
     }
@@ -100,7 +100,7 @@ class ByteVc1CompatibleRequestTest {
                 else -> tabBody("123", row("https://example.com/only-bytevc1.mp4", "bytevc1", "1080p"))
             }
         }
-        val ladder = repository.streamLadder("123")
+        val ladder = repository.legacyStreamLadder("123")
         assertEquals("https://example.com/only-bytevc1.mp4", ladder.renditions.single().url)
         assertEquals(1, requests.count { it.url.queryParameter("force_codec") != null })
     }

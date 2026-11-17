@@ -84,6 +84,11 @@ class AccountController(private val activity: Activity,private val play: (CloudP
     internal val recommendationIdentity get()="$generation:${profile?.id.orEmpty()}"
     /** 取址用的账号 Cookie；未登录时是空串。 */
     internal fun accountCookie()=credentials?.cookie.orEmpty()
+    /**
+     * 取址失败时只看「带没带账号 Cookie」不够：本地存着凭据，和服务端还认这份凭据，是两件事。
+     * 凭据在不在、账号资料能不能刷新出来——只有这两项能把「没登录」和「登录已经失效」分开。
+     */
+    internal val playbackDiagnostic get()="凭据=${if(credentials!=null) "有" else "无"} 账号资料=${if(profile!=null) "已取到" else "未取到"} 最近一次账号操作=$status"
     val signedIn get()=credentials!=null
     val accountLabel get()=profile?.nickname ?: if(signedIn) "红果账号" else "未登录"
     val historyStatus get()=status

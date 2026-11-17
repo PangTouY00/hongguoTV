@@ -95,8 +95,23 @@ class StreamLadder(val renditions: List<Rendition>) {
     companion object { private val AVC_LABELS = setOf("h264", "avc", "avc1", "avc3") }
 }
 class ContentHttpException(val statusCode: Int): IOException("内容请求失败（HTTP $statusCode）")
-/** HTTP 200 with no body: the website renderer failed transiently; safe to retry. */
-internal class EmptyContentException: IOException("内容响应为空")
+/**
+ * HTTP 200 with no body: the website renderer failed transiently; safe to retry.
+ *
+ * 状态码、字节数与服务端 logid 都带上：同一个「播不了」背后可能是 CDN 软拦、身份不被认、
+ * 或这一集本身没有资源，只有这三行数字能把它们分开。logid 是字节系网关给每次请求的编号，
+ * 拿着它才能确认服务端真的收到并处理了这个请求。
+ */
+internal class EmptyContentException(
+    val statusCode: Int = 0,
+    val bytes: Int = -1,
+    val serverLogId: String = "",
+): IOException(
+    "内容响应为空" + (if (statusCode > 0)
+        "（HTTP $statusCode，响应 $bytes 字节" +
+            (if (serverLogId.isNotBlank()) "，服务端 logid $serverLogId" else "") + "）"
+    else "")
+)
 class SearchSessionExpiredException: IOException("搜索结果已过期，请从第 1 页重新搜索")
 /** 搜索和播放一样只认注册下发的身份；注册失败时单独报，别显示成「网络失败」或 HTTP 5xx。 */
 class SearchIdentityException(cause: Throwable? = null): IOException("搜索需要先完成设备注册，请稍后重试", cause)
@@ -172,14 +187,15 @@ class ContentRepository(
         // 榜单用收紧超时的专用客户端，其余请求沿用默认客户端。
         fun fetch() = RequestScope.execute(client.newCall(request.build())) { response ->
             if (!response.isSuccessful) throw ContentHttpException(response.code)
-            val body = response.body ?: throw EmptyContentException()
+            val body = response.body ?: throw EmptyContentException(response.code)
             if (body.contentLength() > 16*1024*1024) throw IOException("内容响应过大")
             val input=body.byteStream(); val out=java.io.ByteArrayOutputStream(); val buffer=ByteArray(8192)
             while(out.size()<=16*1024*1024) { val n=input.read(buffer); if(n<0) break; out.write(buffer,0,n) }; val bytes=out.toByteArray()
             if(bytes.size > 16*1024*1024) throw IOException("内容响应过大")
             // Ranking pages intermittently answer HTTP 200 with an empty body while the
             // server renderer restarts; retry it instead of reporting broken content.
-            if(bytes.isEmpty()) throw EmptyContentException()
+            if(bytes.isEmpty()) throw EmptyContentException(
+                response.code, bytes.size, response.header("x-tt-logid").orEmpty())
             String(bytes,Charsets.UTF_8)
         }
         var attempt=0
@@ -409,10 +425,17 @@ class ContentRepository(
      * 版本参数与 UA 换成播放器那一套（主仓库 2026-11-06 起同样如此），query 不再带 `ts`。
      *
      * 2026-11-11 起服务端进一步校验**真签名**：`Signer` 那套 `x-argus` 只是 `base64(时间戳)`，
-     * 和伪造的 `x-gorgon` / `x-helios` / `x-medusa` 一起出现时请求被判不可信，
+     * 当时和占位的 `x-gorgon` / `x-helios` / `x-medusa` 一起出现时请求被判不可信，
      * 直接回 HTTP 200 + 0 字节（详情、注册都正常，只有播放模型被静默丢弃）。
-     * 所以这里按最终 query 用 `PlayerSigner`（fqapp 的 argus/ladon 移植）重生成签名头，
-     * 并把占位头全部去掉——真头与占位头同时出现必然被拒。
+     * 所以这里按最终 query 用 `PlayerSigner`（fqapp 的 argus/ladon 移植）重生成 argus/ladon/khronos。
+     *
+     * 当时顺手把 `x-medusa` / `x-helios` 也一起去掉了，这一步是错的。同类项目 charlie901208/HGTV
+     * 在 2026-10-09 做过逐头篡改实测（它的 docs/APP_SIGNING.md §11.2）：这条接口真正校验的是
+     * `x-medusa`（绑定正文与设备身份）与 `x-helios`，`x-gorgon` / `x-ladon` / `x-argus` /
+     * `x-ss-stub` / `x-khronos` 反而「发了不亏、不发也行」——它自己用的就是 `base64(时间戳)`
+     * 那对占位 argus/ladon。缺了 medusa 与 helios 时网关在业务处理前就把请求挡掉，
+     * 回的就是 HTTP 200 + content-length: 0，连错误码都不给（本机探针实测源站 origin 处理了
+     * 二十余毫秒后回空正文，换 HTTP/1.1 一样）。所以这两个头必须留着。
      */
     private fun playbackRequest(
         base: String,
@@ -434,11 +457,13 @@ class ContentRepository(
         // x-khronos 必须与 URL 的 _rticket 同源，否则签名与 query 对不上。
         val real = if (ticket != null) PlayerSigner.headers(query, body, ts = ticket / 1000, ticket = ticket)
         else PlayerSigner.headers(query, body)
-        val placeholder = setOf(
-            "x-gorgon", "x-helios", "x-medusa", "x-argus", "x-ladon", "x-khronos",
+        // 只把 argus/ladon/khronos 换成 PlayerSigner 真算的那一份；
+        // x-medusa / x-helios / x-gorgon 是 Signer 真算的，必须留下（依据见上面的接口实测记录）。
+        val replaced = setOf(
+            "x-argus", "x-ladon", "x-khronos",
             "x-ss-stub", "x-ss-req-ticket", "x-medias", "x-tt-dt",
         )
-        val kept = signed.headers.filterKeys { it.lowercase() !in placeholder }
+        val kept = signed.headers.filterKeys { it.lowercase() !in replaced }
         return signed.copy(headers = kept + real)
     }
     /**
@@ -478,33 +503,38 @@ class ContentRepository(
         throw last ?: EmptyPlaybackResponseException()
     }
     /**
-     * 一集的可播放清晰度，优先走官方现行接口。
+     * 一集的可播放清晰度。先走 v5（见 [MobilePlayback]），它给不出结果才退回旧的两条路径。
      *
      * 取到的阶梯缓存 5 分钟、最多 100 集：同一集重播、换清晰度、自动重试都不必再走一遍取址。
      * 主仓库的 streamCache 同样是 5 分钟加条数上限。失败重试传 `fresh=true` 作废这一集的缓存——
      * 重试的意义就是重新取一次地址、拿一份新签名，照旧缓存再试第二次没有意义。
-     *
-     * 旧的 `POST /novel/player/multi_video_model/v1/` 自 2026-11-02 起对第三方客户端一律回
-     * HTTP 200 + 0 字节（换域名、UA、Cookie、完整签名、device_token 都一样），而官方客户端
-     * 早已改用 `GET /reading/bookapi/video_tab/multi_video_model/v1/`。所以先读新接口，
-     * 只有它拿不到清晰度时才回退旧接口，旧接口再给不出就报新接口的原因。
      */
-    fun streamLadder(id: String, fresh: Boolean = false): StreamLadder {
+    @JvmOverloads fun streamLadder(id: String, fresh: Boolean = false): StreamLadder =
+        cachedLadder(id, fresh) { fetchLadder(it) }
+
+    /** 旧传输（video_tab GET 与旧 POST）保留给离线回归与既有测试；正式播放只走 [streamLadder]。 */
+    @JvmOverloads internal fun legacyStreamLadder(id: String, fresh: Boolean = false): StreamLadder =
+        cachedLadder(id, fresh) { fetchLadder(it, allowV5 = false) }
+
+    private fun cachedLadder(id: String, fresh: Boolean, fetch: (String) -> StreamLadder): StreamLadder {
         require(id.matches(Regex("[0-9]{1,30}")))
         if (!fresh) synchronized(ladderCache) {
             ladderCache[id]?.let { (readAt, cached) -> if (clock() - readAt < ladderTtlMs) return cached }
         }
-        val ladder = fetchLadder(id)
+        val ladder = fetch(id)
         synchronized(ladderCache) {
             ladderCache[id] = clock() to ladder
             while (ladderCache.size > ladderCacheMax) ladderCache.remove(ladderCache.keys.first())
         }
         return ladder
     }
-    private fun fetchLadder(id: String): StreamLadder {
+    private fun fetchLadder(id: String, allowV5: Boolean = true): StreamLadder {
         var tabError: IOException? = null
         var anonymousRejected=false
         val account=accountCookie()
+        // 请求的是哪一集、手上有没有账号凭据、这台机器的时钟读数：这三件事不写下来，后面每一行失败都只能写成「取不到」。
+        // 签名里的时间戳用的就是这个 clock，它和日志行首的时间对不上时，问题在时钟而不在接口。
+        onPlaybackAttempt("取址目标 video_id=$id 账号凭据=${if(account.isBlank()) "无" else "有"} 本机epochSec=${clock() / 1000}")
         // 服务端对**每份注册身份**只放行有限几次取址：同一份身份一旦被拒就一直回空，
         // 换一份新注册的身份则立刻放行（实测：同一身份连试 8 次全空，换新身份第 1~2 次就成）。
         // 所以每一轮都先作废手上这份，再取一份新的——首页试播、下一集预热和用户点播
@@ -515,7 +545,11 @@ class ContentRepository(
             // 带账号那轮失败再退回匿名，账号凭据失效时不至于整条路都走不通。
             val withAccount=account.isNotBlank() && round==0
             try {
-                val ladder=tabLadder(id,withAccount)
+                // 先走 v5：2026-11-16 起只有这条实测能下发清晰度（同一接口同一身份只换签名，
+                // 旧签名回 0 字节、v5 回完整模型，见 kotlin-tv/PLAYBACK_V5.md）。它内部还带一次
+                // 当场换写法：当前写法没有结果时先换另一条 v5 写法（同一份正文与签名，只有 path 不同），
+                // 两条都不给结果才退回先前那两条：带账号先试 POST video_model，再试 video_tab GET。
+                val ladder=(if(allowV5) v5Ladder(id) else null) ?: (if(withAccount) postVideoModel(id,withAccount) else null) ?: tabLadder(id,withAccount)
                 if(ladder!=null) {
                     val compatible=compatibleLadder(id,withAccount,ladder)
                     if(compatible!=null) {
@@ -529,7 +563,7 @@ class ContentRepository(
                 break
             } catch (error: IOException) {
                 tabError=error
-                reportPlaybackAttempt(round,withAccount,error.javaClass.simpleName)
+                reportPlaybackAttempt(round,withAccount,describeError(error))
                 // 未登录时这个接口对每一集都回 110001（实测 3 部剧各前 3 集全部被拒），
                 // 再退避三轮只是让人对着屏幕等；网络类失败照旧重试。
                 if(account.isBlank() && addressRefusal(error)) { anonymousRejected=true; break }
@@ -544,7 +578,12 @@ class ContentRepository(
             // 这时该说的是「去登录」，不是「暂时取不到」。
             if(anonymousRejected && addressRefusal(error)) throw PlaybackLoginRequiredException()
             // 旧接口常态只有空 body，那种情况下新接口的错误码更有信息量；其它错误照旧抛。
-            throw if(error is EmptyContentException && tabError!=null) tabError else error
+            if(error is EmptyContentException && tabError!=null) {
+                // 换掉抛出的异常可以，把旧接口那条丢掉就分不清「两个接口都空」和「只有新接口空」了。
+                onPlaybackAttempt("备用接口同样失败 → ${describeError(error)}")
+                throw tabError
+            }
+            throw error
         }
     }
     /** 取址被服务端拒（网络失败不算）：未登录时这就是「需要登录」的信号。 */
@@ -552,6 +591,9 @@ class ContentRepository(
         error is PlaybackRejectedException || error is EmptyPlaybackResponseException || error is EmptyContentException
     private fun reportPlaybackAttempt(round: Int, withAccount: Boolean, outcome: String) =
         onPlaybackAttempt("取址第${round+1}轮 新注册身份 账号Cookie=${if(withAccount) "带" else "不带"} → $outcome")
+    /** 只报类名不够：同一个类名背后可能是 CDN 软拦、身份不被认，或这一集本身没有资源。 */
+    private fun describeError(error: IOException) =
+        "${error.javaClass.simpleName}: ${error.message ?: "无详细信息"}"
     /** 注册下发的设备 Cookie 与账号 Cookie 并成一条；同名时以账号那份为准。 */
     private fun playbackCookie(device: String, account: String): String {
         if(account.isBlank()) return device
@@ -566,6 +608,62 @@ class ContentRepository(
         merged.putAll(parse(device)); merged.putAll(parse(account))
         return merged.entries.joinToString("; ") { (name,value) -> "$name=$value" }
     }
+
+    /**
+     * 2026-11-16 起生效的取址路径：`POST /novel/player/multi_video_model/player/v1`，正文 gzip，
+     * 签名用 Android v04.10.03 的 Medusa/Helios/Khronos（摘要分支要求原始值 12）。
+     *
+     * 换这条的理由只有一条实测对照：同一接口、同一份新注册匿名身份、同一集号、同一 gzip 正文，
+     * 旧签名回 HTTP 200 + 0 字节，这套签名回完整模型。它不需要账号 Cookie，所以匿名也能取到。
+     * 请求里的设备身份仍来自我们自己的注册会话，只有版本号与机型是协议常量。
+     *
+     * 这条写法挂掉时（空正文、5xx、连接失败）当场换 [MobilePlayback.FALLBACK_PATH] 再要一次：
+     * 2026-11-17 的对照里同一份签名与同一个正文只有那条写法回数据（见 kotlin-tv/PLAYBACK_V5.md）。
+     * 两条用的是同一份设备身份、同一份正文，只有 path 不同；业务码非 0 与响应结构不对不算「挂了」，
+     * 换写法不会改变结果，不为此多花一次请求。
+     */
+    private fun v5Ladder(id: String): StreamLadder? {
+        val identity = playbackSession.profile(http)
+        val paths = listOf(MobilePlayback.PRIMARY_PATH, MobilePlayback.FALLBACK_PATH)
+        for ((index, path) in paths.withIndex()) {
+            val entry = try {
+                MobilePlayback.model(id, identity.values, http, MobilePlayback.signer, clock(), path)
+            } catch (error: IOException) {
+                if (!playbackPathSwitchable(error) || index == 1) {
+                    reportPlaybackAttempt(0, false, "v5 取址失败 ${describeError(error)}")
+                    return null
+                }
+                // 这一行要写的是「换到哪一条写法」，不是刚失败的那一条。
+                reportPlaybackAttempt(0, false, "当前取址写法没有结果 ${describeError(error)} → 换 ${paths[index + 1]}")
+                continue
+            }
+            val model = modelOf(entry.opt("video_model")) ?: return null
+            ladderFromModel(model)?.let {
+                reportPlaybackAttempt(0, false, if (index == 0) "v5 取址成功" else "v5 取址成功（备用写法）")
+                return it
+            }
+            // 模型没带内联清晰度时照旧走 fallback_api，不把 v5 成功取到模型当成没有结果。
+            val fallback = fallbackUrl(model) ?: return null
+            val ladder = try { ladderFromFallbackApi(fallback) } catch (error: IOException) {
+                reportPlaybackAttempt(0, false, "v5 只给出备用地址，读取失败 ${describeError(error)}")
+                return null
+            }
+            reportPlaybackAttempt(0, false, "v5 取址成功（备用地址）")
+            return ladder
+        }
+        return null
+    }
+    /**
+     * 「这条写法挂了」的判定：服务端没给出结果，或请求根本没到服务端——换一条写法才有意义的情况。
+     *
+     * 404 也算：写法本身不存在时换写法正是对症。业务码非 0（[PlaybackRejectedException] 那类）是
+     * 账号侧的拒绝，两条写法都会同样被拒，不在这里多花一次请求。
+     */
+    private fun playbackPathSwitchable(error: IOException) =
+        error is EmptyPlaybackResponseException || error is EmptyContentException ||
+            error is java.net.SocketTimeoutException || error is java.net.SocketException ||
+            error is java.net.UnknownHostException ||
+            (error is ContentHttpException && error.statusCode in setOf(404, 408, 500, 502, 503, 504))
 
     /**
      * 官方 App 现行的取播放信息接口。参数缺任意一项服务端回 100103；`video_platform`
@@ -602,6 +700,58 @@ class ContentRepository(
         return ladderFromModel(model)
     }
     /**
+     * 官方播放器的另一条取址路径：`POST /novel/player/video_model/v1/`。
+     *
+     * 同类项目 HGTV 记录 2026-10 起带场景段的 `multi_video_model/:dr_scene/v1/` 一律回空正文，
+     * 现在能用的是这条，而且请求体形态不同：要 `video_id` 单值，给 `mixed_video_id_map` /
+     * `vid` / `video_ids` 都回 100001。它同样不接受匿名请求（匿名一律 HTTP 200 + 0 字节），
+     * 所以只在带账号的那轮试。
+     *
+     * 模型的位置有两种：新路由在 `data.video_model`，带场景段与旧路径在 `data[<vid>].video_model`；
+     * 值可能是对象也可能是字符串化的 JSON，两种都要接住。
+     */
+    private fun postVideoModel(id: String, withAccount: Boolean): StreamLadder? {
+        val identity=playbackSession.profile(http)
+        val payload=("""{"video_id":"$id","biz_param":{"detail_page_version":0,"device_level":3,""" +
+            """"disable_digg_stat":false,"need_all_video_definition":true,"need_mp4_align":false,""" +
+            """"use_os_player":false,"use_server_dns":false,"video_platform":1024}}""").toByteArray()
+        val signed=playbackRequest("$PLAYER_HOST/novel/player/video_model/v1/",identity,body=payload)
+        val headers=linkedMapOf<String,String>()
+        val cookie=playbackCookie(identity.cookie,if(withAccount) accountCookie() else "")
+        if(cookie.isNotBlank()) headers["Cookie"]=cookie
+        val ladder=try {
+            val body=text(signed.url,signed,headers=headers,retryTransient=true)
+            val json=runCatching { JSONObject(body) }.getOrNull() ?: throw IOException("播放接口返回了无法解析的数据")
+            val code=json.optInt("Code",json.optInt("code",-1))
+            if(code!=0) throw playbackCodeError(code)
+            val model=videoModelOf(json) ?: throw IOException("播放信息为空")
+            ladderFromModel(model) ?: fallbackUrl(model)?.let { ladderFromFallbackApi(it) }
+        } catch (error: IOException) {
+            reportPlaybackAttempt(0,withAccount,"POST video_model 失败 ${describeError(error)}")
+            return null
+        }
+        if(ladder==null) reportPlaybackAttempt(0,withAccount,"POST video_model 没有给出清晰度")
+        else reportPlaybackAttempt(0,withAccount,"POST video_model 成功")
+        return ladder
+    }
+    /** 新路由把模型放在 `data.video_model`，带场景段与旧路径放在 `data[<vid>].video_model`。 */
+    private fun videoModelOf(root: JSONObject): JSONObject? {
+        val data=root.optJSONObject("data") ?: return null
+        modelOf(data.opt("video_model"))?.let { return it }
+        val entry=data.keys().asSequence().mapNotNull { data.optJSONObject(it) }.firstOrNull() ?: return null
+        return modelOf(entry.opt("video_model"))
+    }
+    private fun modelOf(value: Any?): JSONObject? = when(value) {
+        is JSONObject -> value
+        is String -> runCatching { JSONObject(value) }.getOrNull()
+        else -> null
+    }
+    private fun fallbackUrl(model: JSONObject): String? {
+        val raw=model.opt("fallback_api")
+        val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
+        return fallback.takeIf { it.startsWith("https://") }
+    }
+    /**
      * 这一集每一档都是厂商私有编码时，照官方播放器那样再要一次兼容模型。
      *
      * 这里不预判设备能力：只有**每一档**都解不出时才多要一次。兼容请求给不出可解码的档，
@@ -610,7 +760,7 @@ class ContentRepository(
     private fun compatibleLadder(id: String, withAccount: Boolean, ladder: StreamLadder): StreamLadder? {
         if(ladder.renditions.isEmpty() || ladder.renditions.any { !vendorOnlyCodecs.contains(it.codec) }) return null
         val alternative=try { tabLadder(id,withAccount,compatible = true) } catch (error: IOException) {
-            reportPlaybackAttempt(0,false,"全档私有编码，兼容请求失败 ${error.javaClass.simpleName}")
+            reportPlaybackAttempt(0,false,"全档私有编码，兼容请求失败 ${describeError(error)}")
             return null
         }
         if(alternative==null || alternative.renditions.isEmpty() ||
@@ -661,9 +811,10 @@ class ContentRepository(
         // The current model already carries plain media URLs, dimensions and CENC keys.
         // Only use the legacy fallback endpoint when this shape has no usable rendition.
         ladderFromModel(model)?.let { return it }
-        val raw=model.opt("fallback_api")
-        val fallback=when(raw) { is JSONObject -> raw.str("fallback_api"); is JSONArray -> raw.optString(0); else -> runCatching { JSONObject(raw.toString()).str("fallback_api") }.getOrDefault(raw.toString()) }
-        if(!fallback.startsWith("https://")) throw IOException("播放地址格式异常")
+        return ladderFromFallbackApi(fallbackUrl(model) ?: throw IOException("播放地址格式异常"))
+    }
+    /** 模型没带内联清晰度时，照官方播放器那样再取一次 `fallback_api` 指向的媒体清单。 */
+    private fun ladderFromFallbackApi(fallback: String): StreamLadder {
         var info=JSONObject(text(fallback,retryTransient=true)).optJSONObject("video_info")?.optJSONObject("data") ?: throw IOException("没有播放资源")
         var videoList=info.optJSONObject("video_list") ?: throw IOException("没有可用清晰度")
         // 有些集服务端只发厂商私有编码（Android 的 MP4 解不出视频轨）。官方播放器对这种内容还有一条

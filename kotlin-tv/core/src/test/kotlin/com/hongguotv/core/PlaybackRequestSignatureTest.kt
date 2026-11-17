@@ -17,16 +17,22 @@ import org.junit.Test
  * 2026-11-05 实测：同一台设备、同一个接口，不带签名的请求一律 `HTTP 200 + 0 字节`，
  * 带签名的请求回 `code 0` + 完整播放模型；换域名、换 UA、换出口 IP、补参数都不改变这一点。
  *
- * 2026-11-11 实测：只有占位签名也不够了。`x-argus=base64(时间戳)` 加上伪造的
- * `x-gorgon` / `x-helios` / `x-medusa` 会被服务端判为不可信请求，同样回 `HTTP 200 + 0 字节`
- * （登录与否都一样）。所以现在锁的是 `PlayerSigner` 生成的 argus/ladon，
- * 并且占位头必须已经去掉——两套同时出现必然被拒。
+ * 2026-11-11 实测：`x-argus=base64(时间戳)` 那对占位 argus/ladon 不够，换成 `PlayerSigner`
+ * 真算的那一份才通。当时把 `x-medusa` / `x-helios` 也一起去掉了，这一步是错的：
+ * 同类项目 charlie901208/HGTV 的逐头篡改实测（docs/APP_SIGNING.md §11.2，2026-10-09）给出的结论是
+ * 这条接口真正校验的是 `x-medusa`（绑定正文与设备身份）与 `x-helios`，
+ * `x-gorgon` / `x-ladon` / `x-argus` / `x-ss-stub` / `x-khronos` 不发也行——它自己用的就是占位
+ * argus/ladon。缺了 medusa 与 helios 时网关在业务处理前挡掉，回 `HTTP 200 + 0 字节`、连错误码
+ * 都不给，与本机探针看到的「源站 origin 处理二十余毫秒后回空正文」一致。
+ * 所以这里锁的是：真 argus/ladon 必须能解开，且 medusa/helios/gorgon 必须都在。
  */
 class PlaybackRequestSignatureTest {
     private val tabPath = "/reading/bookapi/video_tab/multi_video_model/v1/"
     private val legacyPath = "/novel/player/multi_video_model/v1/"
     private val signatureHeaders = listOf("x-argus", "x-ladon", "x-khronos", "x-ss-req-ticket")
-    private val placeholderHeaders = listOf("x-gorgon", "x-medusa", "x-helios")
+    // 逐头篡改实测里真正被校验的是 x-medusa（绑定正文与设备身份）与 x-helios，缺了它们
+    // 网关在业务处理前就把请求挡掉：HTTP 200 + content-length: 0，连错误码都不给。
+    private val verifiedHeaders = listOf("x-medusa", "x-helios", "x-gorgon")
 
     private fun row(url: String, quality: Int, height: Int) = JSONObject()
         .put("main_url", url)
@@ -63,11 +69,11 @@ class PlaybackRequestSignatureTest {
             requests += request
             if (request.url.encodedPath == tabPath) tabPayload("123") else "{}"
         }
-        assertEquals("https://example.com/signed", repository.streamLadder("123").renditions.single().url)
+        assertEquals("https://example.com/signed", repository.legacyStreamLadder("123").renditions.single().url)
 
         val tab = requests.single { it.url.encodedPath == tabPath }
         for (name in signatureHeaders) assertNotNull("播放取址缺少签名头 $name", tab.header(name))
-        for (name in placeholderHeaders) assertNull("播放取址仍带着占位签名头 $name", tab.header(name))
+        for (name in verifiedHeaders) assertNotNull("播放取址缺少服务端校验的签名头 $name", tab.header(name))
         // x-khronos 与 URL 的 _rticket 同源，签名才对得上 query。
         assertEquals(tab.url.queryParameter("_rticket")!!.toLong() / 1000, tab.header("x-khronos")!!.toLong())
         // x-argus 必须是能解开的真 bean（占位值解不开），且带本次调用的随机 nonce。
@@ -89,7 +95,7 @@ class PlaybackRequestSignatureTest {
             requests += request
             if (request.url.encodedPath == tabPath) tabPayload("123") else "{}"
         }
-        repository.streamLadder("123")
+        repository.legacyStreamLadder("123")
         val tab = requests.single { it.url.encodedPath == tabPath }
         // from_video_id 是官方 GetVideoModelRequest 里的字段，只取一集时留空也要带上；其余参数一律非空。
         assertTrue(tab.url.queryParameterNames.contains("from_video_id"))
@@ -102,13 +108,15 @@ class PlaybackRequestSignatureTest {
             requests += request
             if (request.url.encodedPath == tabPath) """{"code":100103,"message":"PARAM_INVALID"}""" else legacyPayload("123")
         }
-        assertEquals("https://example.com/legacy", repository.streamLadder("123").renditions.single().url)
+        assertEquals("https://example.com/legacy", repository.legacyStreamLadder("123").renditions.single().url)
 
         val legacy = requests.single { it.url.encodedPath == legacyPath }
         for (name in signatureHeaders) assertNotNull("旧播放接口缺少签名头 $name", legacy.header(name))
-        for (name in placeholderHeaders) assertNull("旧播放接口仍带着占位签名头 $name", legacy.header(name))
+        for (name in verifiedHeaders) assertNotNull("旧播放接口缺少服务端校验的签名头 $name", legacy.header(name))
         // POST 的 body 参与签名：x-ss-stub 是 body 的 MD5，并作为 argus 的 body hash 输入。
         assertNotNull(legacy.header("x-ss-stub"))
+        // 大写十六进制（设备注册那条用的也是大写）：小写的那一份服务端按没给处理。
+        assertTrue(legacy.header("x-ss-stub")!!.all { it.isDigit() || it in 'A'..'F' })
         assertNotNull(legacy.body)
         assertNotNull("x-argus 不是可解开的真签名", Argus.decrypt551(legacy.header("x-argus")!!))
     }
@@ -119,8 +127,8 @@ class PlaybackRequestSignatureTest {
         val repository = repository { request ->
             if (request.url.encodedPath == tabPath) { tabArgus += request.header("x-argus"); tabPayload("123") } else "{}"
         }
-        repository.streamLadder("123", fresh = true)
-        repository.streamLadder("123", fresh = true)
+        repository.legacyStreamLadder("123", fresh = true)
+        repository.legacyStreamLadder("123", fresh = true)
         assertEquals(2, tabArgus.size)
         assertNotEquals(tabArgus[0], tabArgus[1])
         assertNotEquals(tabArgus[0]?.let { Argus.recover551Field3(it) }, tabArgus[1]?.let { Argus.recover551Field3(it) })

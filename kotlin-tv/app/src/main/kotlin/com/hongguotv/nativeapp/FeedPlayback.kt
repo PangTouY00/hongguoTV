@@ -44,7 +44,9 @@ internal class PublicFeedBackend(
     }
     private val closed=java.util.concurrent.atomic.AtomicBoolean(false)
     private val repository=ContentRepository(http,playbackSession=playbackSession,
-        accountCookie={ account?.cookie.orEmpty() })
+        accountCookie={ account?.cookie.orEmpty() },
+        // 首页试播失败界面上什么都不显示（卡片照常出），不接进日志就没人知道它取址没成。
+        onPlaybackAttempt={ DiagLog.info("Home address: $it") })
     private val recommendationAccount=account
     private val cacheIdentity=account?.let {
         java.security.MessageDigest.getInstance("SHA-256").digest(it.cookie.toByteArray(Charsets.UTF_8)).joinToString("") { b -> "%02x".format(b.toInt() and 255) }
@@ -60,13 +62,13 @@ internal class PublicFeedBackend(
     }
     private fun <T> timed(stage: String, action: ()->T): T {
         val start=android.os.SystemClock.elapsedRealtime()
-        try { return action() } finally { android.util.Log.i("HongguoTV","Home $stage elapsedMs=${android.os.SystemClock.elapsedRealtime()-start}") }
+        try { return action() } finally { DiagLog.info("Home $stage elapsedMs=${android.os.SystemClock.elapsedRealtime()-start}") }
     }
     private fun page(source: String,page: Int,cursor: RecommendationCursor,fetch: ()->CatalogPage): CatalogPage {
         if(page==1) startupCache?.load(cacheIdentity,source)?.let { cached ->
             if(cursor.restoreStarter(cached)) {
                 synchronized(trialHints) { startupPages[source]=cached }
-                android.util.Log.i("HongguoTV","Home starter-cache hit")
+                DiagLog.info("Home starter-cache hit")
                 return rememberHints(cached)
             }
         }
@@ -195,7 +197,7 @@ internal class Media3TrialPlayback(context: Context): TrialPlayback {
             }
             override fun onPlayerError(error: PlaybackException) { if(active()) status?.invoke(TrialStatus.ERROR) }
             override fun onRenderedFirstFrame() {
-                if(active()) android.util.Log.i("HongguoTV","Home first-frame elapsedMs=${android.os.SystemClock.elapsedRealtime()-startedAt}")
+                if(active()) DiagLog.info("Home first-frame elapsedMs=${android.os.SystemClock.elapsedRealtime()-startedAt}")
             }
         })
     }

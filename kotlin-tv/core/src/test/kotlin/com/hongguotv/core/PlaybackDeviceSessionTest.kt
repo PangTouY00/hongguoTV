@@ -53,8 +53,8 @@ class PlaybackDeviceSessionTest {
                 }
                 .build()
         val session = PlaybackDeviceSession()
-        ContentRepository(http, playbackSession = session).streamLadder("123")
-        ContentRepository(http, playbackSession = session).streamLadder("123")
+        ContentRepository(http, playbackSession = session).legacyStreamLadder("123")
+        ContentRepository(http, playbackSession = session).legacyStreamLadder("123")
         // 每次取址各注册一次：线上实测一份注册身份只放行有限几次取址，同一份被拒之后会一直回空，
         // 换一份新注册的身份才立刻放行。所以这里不该再要求「整个进程只注册一次」。
         assertTrue("两次取址没有各自重新注册：$registrations", registrations >= 2)
@@ -139,7 +139,7 @@ class PlaybackDeviceSessionTest {
                 { now += 1_000L; now },
                 PlaybackDeviceSession { DeviceRegister.Registered("333", "444") },
             )
-        assertEquals(1, repo.streamLadder("123").renditions.size)
+        assertEquals(1, repo.legacyStreamLadder("123").renditions.size)
         assertEquals(3, reads.get())
         // 同一签名重读通常还是空响应，所以每次重试都要换新的 _rticket。
         assertEquals(3, tickets.distinct().size)

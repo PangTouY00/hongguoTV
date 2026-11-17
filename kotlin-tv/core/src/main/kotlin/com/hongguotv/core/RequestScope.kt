@@ -4,6 +4,7 @@ package com.hongguotv.core
 import okhttp3.Call
 import okhttp3.Response
 import java.io.IOException
+import java.io.InterruptedIOException
 
 /** Cancels only the work owned by one navigation/playback intent, including body reads. */
 class RequestScope {
@@ -42,6 +43,13 @@ class RequestScope {
 
     companion object {
         private val current = ThreadLocal<RequestScope>()
+
+        /** 把「这一轮已经被取消」变成异常：导航取消或线程中断都算，别让下游再发请求出去。 */
+        fun ensureActive() {
+            if (current.get()?.isCancelled() == true || Thread.currentThread().isInterrupted)
+                throw InterruptedIOException("请求已取消")
+        }
+
         fun <T> execute(call: Call, consume: (Response) -> T): T {
             val owner = current.get()
             owner?.attach(call)
