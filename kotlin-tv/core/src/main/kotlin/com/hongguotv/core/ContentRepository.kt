@@ -425,10 +425,17 @@ class ContentRepository(
      * 版本参数与 UA 换成播放器那一套（主仓库 2026-11-06 起同样如此），query 不再带 `ts`。
      *
      * 2026-11-11 起服务端进一步校验**真签名**：`Signer` 那套 `x-argus` 只是 `base64(时间戳)`，
-     * 和伪造的 `x-gorgon` / `x-helios` / `x-medusa` 一起出现时请求被判不可信，
+     * 当时和占位的 `x-gorgon` / `x-helios` / `x-medusa` 一起出现时请求被判不可信，
      * 直接回 HTTP 200 + 0 字节（详情、注册都正常，只有播放模型被静默丢弃）。
-     * 所以这里按最终 query 用 `PlayerSigner`（fqapp 的 argus/ladon 移植）重生成签名头，
-     * 并把占位头全部去掉——真头与占位头同时出现必然被拒。
+     * 所以这里按最终 query 用 `PlayerSigner`（fqapp 的 argus/ladon 移植）重生成 argus/ladon/khronos。
+     *
+     * 当时顺手把 `x-medusa` / `x-helios` 也一起去掉了，这一步是错的。同类项目 charlie901208/HGTV
+     * 在 2026-10-09 做过逐头篡改实测（它的 docs/APP_SIGNING.md §11.2）：这条接口真正校验的是
+     * `x-medusa`（绑定正文与设备身份）与 `x-helios`，`x-gorgon` / `x-ladon` / `x-argus` /
+     * `x-ss-stub` / `x-khronos` 反而「发了不亏、不发也行」——它自己用的就是 `base64(时间戳)`
+     * 那对占位 argus/ladon。缺了 medusa 与 helios 时网关在业务处理前就把请求挡掉，
+     * 回的就是 HTTP 200 + content-length: 0，连错误码都不给（本机探针实测源站 origin 处理了
+     * 二十余毫秒后回空正文，换 HTTP/1.1 一样）。所以这两个头必须留着。
      */
     private fun playbackRequest(
         base: String,
@@ -450,11 +457,13 @@ class ContentRepository(
         // x-khronos 必须与 URL 的 _rticket 同源，否则签名与 query 对不上。
         val real = if (ticket != null) PlayerSigner.headers(query, body, ts = ticket / 1000, ticket = ticket)
         else PlayerSigner.headers(query, body)
-        val placeholder = setOf(
-            "x-gorgon", "x-helios", "x-medusa", "x-argus", "x-ladon", "x-khronos",
+        // 只把 argus/ladon/khronos 换成 PlayerSigner 真算的那一份；
+        // x-medusa / x-helios / x-gorgon 是 Signer 真算的，必须留下（依据见上面的接口实测记录）。
+        val replaced = setOf(
+            "x-argus", "x-ladon", "x-khronos",
             "x-ss-stub", "x-ss-req-ticket", "x-medias", "x-tt-dt",
         )
-        val kept = signed.headers.filterKeys { it.lowercase() !in placeholder }
+        val kept = signed.headers.filterKeys { it.lowercase() !in replaced }
         return signed.copy(headers = kept + real)
     }
     /**

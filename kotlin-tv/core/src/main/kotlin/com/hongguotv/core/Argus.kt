@@ -368,7 +368,8 @@ internal object PlayerSigner {
     ): Map<String, String> {
         val requestTicket = ticket ?: (ts * 1000)
         val aid = queryParam(query, "aid")?.toLongOrNull() ?: 1967L
-        val stub = body?.takeIf { it.isNotEmpty() }?.let { digest("MD5", it).hex() }.orEmpty()
+        // x-ss-stub 是大写 MD5 hex（设备注册那条用的也是大写），argus 里嵌的 body 摘要与它同源。
+        val stub = body?.takeIf { it.isNotEmpty() }?.let { digest("MD5", it).hex().uppercase() }.orEmpty()
         val ladonRandom = ByteArray(4).also { random.nextBytes(it) }
         val headers = linkedMapOf(
             "x-ss-req-ticket" to requestTicket.toString(),
