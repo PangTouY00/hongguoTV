@@ -54,4 +54,52 @@ class NextWorksTest {
         assertTrue(plan.seasons.isEmpty())
         assertEquals(6,plan.similar.size)
     }
+
+    private val boss="聚宝仙盆之杂灵根才是真BOSS"
+    private fun threeSeasons()=listOf(
+        work("1","$boss 第一季","第一季"),
+        work("2","${boss}2","第2季"),
+        work("3","$boss 第三季","第3季"),
+    )
+
+    @Test fun onlyTheSeasonRightAfterTheCurrentOneIsMarkedAsTheNextOne() {
+        val plan=NextWorks.plan(boss,threeSeasons())
+        assertEquals("2",plan.nextSeasonId)
+        val choices=plan.choices()
+        assertEquals(listOf(false,true,false),choices.map { it.isNextSeason })
+        // 文字本身要分得开：颜色只是加强，焦点态换底色时它不可靠。
+        assertTrue(choices[0].text.startsWith("其他季"))
+        assertTrue(choices[1].text.startsWith("接着看"))
+        assertTrue(choices[2].text.startsWith("其他季"))
+    }
+
+    @Test fun aSeasonLabelOnTheCurrentTitleMovesTheMarkedSeasonForward() {
+        val plan=NextWorks.plan("$boss 第2季",threeSeasons())
+        assertEquals("3",plan.nextSeasonId)
+        assertTrue(plan.choices().last().isNextSeason)
+    }
+
+    @Test fun aSeasonTwoStepsAheadIsNotOfferedAsTheNextOne() {
+        val plan=NextWorks.plan(boss,listOf(work("3","$boss 第三季","第3季")))
+        assertNull(plan.nextSeasonId)
+        assertTrue(plan.choices().none { it.isNextSeason })
+    }
+
+    @Test fun theSeasonNumberIsStillReadFromTheTitleWhenTheTagIsMissing() {
+        val plan=NextWorks.plan(boss,listOf(work("2","$boss 第二季","")))
+        assertEquals("2",plan.nextSeasonId)
+    }
+
+    @Test fun anUpcomingNextSeasonStaysUnmarkedBecauseItCannotBePlayedYet() {
+        val plan=NextWorks.plan(boss,listOf(work("2","$boss 第二季","第2季",upcoming=true)))
+        assertNull(plan.nextSeasonId)
+        assertTrue(plan.choices().none { it.isNextSeason })
+        assertTrue(plan.choices().first().text.startsWith("待上线"))
+    }
+
+    @Test fun aCurrentSeasonOfElevenMarksNeitherTheFirstNorTheSecond() {
+        val plan=NextWorks.plan("$boss 第十一季",listOf(work("1","$boss 第一季","第一季"),work("2","${boss}2","第2季")))
+        assertNull(plan.nextSeasonId)
+        assertTrue(plan.choices().none { it.isNextSeason })
+    }
 }

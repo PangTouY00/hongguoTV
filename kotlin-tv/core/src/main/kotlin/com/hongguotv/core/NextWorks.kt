@@ -1,14 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.hongguotv.core
 
+/** 面板上的一行文本，以及它是不是「真正的下一季」（当前季号 + 1 的那一条）。 */
+data class NextWorkChoice(val work: RelatedWork,val text: String,val isNextSeason: Boolean)
+
 /** 一部剧播完之后的下一步候选：同一系列的其他季排在最前，其余作为相似作品。
  *
  * 相关作品接口把两者混在同一个列表里，而且当前剧自己被排除（RelatedWorks.parse 里 id==currentId 就跳过），
  * 所以这里没有「当前第几季」这个字段可用，只能靠标题判断哪些属于同一系列：把季号、数字和标点从标题里
  * 去掉之后比较。判断不了不会出错——它只会落到相似作品那一组，用户照样看得到。
- * 季号只在文本里（tag_info.text 的「第2季」，或 season_index 拼出来的「第2季」），读不到就不猜顺序。 */
-data class NextWorkPlan(val seasons: List<RelatedWork>,val upcoming: List<RelatedWork>,val similar: List<RelatedWork>) {
+ * 季号只在文本里（tag_info.text 的「第2季」，或 season_index 拼出来的「第2季」），读不到就不猜顺序；
+ * 「真正的下一季」照同一条规则判：读不到当前季号就当第一部，只有季号正好是当前 + 1 的那一条会被标出来。 */
+data class NextWorkPlan(val seasons: List<RelatedWork>,val upcoming: List<RelatedWork>,val similar: List<RelatedWork>,val nextSeasonId: String?=null) {
     val isEmpty: Boolean get()=seasons.isEmpty() && upcoming.isEmpty() && similar.isEmpty()
+
+    /** 面板行的文本与强调标记。区分下一季靠三样一起：文字（「接着看」对「其他季」）、加粗、颜色，
+     *  不只靠颜色——电视上色觉不同、焦点态还会换底色，只靠颜色就没人分得出来。 */
+    fun choices(): List<NextWorkChoice> {
+        val rows=mutableListOf<NextWorkChoice>()
+        seasons.forEach { w ->
+            val next=w.series.id==nextSeasonId
+            val head=if(next) listOf("接着看",w.season.ifBlank { "下一季" }) else listOf("其他季",w.season)
+            rows+=NextWorkChoice(w,(head+listOf(w.series.title,w.series.badge)).filter { it.isNotBlank() }.joinToString(" · "),next)
+        }
+        upcoming.forEach { rows+=NextWorkChoice(it,listOf("待上线 · 预约",it.season,it.series.title).filter { it.isNotBlank() }.joinToString(" · "),false) }
+        similar.forEach { rows+=NextWorkChoice(it,listOf("相似作品",it.series.title,it.series.badge).filter { it.isNotBlank() }.joinToString(" · "),false) }
+        return rows
+    }
 }
 
 object NextWorks {
@@ -35,17 +53,25 @@ object NextWorks {
         return key.lowercase().filter { !it.isWhitespace() && !it.isDigit() && !dropped.contains(it) && it!='季' }
     }
 
-    /** 相似作品最多留 6 条：播放界面弹的是列表，太长就没人看完。 */
+    /** 季号先看 tag_info 给的 season 字段，读不到再看标题——两处都来自同一份文本，
+     *  而 tag_info.text 缺失时 RelatedWorks.parse 已经退回 season_index 拼出来的「第N季」。 */
+    private fun seasonOf(work: RelatedWork)=seasonNumber(work.season) ?: seasonNumber(work.series.title)
+
+    /** 相似作品最多留 6 条：播放界面弹的是列表，太长就没人看完。
+     *  nextSeasonId 只认「当前季号 + 1」那一条：当前标题没有季号就是第一部（第 1 季），
+     *  带「第2季」「第二季」就按读到的算。读不到当前季号、或下一季待上线、或它根本不在列表里，
+     *  都不标——宁可不标，也不把一部隔了两季的剧指成「接着看」。 */
     fun plan(currentTitle: String,rows: List<RelatedWork>,similarLimit: Int=6): NextWorkPlan {
         val key=familyKey(currentTitle)
         val same=if(key.isBlank()) emptyList() else rows.filter {
             val other=familyKey(it.series.title)
             other.isNotEmpty() && (other.startsWith(key) || key.startsWith(other))
         }
-        val bySeason=compareBy<RelatedWork>{ seasonNumber(it.season) ?: Int.MAX_VALUE }
+        val bySeason=compareBy<RelatedWork>{ seasonOf(it) ?: Int.MAX_VALUE }
         val seasons=same.filter { !it.upcoming }.sortedWith(bySeason)
         val upcoming=same.filter { it.upcoming }.sortedWith(bySeason)
         val similar=rows.filter { !same.contains(it) && !it.upcoming }.take(similarLimit)
-        return NextWorkPlan(seasons,upcoming,similar)
+        val next=seasons.firstOrNull { seasonOf(it)==(seasonNumber(currentTitle) ?: 1)+1 }
+        return NextWorkPlan(seasons,upcoming,similar,next?.series?.id)
     }
 }
