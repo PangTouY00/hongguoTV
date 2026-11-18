@@ -52,8 +52,9 @@ class TvTools(private val activity: Activity) {
         open(next,anchor); next.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus()
     }
     /** emphasis 是这一批行里要重点标出的那些下标：强调色加粗。系统给列表项的焦点态会换底色，
-     *  颜色在那一刻不一定还看得出来，所以调用方要在文字上同时区分开，不能只把颜色交给我。 */
-    fun choose(title: String,labels: List<String>,anchor: View?,onChoice: (Int)->Unit,extra: String?=null,compact: Boolean=false,onExtra: ()->Unit={},emphasis: Set<Int>=emptySet()) {
+     *  颜色在那一刻不一定还看得出来，所以调用方要在文字上同时区分开，不能只把颜色交给我。
+     *  它排在 onExtra 之前：现有调用点用尾随 lambda 传 onExtra，而尾随 lambda 只绑最后一个参数。 */
+    fun choose(title: String,labels: List<String>,anchor: View?,onChoice: (Int)->Unit,extra: String?=null,compact: Boolean=false,emphasis: Set<Int> = emptySet(),onExtra: ()->Unit={}) {
         val items=Array<CharSequence>(labels.size) { index ->
             val text=labels.getOrElse(index){""}
             if(index !in emphasis) text
