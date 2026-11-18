@@ -45,6 +45,8 @@ internal class PublicFeedBackend(
     private val closed=java.util.concurrent.atomic.AtomicBoolean(false)
     private val repository=ContentRepository(http,playbackSession=playbackSession,
         accountCookie={ account?.cookie.orEmpty() },
+        // 首页试播的取址和全屏播放一样，会为全档私有编码多要一次兼容模型。同一份记忆，问过一次就不再问。
+        codecMemory=CodecCapabilities.memory(),
         // 首页试播失败界面上什么都不显示（卡片照常出），不接进日志就没人知道它取址没成。
         onPlaybackAttempt={ DiagLog.info("Home address: $it") })
     private val recommendationAccount=account
