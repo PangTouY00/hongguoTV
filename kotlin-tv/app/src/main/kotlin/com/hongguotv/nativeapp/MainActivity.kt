@@ -1992,10 +1992,10 @@ class MainActivity: Activity() {
     }
     private fun showNextWorkPicker() {
         val plan=nextWorkOffer ?: return; val data=detail ?: return
-        val labels=mutableListOf<String>(); val targets=mutableListOf<RelatedWork>()
-        plan.seasons.forEach { w -> labels+=listOf("下一季",w.season,w.series.title,w.series.badge).filter { it.isNotBlank() }.joinToString(" · "); targets+=w }
-        plan.upcoming.forEach { w -> labels+=listOf("待上线 · 预约",w.season,w.series.title).filter { it.isNotBlank() }.joinToString(" · "); targets+=w }
-        plan.similar.forEach { w -> labels+=listOf("相似作品",w.series.title,w.series.badge).filter { it.isNotBlank() }.joinToString(" · "); targets+=w }
+        // 行文本与「哪一条是真正的下一季」都由 NextWorkPlan.choices 给出；这里只把它换成列表项和下标。
+        val choices=plan.choices()
+        val labels=choices.map { it.text }; val targets=choices.map { it.work }
+        val emphasis=choices.mapIndexedNotNull { index,choice -> if(choice.isNextSeason) index else null }.toSet()
         tvTools.choose("《${data.series.title}》已播完",labels,transportPlay,{ index ->
             val choice=targets.getOrNull(index) ?: return@choose
             if(choice.upcoming) {

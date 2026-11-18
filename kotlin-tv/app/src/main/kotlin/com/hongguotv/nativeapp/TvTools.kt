@@ -5,6 +5,11 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Typeface
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Handler
@@ -46,8 +51,18 @@ class TvTools(private val activity: Activity) {
         val next=AlertDialog.Builder(activity).setTitle(title).setMessage(message).setNegativeButton("取消",null).setPositiveButton("确认") { _,_-> action() }.create()
         open(next,anchor); next.getButton(AlertDialog.BUTTON_NEGATIVE).requestFocus()
     }
-    fun choose(title: String,labels: List<String>,anchor: View?,onChoice: (Int)->Unit,extra: String?=null,compact: Boolean=false,onExtra: ()->Unit={}) {
-        val builder=AlertDialog.Builder(activity).setTitle(title).setItems(labels.toTypedArray()) { _,index-> onChoice(index) }.setNegativeButton("取消",null)
+    /** emphasis 是这一批行里要重点标出的那些下标：强调色加粗。系统给列表项的焦点态会换底色，
+     *  颜色在那一刻不一定还看得出来，所以调用方要在文字上同时区分开，不能只把颜色交给我。 */
+    fun choose(title: String,labels: List<String>,anchor: View?,onChoice: (Int)->Unit,extra: String?=null,compact: Boolean=false,onExtra: ()->Unit={},emphasis: Set<Int>=emptySet()) {
+        val items=Array<CharSequence>(labels.size) { index ->
+            val text=labels.getOrElse(index){""}
+            if(index !in emphasis) text
+            else SpannableString(text).apply {
+                setSpan(StyleSpan(Typeface.BOLD),0,text.length,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(ForegroundColorSpan(TvStyle.accent),0,text.length,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+        }
+        val builder=AlertDialog.Builder(activity).setTitle(title).setItems(items) { _,index-> onChoice(index) }.setNegativeButton("取消",null)
         if(extra!=null) builder.setNeutralButton(extra) { _,_-> onExtra() }
         val next=builder.create(); open(next,anchor)
         // 只改宽度，高度交给 fitDialog：窗口给 WRAP_CONTENT 系统不认（上一版装机实测），留着只会盖掉收缩结果。
