@@ -38,6 +38,8 @@ class MainActivity: Activity() {
     private val repository=ContentRepository(
         playbackSession=PlaybackDeviceSession.shared,
         accountCookie={ if(::cloudAccount.isInitialized) cloudAccount.accountCookie() else "" },
+        // 这台设备真播通过过的私有编码记在这里，跨重启保留：同一编码不必每集都再问一次兼容档。
+        codecMemory=CodecCapabilities.memory(),
         onPlaybackAttempt={ message ->
             DiagLog.info("Playback address: $message")
             // 「账号Cookie=带」只说明本地存着凭据，不说明服务端还认它。取址一开始就把账号侧的事实写出来：
@@ -1480,7 +1482,9 @@ class MainActivity: Activity() {
             quality=playedQualityLabel(opened,maxQuality); attemptedQuality=opened.rendition?.quality ?: 0
             currentTrack=opened.track; currentRendition=opened.rendition; currentTiers=opened.tiers
             val p=player ?: run {
-                val load=DefaultLoadControl.Builder().setBufferDurationsMs(15000,30000,1000,2000).setTargetBufferBytes(12*1024*1024).build()
+                // 起播门槛 500ms、卡住之后的恢复门槛 2000ms：前者与首页试播用的是同一个值（那条实测首帧两百毫秒级），
+                // 后者保持不变——起播可以急着出画面，播放中途 rebuffer 不该跟着一起变松。
+                val load=DefaultLoadControl.Builder().setBufferDurationsMs(15000,30000,500,2000).setTargetBufferBytes(12*1024*1024).build()
                 val renderers=androidx.media3.exoplayer.DefaultRenderersFactory(this).setEnableDecoderFallback(true)
                 ExoPlayer.Builder(this,renderers).setLoadControl(load).build().also {
                     player=it; playerView?.player=it
@@ -1517,6 +1521,9 @@ class MainActivity: Activity() {
                     if(rendered==episodeIndex) {
                         if(!firstFrame) return
                         firstFrame=false
+                        // 首帧真的画出来了，这一集用的编码就是这台设备解得开的。记下来——
+                        // 之后遇到同样的编码，取址不再为它多花那一次兼容请求（实测一次一秒上下）。
+                        CodecCapabilities.notePlayableCodec(currentRendition?.codec)
                         DiagLog.info("Playback first frame episode=${episodeIndex+1} carried=$carriedOver reused=$reuse elapsedMs=${android.os.SystemClock.elapsedRealtime()-playbackStarted}")
                     } else if(rendered>=0) {
                         // A queued episode renders its first frame before the queue switch is applied, so
@@ -1583,7 +1590,9 @@ class MainActivity: Activity() {
         val ticket=preparedNext.begin(key)
         val http=okhttp3.OkHttpClient.Builder().connectTimeout(8,java.util.concurrent.TimeUnit.SECONDS).readTimeout(15,java.util.concurrent.TimeUnit.SECONDS).callTimeout(20,java.util.concurrent.TimeUnit.SECONDS).build()
         val source=ContentRepository(http,playbackSession=PlaybackDeviceSession.shared,
-            accountCookie={ if(::cloudAccount.isInitialized) cloudAccount.accountCookie() else "" }); prefetchHttp=http
+            accountCookie={ if(::cloudAccount.isInitialized) cloudAccount.accountCookie() else "" },
+            // 预热下一集也在付这笔取址钱，它直接决定本集结束时接得上接不上。
+            codecMemory=CodecCapabilities.memory()); prefetchHttp=http
         val scope=RequestScope(); prefetchScope=scope
         prefetchJob=prefetchWorker.submit {
             var remote: RemoteVideo?=null

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.media.MediaCodecList
 import android.media.MediaFormat
+import com.hongguotv.core.CodecMemory
 import com.hongguotv.core.Rendition
 import com.hongguotv.core.VideoTracks
 
@@ -15,9 +16,13 @@ import com.hongguotv.core.VideoTracks
  * 实际能解的尺寸判死，这部剧的 1924x1080 就是被它误杀的那一档。这里只留实测到的事实——
  * 播放真失败过的那一档被记下来，跨重启保留，用来把它排在后面，不用来排除它。
  * 设备能力仍然打一条日志，供排查，不参与任何判断。
+ *
+ * 另一半是 [memory]：真播通过过的**编码**。它不改选档顺序，只回答「要不要为私有编码再要一次
+ * 兼容模型」——那一问在这台设备上实测每次都回空正文，一次一秒上下，问过一次就够了。
  */
 object CodecCapabilities {
     private val lessons=DecoderLessons()
+    private val playable=java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private var prefs: SharedPreferences?=null
     @Volatile private var logged=false
     fun init(context: Context) {
@@ -25,7 +30,28 @@ object CodecCapabilities {
         val store=context.getSharedPreferences("native-decoder-lessons-v1",Context.MODE_PRIVATE)
         prefs=store
         lessons.restore(store.getStringSet("failures",emptySet()) ?: emptySet())
+        // 合并而不是覆盖：init 之前记下的那几条也要留下。
+        playable.addAll(store.getStringSet("playable",emptySet()) ?: emptySet())
     }
+    /**
+     * 给取址用的那份「这台设备真播通过过哪些编码」。
+     *
+     * 不要求调用顺序：`init` 之前拿到它也能记，只是那部分暂时只活在进程里；`init` 之后写的都落盘。
+     */
+    fun memory(): CodecMemory = object : CodecMemory {
+        override fun isPlayable(codec: String) = codec.isNotBlank() && codec.lowercase() in playable
+        override fun notePlayable(codec: String) {
+            if(codec.isBlank()) return
+            playable+=codec.lowercase()
+            persistPlayable()
+        }
+    }
+    private fun persistPlayable() {
+        prefs?.edit()?.putStringSet("playable",playable.toSet())?.apply()
+    }
+    /** 首帧真的画出来了，这一集用的就是这种编码。 */
+    fun notePlayableCodec(codec: String?) { if(!codec.isNullOrBlank()) memory().notePlayable(codec) }
+    fun playableCodecs(): Set<String> = playable.toSet()
     /** 这台设备真解败过这一档。只用于排序，不用于排除。 */
     fun hasFailed(codec: String,width: Int?,height: Int?)=lessons.fails(codec,width,height)
     fun hasFailed(rendition: Rendition)=hasFailed(rendition.codec,rendition.width,rendition.height)

@@ -148,6 +148,11 @@ class ContentRepository(
     private val accountCookie: () -> String = { "" },
     /** 每次取址尝试的形态（换没换身份、带没带账号 Cookie、结果如何）交给调用方记录。 */
     private val onPlaybackAttempt: (String) -> Unit = {},
+    /**
+     * 这台设备真播通过过的私有编码。给了它就不必为同一编码反复要兼容模型。
+     * 默认只在进程内；app 层传入持久实现后，冷启动第一次取址也不会再付这笔钱。
+     */
+    private val codecMemory: CodecMemory = CodecMemory.inProcess(),
 ) {
     private val signer = Signer()
     // 取址结果的缓存，照主仓库的 streamCache：5 分钟、最多 100 集。签名地址在这之内还有效，
@@ -172,6 +177,13 @@ class ContentRepository(
      * （libByteVC1_dec.so、libbyteVC2dec.so）配它自己的播放器，系统播放器没有。
      */
     private val vendorOnlyCodecs = setOf("bytevc1","bvc1","bytevc2","bvc2")
+    /**
+     * 兼容请求失败后的冷却。旧接口对全档私有编码的集实测一律回 HTTP 200 + 0 字节，
+     * 一次 1 秒上下；同一进程里每一集都问一遍，就是把同一笔钱付十遍。
+     * 失败一次就先不再问，冷却期过后（或换到一种没试过的编码时）再问。
+     */
+    private var compatibleRetryBlockedUntil = 0L
+    private val compatibleRetryCooldownMs = 10 * 60 * 1000L
     private val suggestionWebId = UUID.randomUUID().toString()
     private data class SearchCursor(val searchId: String, val passback: String, val offset: Int?, val updatedAt: Long)
     private val searchCursors=linkedMapOf<Triple<ContentType,String,Int>,SearchCursor>()
@@ -549,15 +561,17 @@ class ContentRepository(
                 // 旧签名回 0 字节、v5 回完整模型，见 kotlin-tv/PLAYBACK_V5.md）。它内部还带一次
                 // 当场换写法：当前写法没有结果时先换另一条 v5 写法（同一份正文与签名，只有 path 不同），
                 // 两条都不给结果才退回先前那两条：带账号先试 POST video_model，再试 video_tab GET。
-                val ladder=(if(allowV5) v5Ladder(id) else null) ?: (if(withAccount) postVideoModel(id,withAccount) else null) ?: tabLadder(id,withAccount)
-                if(ladder!=null) {
-                    val compatible=compatibleLadder(id,withAccount,ladder)
+                val resolved=resolveLadder(id,withAccount,allowV5)
+                if(resolved!=null) {
+                    val compatible=compatibleLadder(id,withAccount,resolved.ladder)
                     if(compatible!=null) {
-                        reportPlaybackAttempt(round,withAccount,"全档私有编码 → 兼容请求改档成功")
+                        reportPlaybackAttempt(round,true,"全档私有编码 → 兼容请求改档成功")
                         return compatible
                     }
-                    reportPlaybackAttempt(round,withAccount,"成功")
-                    return ladder
+                    // 这一行必须写**实际成功的那条请求**带没带账号 Cookie。v5 那条强制不带，
+                    // 照轮次写「带」会让人以为问题出在 Cookie 上，而它其实与 Cookie 无关。
+                    reportPlaybackAttempt(round,resolved.withAccountCookie,"取址成功：${resolved.origin}")
+                    return resolved.ladder
                 }
                 reportPlaybackAttempt(round,withAccount,"没有清晰度")
                 break
@@ -586,6 +600,14 @@ class ContentRepository(
             throw error
         }
     }
+    /** 取到的清晰度来自哪条请求、那条请求实际带没带账号 Cookie。日志要写的是这两件事本身。 */
+    private class ResolvedLadder(val ladder: StreamLadder, val origin: String, val withAccountCookie: Boolean)
+    private fun resolveLadder(id: String, withAccount: Boolean, allowV5: Boolean): ResolvedLadder? =
+        (if (allowV5) v5Ladder(id)?.let { ResolvedLadder(it, "清晰度来自 v5 那条（这条请求不带任何 Cookie）", false) } else null)
+            ?: (if (withAccount) postVideoModel(id, withAccount)?.let { ResolvedLadder(it, "清晰度来自 POST video_model（带账号 Cookie）", true) } else null)
+            ?: tabLadder(id, withAccount)?.let {
+                ResolvedLadder(it, "清晰度来自 video_tab（${if (withAccount) "带" else "不带"}账号 Cookie）", withAccount)
+            }
     /** 取址被服务端拒（网络失败不算）：未登录时这就是「需要登录」的信号。 */
     private fun addressRefusal(error: IOException) =
         error is PlaybackRejectedException || error is EmptyPlaybackResponseException || error is EmptyContentException
@@ -639,7 +661,10 @@ class ContentRepository(
             }
             val model = modelOf(entry.opt("video_model")) ?: return null
             ladderFromModel(model)?.let {
-                reportPlaybackAttempt(0, false, if (index == 0) "v5 取址成功" else "v5 取址成功（备用写法）")
+                // 当前写法成功时不再单独报一行「成功」：调用方那一条会写清最终用的是哪条请求、
+                // 那条请求带没带账号 Cookie。换到备用写法这件事要留着——它不是故障，
+                // 但没人写下来就会被当成新的故障（见 kotlin-tv/PLAYBACK_V5.md）。
+                if (index != 0) reportPlaybackAttempt(0, false, "v5 取址成功（备用写法）")
                 return it
             }
             // 模型没带内联清晰度时照旧走 fallback_api，不把 v5 成功取到模型当成没有结果。
@@ -756,20 +781,41 @@ class ContentRepository(
      *
      * 这里不预判设备能力：只有**每一档**都解不出时才多要一次。兼容请求给不出可解码的档，
      * 就退回原来那份阶梯，选档流程照旧往下走——多要一次不会让情况变得更坏。
+     *
+     * 但同一个问题只问一次。两种情况下不再重复问：
+     * 这些私有编码里已经有一种在这台设备上真渲染出过首帧（[notePlayableCodec] 记下的事实），
+     * 或者这条兼容请求刚刚失败过（旧接口对这类集实测一律回空正文，再问一遍结果一样）。
      */
     private fun compatibleLadder(id: String, withAccount: Boolean, ladder: StreamLadder): StreamLadder? {
         if(ladder.renditions.isEmpty() || ladder.renditions.any { !vendorOnlyCodecs.contains(it.codec) }) return null
+        if(ladder.renditions.any { codecMemory.isPlayable(it.codec) }) {
+            reportPlaybackAttempt(0,withAccount,"全档私有编码 → 本机已实测这种编码能播，不再要兼容档")
+            return null
+        }
+        if(clock() < compatibleRetryBlockedUntil) {
+            reportPlaybackAttempt(0,withAccount,"全档私有编码 → 兼容请求刚失败过，这一轮不再问")
+            return null
+        }
         val alternative=try { tabLadder(id,withAccount,compatible = true) } catch (error: IOException) {
-            reportPlaybackAttempt(0,false,"全档私有编码，兼容请求失败 ${describeError(error)}")
+            compatibleRetryBlockedUntil=clock()+compatibleRetryCooldownMs
+            reportPlaybackAttempt(0,withAccount,"全档私有编码，兼容请求失败 ${describeError(error)}")
             return null
         }
         if(alternative==null || alternative.renditions.isEmpty() ||
             alternative.renditions.all { vendorOnlyCodecs.contains(it.codec) }) {
-            reportPlaybackAttempt(0,false,"全档私有编码，兼容请求没有给出可解码档")
+            compatibleRetryBlockedUntil=clock()+compatibleRetryCooldownMs
+            reportPlaybackAttempt(0,withAccount,"全档私有编码，兼容请求没有给出可解码档")
             return null
         }
         return alternative
     }
+    /**
+     * 首帧真的画出来了：记下这一集实际用的编码。之后遇到同样的编码就不再付那次兼容请求的 1 秒。
+     *
+     * 记的是**实际播通的那一档**，不是接口下发的某一档，也不是设备报出来的能力表——
+     * 本仓库选档一贯不预判设备能力，这里也只是把已经发生过的结果记下来。
+     */
+    fun notePlayableCodec(codec: String) { if(codec.isNotBlank()) codecMemory.notePlayable(codec) }
     /** 只有这几类才值得换一轮新签名重读；参数/结构错误重读也没用。 */
     private fun playbackRetryable(error: IOException) =
         error is EmptyContentException || error is EmptyPlaybackResponseException ||
