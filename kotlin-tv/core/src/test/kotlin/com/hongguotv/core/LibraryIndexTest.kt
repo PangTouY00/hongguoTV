@@ -25,6 +25,21 @@ class LibraryIndexTest {
         assertEquals(1, state.updatedFavorites())
     }
 
+    @Test fun `the stored zoom round trips and a disk without one falls back to the default`() {
+        val keyed = mapOf<String, Any>("frameMode" to "CROP", "frameZoom" to 1.7f)
+        assertEquals(VideoFrameMode.CROP, LibraryDisk.decode(keyed).settings.frame)
+        assertEquals(1.7f, LibraryDisk.decode(keyed).settings.frameZoom, 0.001f)
+        // 旧版本只有一个固定的 1.36 倍：它不在 0.1 的整档上，读回来收到最近的 1.4。
+        assertEquals(1.4f, LibraryDisk.decode(mapOf<String, Any>("frameZoom" to 1.36f)).settings.frameZoom, 0.001f)
+        // 越界与不是数的值不猜，落在区间内的边界照常接受。
+        assertEquals(VideoZoom.MAX, LibraryDisk.decode(mapOf<String, Any>("frameZoom" to 9f)).settings.frameZoom, 0.001f)
+        assertEquals(VideoZoom.MIN, LibraryDisk.decode(mapOf<String, Any>("frameZoom" to 0.2f)).settings.frameZoom, 0.001f)
+        assertEquals(VideoZoom.DEFAULT, LibraryDisk.decode(mapOf<String, Any>("frameZoom" to "1.7")).settings.frameZoom, 0.001f)
+        // 老版本的盘里没有这个键，画面模式与倍数都按默认值继续。
+        assertEquals(VideoFrameMode.FIT, LibraryDisk.decode(mapOf<String, Any>()).settings.frame)
+        assertEquals(VideoZoom.DEFAULT, LibraryDisk.decode(mapOf<String, Any>("frameMode" to "ZOOM")).settings.frameZoom, 0.001f)
+    }
+
     @Test fun `repeated reads reuse snapshots and paused checkpoints do not write`() {
         val state = LibraryIndex(data())
         val history = state.history()

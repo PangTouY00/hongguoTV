@@ -8,8 +8,8 @@ import java.net.URI
 data class BackupProgress(val series: Series,val episodeId: String,val episodeIndex: Int,val position: Long,val duration: Long,val completed: Boolean,val updatedAt: Long) {
     fun json()=JSONObject().put("series",LibraryBackup.seriesJson(series)).put("episodeId",episodeId).put("episodeIndex",episodeIndex).put("position",position).put("duration",duration).put("completed",completed).put("updatedAt",updatedAt)
 }
-data class BackupSettings(val quality: Int=1080,val speed: Float=1f,val autoNext: Boolean=true,val type: ContentType=ContentType.COMIC,val frame: VideoFrameMode=VideoFrameMode.FIT) {
-    fun json()=JSONObject().put("quality",quality).put("speed",speed.toDouble()).put("autoNext",autoNext).put("type",type.storedValue).put("frame",frame.name)
+data class BackupSettings(val quality: Int=1080,val speed: Float=1f,val autoNext: Boolean=true,val type: ContentType=ContentType.COMIC,val frame: VideoFrameMode=VideoFrameMode.FIT,val frameZoom: Float=VideoZoom.DEFAULT) {
+    fun json()=JSONObject().put("quality",quality).put("speed",speed.toDouble()).put("autoNext",autoNext).put("type",type.storedValue).put("frame",frame.name).put("frameZoom",frameZoom.toDouble())
 }
 data class BackupData(val favorites: List<Series>,val history: List<BackupProgress>,val watched: Set<String>,val searches: List<RecentSearch>,val settings: BackupSettings,val later: List<Series> = emptyList(),val hidden: Set<String> = emptySet())
 
@@ -76,7 +76,11 @@ object LibraryBackup {
         val autoNext=settings.get("autoNext"); require(autoNext is Boolean)
         val type=ContentType.entries.firstOrNull { it.storedValue==settings.getString("type") } ?: error("内容类型无效")
         val frame=VideoFrameMode.entries.firstOrNull { it.name==settings.getString("frame") } ?: error("画面模式无效")
-        return BackupData(favorites,history,watchedIds,searches,BackupSettings(quality,speed.toFloat(),autoNext,type,frame),later,hiddenIds)
+        // 放大倍数是后加的设置：旧备份没有这一项就取默认值——读它必须用 opt，get 对缺失的键直接抛 JSONException。
+        // 有这一项就必须是个落在区间内的数，不猜；旧版本只有固定的 1.36 倍，它不在 0.1 的整档上，读回来收到最近的 1.4 倍。
+        val rawZoom=settings.opt("frameZoom")
+        val frameZoom=if(rawZoom==null) VideoZoom.DEFAULT else { require(rawZoom is Number && rawZoom.toFloat().isFinite() && rawZoom.toFloat() in VideoZoom.MIN..VideoZoom.MAX) { "画面放大倍数无效" }; VideoZoom.normalize(rawZoom.toFloat()) }
+        return BackupData(favorites,history,watchedIds,searches,BackupSettings(quality,speed.toFloat(),autoNext,type,frame,frameZoom),later,hiddenIds)
     }
     /** Existing favorites stay first; only newer imported progress replaces a local record. */
     fun merge(local: BackupData,incoming: BackupData,restoreSettings: Boolean): BackupData {

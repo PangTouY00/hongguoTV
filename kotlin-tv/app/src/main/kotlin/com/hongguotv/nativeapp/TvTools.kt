@@ -24,6 +24,7 @@ import com.hongguotv.core.EpisodeTarget
 import com.hongguotv.core.PhoneSearchServer
 import com.hongguotv.core.LibraryTransferServer
 import com.hongguotv.core.BackupData
+import com.hongguotv.core.VideoZoom
 import java.net.Inet4Address
 import java.util.concurrent.Executors
 
@@ -38,9 +39,11 @@ class TvTools(private val activity: Activity) {
     private fun label(value: String,size: Float=17f)=TextView(activity).apply { text=value; textSize=size; setTextColor(TvStyle.text); setPadding(dp(8),dp(4),dp(8),dp(4)) }
     private fun note(value: String,size: Float=13f)=label(value,size).apply { setTextColor(TvStyle.muted) }
     private fun column()=LinearLayout(activity).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(16),dp(4),dp(16),dp(8)) }
-    private fun open(next: AlertDialog,anchor: View?) {
+    /** onDismissed 在窗口关闭后跑一次，用来收尾那些「边看边试、不确认就撤销」的面板。
+     *  它排在 anchor 重新拿回焦点之前：撤销会改设置，界面按钮的文字要在那之后重取。 */
+    private fun open(next: AlertDialog,anchor: View?,onDismissed: ()->Unit={}) {
         val previous=dialog; dialog=null; phone?.close(); phone=null; previous?.dismiss(); dialog=next
-        next.setOnDismissListener { if(dialog===next) { phone?.close(); phone=null; dialog=null; if(anchor?.isAttachedToWindow==true) anchor.requestFocus() } }
+        next.setOnDismissListener { if(dialog===next) { phone?.close(); phone=null; dialog=null; onDismissed(); if(anchor?.isAttachedToWindow==true) anchor.requestFocus() } }
         next.show()
         TvStyle.fitDialog(next)
     }
@@ -69,6 +72,104 @@ class TvTools(private val activity: Activity) {
         // 只改宽度，高度交给 fitDialog：窗口给 WRAP_CONTENT 系统不认（上一版装机实测），留着只会盖掉收缩结果。
         if(compact) next.window?.let { it.setLayout(minOf(dp(620),(activity.resources.displayMetrics.widthPixels*.78f).toInt()),it.attributes.height) }
         next.listView.requestFocus()
+    }
+    /** 画面模式。焦点落到哪一行，哪一行就立刻作用到画面上；带滑杆的那一行（zoomRow）下面紧跟一条
+     *  1.0—2.0 的滑杆：遥控器落在滑杆上时左右键一次正好走一档（max 是 10 格、keyProgressIncrement 设成 1），
+     *  落在模式行上时左右键同样调档，触屏设备可以直接拖。调的是此刻正在显示的画面，不是先记一个数字再去验证。
+     *  确认保留当前这一项；返回（含 BACK 键）退回打开这个窗口之前的模式与倍数。
+     *  上下键显式串好：滑杆只在经过那一行时才被走到，从别的行往下仍然直接到下一条模式。 */
+    fun frameModePicker(title: String,labels: List<String>,zoomRow: Int,selected: Int,zoom: Float,anchor: View?,
+                       onPreview: (Int,Float)->Unit,onCommit: (Int,Float)->Unit,onRevert: (Int,Float)->Unit) {
+        val startTenths=VideoZoom.tenths(zoom); val startMode=selected.coerceIn(0,(labels.size-1).coerceAtLeast(0))
+        var tenths=startTenths; var mode=startMode; var committed=false
+        lateinit var next: AlertDialog; lateinit var seek: SeekBar
+        val rows=mutableListOf<android.widget.TextView>()
+        val content=column()
+        content.addView(note("上下选模式 · 左右调倍数 · 确认保留 · 返回恢复之前的设置"))
+        val value=label(VideoZoom.label(VideoZoom.scale(tenths)),20f).apply { setTextColor(TvStyle.accent); maxLines=1 }
+        fun setTenths(target: Int) {
+            val clamped=VideoZoom.stepTenths(target,0)
+            if(clamped==tenths) return
+            tenths=clamped
+            value.text=VideoZoom.label(VideoZoom.scale(clamped))
+            seek.progress=clamped-VideoZoom.MIN_TENTHS
+            rows.getOrNull(zoomRow)?.contentDescription="${labels.getOrElse(zoomRow){""}} · ${VideoZoom.text(VideoZoom.scale(clamped))} 倍"
+            onPreview(mode,VideoZoom.scale(clamped))
+        }
+        labels.forEachIndexed { index,caption ->
+            val row=android.widget.TextView(activity).apply {
+                id=View.generateViewId(); text=caption; textSize=17f
+                isFocusable=true; isClickable=true; maxLines=2
+                setPadding(dp(12),dp(10),dp(12),dp(10)); contentDescription=caption
+                fun paint(focused: Boolean) {
+                    setTextColor(if(index==startMode) TvStyle.accent else TvStyle.text)
+                    background=TvStyle.shape(activity,if(index==startMode||focused) TvStyle.raised else TvStyle.surface,if(focused) TvStyle.accent else android.graphics.Color.TRANSPARENT)
+                }
+                paint(false)
+                setOnFocusChangeListener { _,focused-> paint(focused); if(focused) { mode=index; onPreview(index,VideoZoom.scale(tenths)) } }
+                setOnClickListener { committed=true; onCommit(index,VideoZoom.scale(tenths)); next.dismiss() }
+                setOnKeyListener { _,key,event ->
+                    if(index!=zoomRow || event.action!=KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                    when(key) {
+                        KeyEvent.KEYCODE_DPAD_LEFT -> { setTenths(tenths-VideoZoom.STEP_TENTHS); true }
+                        KeyEvent.KEYCODE_DPAD_RIGHT -> { setTenths(tenths+VideoZoom.STEP_TENTHS); true }
+                        else -> false
+                    }
+                }
+            }
+            content.addView(row,LinearLayout.LayoutParams(-1,-2).apply { setMargins(0,dp(3),0,dp(3)) }); rows+=row
+            if(index==zoomRow) {
+                seek=SeekBar(activity).apply {
+                    id=View.generateViewId(); max=VideoZoom.MAX_TENTHS-VideoZoom.MIN_TENTHS
+                    progress=tenths-VideoZoom.MIN_TENTHS; keyProgressIncrement=VideoZoom.STEP_TENTHS
+                    isFocusable=true; contentDescription="画面放大倍数"
+                    progressTintList=android.content.res.ColorStateList.valueOf(TvStyle.accent)
+                    progressBackgroundTintList=android.content.res.ColorStateList.valueOf(TvStyle.raised)
+                    thumbTintList=android.content.res.ColorStateList.valueOf(TvStyle.text)
+                    setOnFocusChangeListener { _,focused-> thumbTintList=android.content.res.ColorStateList.valueOf(if(focused) TvStyle.accent else TvStyle.text) }
+                    setOnKeyListener { _,key,event ->
+                        if(event.action!=KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+                        // 系统把左右键交给我们时自己走一档；系统自己处理时按 keyProgressIncrement 也是恰好一档。
+                        // 两条路最后都落到 setTenths，值不会分叉。
+                        when(key) {
+                            KeyEvent.KEYCODE_DPAD_LEFT -> { setTenths(tenths-VideoZoom.STEP_TENTHS); true }
+                            KeyEvent.KEYCODE_DPAD_RIGHT -> { setTenths(tenths+VideoZoom.STEP_TENTHS); true }
+                            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> { committed=true; onCommit(zoomRow,VideoZoom.scale(tenths)); next.dismiss(); true }
+                            else -> false
+                        }
+                    }
+                    setOnSeekBarChangeListener(object: SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(bar: SeekBar,progress: Int,fromUser: Boolean) { if(fromUser) setTenths(VideoZoom.MIN_TENTHS+progress) }
+                        override fun onStartTrackingTouch(bar: SeekBar) {}
+                        override fun onStopTrackingTouch(bar: SeekBar) {}
+                    })
+                }
+                // 数值单独占一行，两端刻度贴在滑杆两侧：固定宽度的数值块在 720p 与 1080p 的电视上差一倍的
+                // density，挤在滑杆旁边会被截断，让它自己一行就不受屏幕密度影响。
+                content.addView(value,LinearLayout.LayoutParams(-1,-2).apply { setMargins(dp(12),dp(2),dp(12),0) })
+                val bar=LinearLayout(activity).apply { gravity=Gravity.CENTER_VERTICAL }
+                bar.addView(note("1.0"),LinearLayout.LayoutParams(-2,-2))
+                bar.addView(seek,LinearLayout.LayoutParams(0,dp(46),1f))
+                bar.addView(note("2.0"),LinearLayout.LayoutParams(-2,-2))
+                content.addView(bar,LinearLayout.LayoutParams(-1,-2).apply { setMargins(dp(12),0,dp(12),0) })
+                content.addView(note("每档 0.1 倍 · 只作用到「自定义放大」",12f),LinearLayout.LayoutParams(-1,-2).apply { setMargins(dp(12),0,dp(12),dp(2)) })
+            }
+        }
+        next=AlertDialog.Builder(activity).setTitle(title).setView(ScrollView(activity).apply { addView(content) }).setNegativeButton("返回并恢复",null).create()
+        open(next,anchor,{ if(!committed) onRevert(startMode,VideoZoom.scale(startTenths)) })
+        // 只改宽度，高度交给 fitDialog，跟 choose 那几处一样；这里宽度要留够，模式行的说明比单纯的选项长。
+        next.window?.let { it.setLayout(minOf(dp(760),(activity.resources.displayMetrics.widthPixels*.88f).toInt()),it.attributes.height) }
+        val cancel=next.getButton(AlertDialog.BUTTON_NEGATIVE)
+        rows.forEachIndexed { index,row ->
+            row.nextFocusUpId=rows.getOrNull(index-1)?.id ?: row.id
+            row.nextFocusDownId=if(index==zoomRow) seek.id else rows.getOrNull(index+1)?.id ?: cancel.id
+        }
+        if(zoomRow in rows.indices) {
+            seek.nextFocusUpId=rows[zoomRow].id
+            seek.nextFocusDownId=rows.getOrNull(zoomRow+1)?.id ?: cancel.id
+        }
+        cancel.nextFocusUpId=rows.last().id
+        rows.getOrNull(startMode)?.requestFocus()
     }
     fun chooseGrid(title: String,labels: List<String>,selected: Int,anchor: View?,onChoice: (Int)->Unit) {
         val content=column()

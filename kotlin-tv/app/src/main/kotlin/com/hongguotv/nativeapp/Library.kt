@@ -202,13 +202,18 @@ class Library(context: Context) {
     var frameMode: VideoFrameMode
         get() = state().settings.frame
         set(value) { if (value != frameMode) { state().settings = state().settings.copy(frame = value); put("frameMode", value.name) } }
+    /** 放大模式用的倍数。写之前先落到 0.1 的整档上，界面上按一次按键就是恰好一档。 */
+    var frameZoom: Float
+        get() = state().settings.frameZoom
+        set(value) { val next = VideoZoom.normalize(value); if (next != frameZoom) { state().settings = state().settings.copy(frameZoom = next); put("frameZoom", next) } }
     fun snapshot() = state().snapshot()
     fun restore(incoming: BackupData, restoreSettings: Boolean) {
         val merged = LibraryBackup.merge(snapshot(), incoming, restoreSettings)
         index = LibraryIndex(merged, state().updates())
         persist("favorites", "later", "progress", "watched", "hidden", "searches", "favoriteUpdates")
         writes.submit(mapOf("quality" to { merged.settings.quality }, "playbackSpeed" to { merged.settings.speed },
-            "autoNext" to { merged.settings.autoNext }, "contentType" to { merged.settings.type.storedValue }, "frameMode" to { merged.settings.frame.name }))
+            "autoNext" to { merged.settings.autoNext }, "contentType" to { merged.settings.type.storedValue },
+            "frameMode" to { merged.settings.frame.name }, "frameZoom" to { merged.settings.frameZoom }))
         flush()
     }
     /** Requests prompt background commit, without lifecycle-thread disk waits. */
