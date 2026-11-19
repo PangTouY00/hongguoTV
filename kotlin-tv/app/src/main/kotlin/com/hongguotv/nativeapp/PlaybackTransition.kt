@@ -42,7 +42,6 @@ internal class PlaybackTransition(
     private val handoff: FullscreenHandoff = FullscreenHandoff(),
 ) {
     private val main = Handler(Looper.getMainLooper())
-    private val decor get() = activity.window.decorView as ViewGroup
     private val ease = AccelerateDecelerateInterpolator()
     private var layer: FrameLayout? = null
     private var cover: ImageView? = null
@@ -153,14 +152,14 @@ internal class PlaybackTransition(
         label.animate().alpha(1f).setDuration(140).start()
     }
 
-    /** 播放器首帧已经出来了：封面淡出，这一层拆掉。 */
+    /** 播放器首帧已经出来了：整层淡出去，让画面从封面底下露出来。 */
     fun finish() {
         val host = layer ?: return
-        val art = cover ?: return
         handoff.firstFrame(SystemClock.elapsedRealtime())
         layer = null; cover = null; note = null; coverShown = false; revealed = false
         clearTasks()
-        art.animate().alpha(0f).setDuration(180).withEndAction { decor.removeView(host) }.start()
+        // 淡的是整层，不是只淡封面：只淡封面等于把这层的黑底留在原地，那 180 毫秒必然是一段纯黑。
+        host.animate().alpha(0f).setDuration(180).withEndAction { detach(host) }.start()
     }
 
     /** 用户中途返回、或这条路径失败了（取不到地址、解不了）：立刻把这一层撤掉，别把错误页也盖住。 */
@@ -168,6 +167,18 @@ internal class PlaybackTransition(
         val host = layer ?: return
         layer = null; cover = null; note = null; coverShown = false; revealed = false
         clearTasks()
-        host.animate().alpha(0f).setDuration(120).withEndAction { decor.removeView(host) }.start()
+        host.animate().alpha(0f).setDuration(120).withEndAction { detach(host) }.start()
+    }
+
+    /**
+     * 把这一层从窗口里摘掉。
+     *
+     * addContentView 加的位置不是 decorView 本身，而是它内部那个 @android:id/content 容器；
+     * ViewGroup.removeView 只认自己的直接子 view，所以拿 decorView 去 removeView 什么都摘不掉——
+     * 这一层带着不透明的黑底，会一直留在屏幕上，把视频连同播放界面的标题、进度一起盖成黑的。
+     * 摘除只认这个 view 自己的 parent，不去猜它挂在哪一层。
+     */
+    private fun detach(view: View) {
+        (view.parent as? ViewGroup)?.removeView(view)
     }
 }
