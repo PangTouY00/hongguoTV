@@ -20,7 +20,11 @@ internal class HomeFeedScreen(
     private val activity: Activity,private val state: DramaFeedState,private val nav: List<View>,
     private val watch: (Series)->Unit,private val favorite: (Series,View)->Unit,
     private val favoriteLabel: (String)->String,
-    private val backend: FeedBackend,private val playback: TrialPlayback
+    private val backend: FeedBackend,private val playback: TrialPlayback,
+    /** 停留够久就交给界面去全屏播放这一部（第二个参数是试播当前位置，全屏从这儿接着）。默认不接。 */
+    private val autoFullscreen: (Series,Long)->Unit = { _,_-> },
+    /** 计时与「用户主动离开过哪一部」的判断。这个判断要跨首页实例保留，所以由界面持有。 */
+    private val autoGuard: AutoFullscreenGuard = AutoFullscreenGuard()
 ): LinearLayout(activity),Closeable {
     private val main=Handler(Looper.getMainLooper())
     private val worker=Executors.newFixedThreadPool(2)
@@ -40,6 +44,9 @@ internal class HomeFeedScreen(
     private var active=false
     private var loading=false
     private var failed=false
+    private val autoDue=Runnable { autoCheck() }
+    /** 按 ↑ 已经提示过「到顶了」，再按一次才把焦点交给顶部导航：不让自动落点把导航堵死。 */
+    private var topHintShown=false
     private val stage=FrameLayout(activity)
     private val title=label("发现下一部好剧",25f)
     private val meta=label("第一集试播",13f,TvStyle.accent)
@@ -122,12 +129,17 @@ internal class HomeFeedScreen(
         stage.nextFocusLeftId=stage.id;stage.nextFocusRightId=stage.id
         stage.nextFocusUpId=stage.id;stage.nextFocusDownId=stage.id
         nav.forEach { it.nextFocusDownId=(if(state.recommendation) recommendButton else if(state.category==DramaCategory.COMIC) comicButton else realButton).id }
-        stage.setOnFocusChangeListener { _,focused -> stage.background=TvStyle.card(activity,focused) }
+        stage.setOnFocusChangeListener { _,focused -> stage.background=TvStyle.card(activity,focused);if(focused) armAuto() else cancelAuto() }
         stage.setOnClickListener { showActions() }
         stage.setOnKeyListener { _,key,event ->
+            // 任何一次按键都算「用户正在自己操作」：先把这一轮自动进入丢掉，再处理按键本身。
+            if(event.action==KeyEvent.ACTION_DOWN && event.repeatCount==0) cancelAuto()
             when(key) {
                 KeyEvent.KEYCODE_DPAD_UP,KeyEvent.KEYCODE_DPAD_DOWN -> {
-                    if(event.action==KeyEvent.ACTION_DOWN && event.repeatCount==0) move(if(key==KeyEvent.KEYCODE_DPAD_UP) -1 else 1)
+                    if(event.action==KeyEvent.ACTION_DOWN && event.repeatCount==0) {
+                        if(key==KeyEvent.KEYCODE_DPAD_UP && state.index==0 && topHintShown) nav.first().requestFocus()
+                        else move(if(key==KeyEvent.KEYCODE_DPAD_UP) -1 else 1)
+                    }
                     true
                 }
                 KeyEvent.KEYCODE_DPAD_CENTER,KeyEvent.KEYCODE_ENTER -> { if(event.action==KeyEvent.ACTION_UP) showActions();true }
@@ -137,19 +149,23 @@ internal class HomeFeedScreen(
         playback.status={ value ->
             if(!closed && clip!=null) when(value) {
                 TrialStatus.BUFFERING -> { status.visibility=View.VISIBLE;status.text="正在加载第一集…" }
-                TrialStatus.READY -> { status.visibility=if(state.userPaused) View.VISIBLE else View.GONE;failed=false;status.text=if(state.userPaused) "试播已暂停" else "第一集试播 · 喜欢就看全集";paintActions();prefetchUpcoming() }
+                TrialStatus.READY -> { status.visibility=if(state.userPaused) View.VISIBLE else View.GONE;failed=false;status.text=if(state.userPaused) "试播已暂停" else "第一集试播 · 喜欢就看全集";paintActions();prefetchUpcoming();armAuto() }
                 TrialStatus.ENDED -> {
                     status.visibility=View.VISIBLE;remember();state.ended=true;state.userPaused=true
-                    status.text="本集试播结束 · 看全集或按 ↓ 换一部";paintActions()
+                    status.text="本集试播结束 · 看全集或按 ↓ 换一部";paintActions();cancelAuto()
                     if(active && stage.hasFocus()) showActions()
                 }
-                TrialStatus.ERROR -> { status.visibility=View.VISIBLE;playback.pause();failed=true;status.text="试播暂不可用 · 可重试、换剧或查看全集";paintActions() }
+                TrialStatus.ERROR -> { status.visibility=View.VISIBLE;playback.pause();failed=true;status.text="试播暂不可用 · 可重试、换剧或查看全集";paintActions();cancelAuto() }
             }
         }
         describe();paintActions()
     }
     fun start(foreground: Boolean,focusNav: Boolean) {
-        if(focusNav) nav[0].requestFocus() else stage.requestFocus()
+        if(focusNav) nav[0].requestFocus() else {
+            stage.requestFocus()
+            // 首屏还在测量时 requestFocus 可能落空；布局完成后再补一次，保证「一进 App 就停在推荐预览上」。
+            post { if(!closed && !focusNav && !stage.hasFocus()) stage.requestFocus() }
+        }
         if(foreground) resume()
     }
     private val prefetchPoll=object: Runnable { override fun run() {
@@ -161,19 +177,49 @@ internal class HomeFeedScreen(
         active=true;main.removeCallbacks(prefetchPoll);main.postDelayed(prefetchPoll,250)
         if(clip!=null) { if(!state.userPaused && !state.ended) playback.resume();paintActions();prefetchUpcoming() }
         else if(state.current!=null) loadCurrent() else loadPage(false)
+        armAuto()
     }
     fun pause() {
         if(closed) return
-        remember();active=false;main.removeCallbacks(prefetchPoll);playback.pause();cancelRequest();cancelPrefetch();paintActions()
+        remember();active=false;main.removeCallbacks(prefetchPoll);cancelAuto();playback.pause();cancelRequest();cancelPrefetch();paintActions()
     }
     fun back(): Boolean {
         if(actions.visibility!=View.VISIBLE) return false
+        // 从操作面板返回是明确的「先不看了」：这一部不再被自动拽进全屏，换到别的作品照常计时。
+        state.current?.let { autoGuard.suppress(it.id) }
         actions.visibility=View.GONE;stage.requestFocus();return true
     }
     fun refreshAccountLabel() { if(!closed) paintActions() }
     private fun showActions() {
+        state.current?.let { autoGuard.suppress(it.id) }
         actions.visibility=View.VISIBLE;paintActions()
         (if(watchButton.isEnabled) watchButton else pauseButton).requestFocus()
+    }
+    /** 只有「焦点在这块预览上 + 试播真的在播 + 用户没有自己暂停或结束」才允许自动进入全屏。 */
+    private fun armAuto() {
+        val series=state.current
+        if(closed || !active || series==null || !stage.hasFocus() || clip==null || failed ||
+            state.userPaused || state.ended || autoGuard.suppressed(series.id)) { cancelAuto();return }
+        autoGuard.arm(series.id,android.os.SystemClock.elapsedRealtime())
+        main.removeCallbacks(autoDue)
+        main.postDelayed(autoDue,autoGuard.dwellMs)
+    }
+    private fun cancelAuto() { main.removeCallbacks(autoDue);autoGuard.cancel() }
+    /** 全屏过渡动画的起点：这块预览此刻在屏幕上的位置（left, top, width, height）。 */
+    fun stageBounds(): IntArray? {
+        if(!stage.isAttachedToWindow || stage.width<=0 || stage.height<=0) return null
+        val location=IntArray(2);stage.getLocationInWindow(location)
+        return intArrayOf(location[0],location[1],stage.width,stage.height)
+    }
+    private fun autoCheck() {
+        if(closed || !active) return
+        val series=state.current
+        val due=series?.let { autoGuard.elapsed(android.os.SystemClock.elapsedRealtime()) }
+        if(due==null || series==null || due!=series.id) { armAuto();return }
+        if(!stage.hasFocus() || clip==null || failed || state.userPaused || state.ended) { armAuto();return }
+        remember()
+        DiagLog.info("Home auto-fullscreen after dwellMs=${autoGuard.dwellMs} series=${series.id}")
+        autoFullscreen(series,state.position)
     }
     private fun paintActions() {
         pauseButton.text=when { failed || state.current==null -> "重试试播";state.ended -> "重新试播";state.userPaused -> "继续试播";else -> "暂停试播" }
@@ -324,7 +370,8 @@ internal class HomeFeedScreen(
     }
     private fun move(delta: Int) {
         if(closed || !active) return
-        if(delta<0 && state.index==0) { status.visibility=View.VISIBLE;status.text="已到本次浏览的最早作品";return }
+        if(delta<0 && state.index==0) { status.visibility=View.VISIBLE;status.text="已到本次浏览的最早作品";topHintShown=true;return }
+        topHintShown=false
         if(delta>0 && state.next==null) {
             if(loading) return
             if(!state.hasMore) { status.visibility=View.VISIBLE;status.text="本批作品已看完，可切换类型继续发现";return }
@@ -336,6 +383,8 @@ internal class HomeFeedScreen(
         if(state.move(delta)) {
             if(ready!=null) { failed=false;describe();status.visibility=View.VISIBLE;status.text="正在切换作品…";attach(ready);trimCache() }
             else loadCurrent()
+            // 换到另一部作品：这一部的停留计时重新开始，与上一部停留了多久无关。
+            armAuto()
         }
     }
     private fun toggle() {
@@ -346,18 +395,23 @@ internal class HomeFeedScreen(
             if(state.current==null) loadPage(false) else loadCurrent()
             return
         } else if(state.ended) { state.position=0;state.ended=false;state.userPaused=false;playback.restart() }
-        else { state.userPaused=!state.userPaused;if(state.userPaused) { remember();playback.pause() } else if(active) playback.resume() }
+        else {
+            state.userPaused=!state.userPaused
+            if(state.userPaused) { remember();state.current?.let { autoGuard.suppress(it.id) };playback.pause() }
+            else if(active) { playback.resume();armAuto() }
+        }
         status.visibility=if(state.userPaused) View.VISIBLE else View.GONE
         status.text=if(state.userPaused) "试播已暂停" else "第一集试播 · 喜欢就看全集";paintActions()
     }
     private fun changeType(category: DramaCategory) {
         if(!state.recommendation && state.category==category) return
         clearCurrent();state.select(category)
-        clearCache();actions.visibility=View.GONE;stage.requestFocus();describe();if(state.current!=null) loadCurrent() else loadPage(false)
+        topHintShown=false
+        clearCache();actions.visibility=View.GONE;stage.requestFocus();describe();if(state.current!=null) loadCurrent() else loadPage(false);armAuto()
     }
     override fun close() {
         if(closed) return
-        main.removeCallbacks(prefetchPoll)
+        main.removeCallbacks(prefetchPoll);cancelAuto()
         clearCurrent();clearCache();closed=true;active=false;stage.keepScreenOn=false
         playback.release();backend.close();worker.shutdownNow()
     }
