@@ -24,6 +24,8 @@ internal class HomeFeedScreen(
     private val backend: FeedBackend,private val playback: TrialPlayback,
     /** 停留够久就交给界面去全屏播放这一部（第二个参数是试播当前位置，全屏从这儿接着）。默认不接。 */
     private val autoFullscreen: (Series,Long)->Unit = { _,_-> },
+    /** 触发前三秒先把这一部的封面按全屏尺寸取好：进入全屏那一刻遮罩上就有画面，不会先空出一段黑。 */
+    private val coverWarm: (Series)->Unit = {},
     /** 计时与「用户主动离开过哪一部」的判断。这个判断要跨首页实例保留，所以由界面持有。 */
     private val autoGuard: AutoFullscreenGuard = AutoFullscreenGuard()
 ): LinearLayout(activity),Closeable {
@@ -46,6 +48,9 @@ internal class HomeFeedScreen(
     private var loading=false
     private var failed=false
     private val autoDue=Runnable { idleCheck() }
+    /** 自动进入全屏前这么久先把封面取好（见 warmCover）。 */
+    private val coverLeadMs=3_000L
+    private val coverDue=Runnable { warmCover() }
     /** 按 ↑ 已经提示过「到顶了」，再按一次才把焦点交给顶部导航：不让自动落点把导航堵死。 */
     private var topHintShown=false
     private val stage=FrameLayout(activity)
@@ -207,10 +212,24 @@ internal class HomeFeedScreen(
         val series=state.current
         if(closed || !active || series==null || failed || autoGuard.suppressed(series.id)) { cancelIdle();return }
         autoGuard.arm(series.id,android.os.SystemClock.elapsedRealtime())
-        main.removeCallbacks(autoDue)
+        main.removeCallbacks(autoDue);main.removeCallbacks(coverDue)
         main.postDelayed(autoDue,autoGuard.idleMs)
+        // 用户一动，预热也跟着推后：只有真的快要自动进入全屏时，这张封面才值得提前取。
+        main.postDelayed(coverDue,(autoGuard.idleMs-coverLeadMs).coerceAtLeast(0))
     }
-    private fun cancelIdle() { main.removeCallbacks(autoDue);autoGuard.cancel() }
+    private fun cancelIdle() { main.removeCallbacks(autoDue);main.removeCallbacks(coverDue);autoGuard.cancel() }
+    /**
+     * 提前把全屏过渡要用的那张封面取好。全屏的过渡层按全屏尺寸要图，首页这块预览上没有封面可复用；
+     * 到那一刻现取要几百毫秒到一秒——那就是进入全屏时先黑一下的那一段。
+     */
+    private fun warmCover() {
+        if(closed || !active) return
+        val series=state.current ?: return
+        if(failed || autoGuard.suppressed(series.id)) return
+        val remaining=autoGuard.remaining(android.os.SystemClock.elapsedRealtime()) ?: return
+        if(remaining>coverLeadMs) return
+        coverWarm(series)
+    }
     /** 全屏过渡动画的起点：这块预览此刻在屏幕上的位置（left, top, width, height）。 */
     fun stageBounds(): IntArray? {
         if(!stage.isAttachedToWindow || stage.width<=0 || stage.height<=0) return null

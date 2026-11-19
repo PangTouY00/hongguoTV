@@ -572,7 +572,8 @@ class MainActivity: Activity() {
             val feed=HomeFeedScreen(this,homeFeedState,nav.toList(),
                 { openDetail(it,false) },::accountFavoriteAction,cloudAccount::favoriteActionLabel,
                 PublicFeedBackend(library.maxQuality,account=cloudAccount.recommendationCredentials(),startupCache=FeedStartupCache(this)),Media3TrialPlayback(this),
-                { series,position -> autoEnterFullscreen(series,position) },autoFullscreenGuard)
+                { series,position -> autoEnterFullscreen(series,position) },
+                { series -> warmTransitionCover(series) },autoFullscreenGuard)
             homeFeed=feed
             container.addView(feed,lp(-1,0).apply { weight=1f })
             feed.start(foreground,focusNav)
@@ -1232,15 +1233,32 @@ class MainActivity: Activity() {
             }
         })
     }
+    /** 全屏过渡用的封面尺寸。预热与真正用它必须同一个尺寸，否则提前取到的那张图对不上号。 */
+    private fun transitionCoverSize(): IntArray {
+        val metrics=resources.displayMetrics
+        return intArrayOf(metrics.widthPixels,metrics.heightPixels)
+    }
+    /**
+     * 自动进入全屏前三秒的封面预热：取到的位图留在 ArtworkLoader 的内存缓存里，
+     * 那一刻到了遮罩上直接就是现成的画面，不会先空出一段黑。
+     */
+    private fun warmTransitionCover(series: Series) {
+        val size=transitionCoverSize()
+        artwork.requestBitmap(series.cover,size[0],size[1]) { }
+    }
     /**
      * 首页停留够久自动进入全屏：从试播停下的位置接着播，并做「封面从卡片位置展开」的过渡。
      * 过渡层必须在 openDetail 之后加——openDetail 会重建整个界面，先加会被一起清掉。
+     *
+     * 封面走 ArtworkLoader.requestBitmap，不走 loadCover：loadCover 绑在当前这一页上，
+     * 建播放器那一步的换页会把它清掉，剩下的整段就只剩一层黑（这就是之前进入全屏先黑一下的原因）。
      */
     private fun autoEnterFullscreen(series: Series,position: Long) {
         val from=homeFeed?.stageBounds()
+        val size=transitionCoverSize()
         // 用户正在看的就是屏幕上这一部、这一集：接着试播停下的那一秒播，不去读本机的观看进度。
         openDetail(series,autoplay=true,fromTrial=position)
-        if(from!=null) playbackTransition.start(from,resources.displayMetrics.widthPixels,resources.displayMetrics.heightPixels,series.cover) { view,url -> loadCover(view,url) }
+        if(from!=null) playbackTransition.start(from,size[0],size[1],series.cover,"正在继续播放这一集…") { width,height,deliver -> artwork.requestBitmap(series.cover,width,height,deliver) }
     }
     private fun openDetail(series: Series,resume: Boolean=false,autoplay: Boolean=true,cloudProgress: CloudProgress?=null,fromRelated: Boolean=false,forceRemote: Boolean=false,fromTrial: Long?=null) {
         if(!fromRelated) detailTrail.clear()
@@ -1271,6 +1289,8 @@ class MainActivity: Activity() {
             // 断网时不该只留一句「无法连接内容网站」：这部剧有缓存就把缓存列出来，能播就先播。
             val cached=offlineDetail(series)
             if(cached==null) {
+                // 连详情都取不到，画面就更不会来了：把过渡层撤掉，别让错误提示盖在一层黑底下。
+                playbackTransition.cancel()
                 error(body,problem) {
                     if(cloudProgress!=null && accountScope!=cloudAccount.historyScope) showCatalog()
                     else openDetail(series,resume,detailAutoplay,cloudProgress,fromRelated)
@@ -1741,6 +1761,8 @@ class MainActivity: Activity() {
                 return
             }
         }
+        // 这一轮播不起来了，界面有话要说：先把「封面展开」那层撤掉，否则重试按钮和说明都被盖在黑底下。
+        playbackTransition.cancel()
         playError=true; player?.pause(); progressBar.visibility=View.GONE; hud.visibility=View.VISIBLE; controls.removeAllViews(); controls.visibility=View.VISIBLE; panel=true
         val decoding=problem is PlaybackException && problem.errorCode in 3000..4999
         // 源里给的每一档都解不了，和「暂时取不到」是两件事：前者再试一百次也一样，

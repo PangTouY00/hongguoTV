@@ -47,6 +47,9 @@ class ArtworkLoader(context: Context) {
     }
     private class Job(val key: Key, val owner: Long, var priority: Int, val order: Long) {
         val listeners = linkedSetOf<Binding>()
+        /** 不属于某一页的取图（跨页面的过渡层）：换页不取消它，结果直接交回调用方。 */
+        val callbacks = mutableListOf<(Bitmap?) -> Unit>()
+        @Volatile var standalone = false
         @Volatile var cancelled = false
         @Volatile var call: Call? = null
     }
@@ -101,6 +104,50 @@ class ArtworkLoader(context: Context) {
         request(binding)
     }
 
+    /**
+     * 取一张不属于任何页面的图：拿到就交回调用方自己持有，换页（[cancelPage]）不会取消它。
+     * 「预览 → 全屏」的过渡层需要这种图——它要在换页之后继续留在屏幕上，
+     * 而按 View 绑定的取图会在换页时被清掉（画面只剩一层黑，就是黑屏）。
+     */
+    fun requestBitmap(url: String, widthPx: Int, heightPx: Int, done: (Bitmap?) -> Unit) {
+        if (closed) return
+        val key = sizedKey(url, widthPx, heightPx)
+        if (key == null) { main.post { done(null) }; return }
+        cache.get(key)?.let { cached -> main.post { done(cached) }; return }
+        var cancelled: Job? = null
+        synchronized(signal) {
+            // 同一张图已经在排着或正在读：并进去，不再花第二次网络往返。
+            jobs[key]?.let { job ->
+                job.standalone = true
+                job.callbacks += done
+                if (PRIORITY_FOCUSED < job.priority) {
+                    val queued = pending.remove(job)
+                    job.priority = PRIORITY_FOCUSED
+                    if (queued) pending.add(job)
+                }
+                return
+            }
+            if (pending.size >= MAX_PENDING) {
+                val worst = pending.maxWithOrNull(compareBy<Job> { it.priority }.thenBy { -it.order })!!
+                if (worst.priority < PRIORITY_FOCUSED) return
+                cancelLocked(worst)
+                cancelled = worst
+            }
+            val job = Job(key, owner, PRIORITY_FOCUSED, ++order).apply { standalone = true; callbacks += done }
+            jobs[key] = job
+            pending += job
+            signal.notifyAll()
+        }
+        cancelled?.call?.cancel()
+    }
+
+    /** 想要多大 → 一个安全的缓存键：最长边不超过 1024，不让老电视去解一张全屏大图。 */
+    private fun sizedKey(url: String, widthPx: Int, heightPx: Int): Key? {
+        if (url.isBlank() || widthPx <= 0 || heightPx <= 0) return null
+        val scale = min(1.0, 1024.0 / max(widthPx, heightPx))
+        return Key(url, max(1, (widthPx * scale).toInt()), max(1, (heightPx * scale).toInt()))
+    }
+
     private fun request(binding: Binding) {
         val view = binding.view.get() ?: return
         if (closed || binding.owner != owner || bindings[view] !== binding) return
@@ -108,8 +155,7 @@ class ArtworkLoader(context: Context) {
         val height = if (binding.height > 0) binding.height else view.height - view.paddingTop - view.paddingBottom
         if (width <= 0 || height <= 0) return
         // A malformed layout cannot ask an old TV to allocate a full-screen, multi-megapixel thumbnail.
-        val scale = min(1.0, 1024.0 / max(width, height))
-        val key = Key(binding.url, max(1, (width * scale).toInt()), max(1, (height * scale).toInt()))
+        val key = sizedKey(binding.url, width, height) ?: return
         if (binding.key != key) { detachJob(binding); binding.key = key; binding.failed = null }
         if (binding.applied == key || binding.failed == key) return
         cache.get(key)?.let { bitmap -> apply(binding, view, bitmap); return }
@@ -179,7 +225,11 @@ class ArtworkLoader(context: Context) {
         val old = bindings.values.toList()
         old.forEach { binding -> binding.view.get()?.setImageDrawable(null); unbind(binding) }
         val cancelled = synchronized(signal) {
-            jobs.values.toList().also { list -> list.forEach(::cancelLocked); signal.notifyAll() }
+            // 跨页面的那张图不属于任何一页：换页不能取消它，换页之后它还要留在屏幕上。
+            val pageJobs = jobs.values.filter { !it.standalone }
+            pageJobs.forEach(::cancelLocked)
+            signal.notifyAll()
+            pageJobs
         }
         cancelled.forEach { it.call?.cancel() }
         if (clearMemory) cache.evictAll()
@@ -220,14 +270,19 @@ class ArtworkLoader(context: Context) {
             val bitmap = try {
                 if (job.cancelled) null else cache.get(job.key) ?: fetch(job)
             } catch (_: Exception) { null } catch (_: OutOfMemoryError) { cache.evictAll(); null }
-            val listeners = synchronized(signal) {
+            val handed = synchronized(signal) {
                 if (jobs[job.key] === job) jobs.remove(job.key)
                 if (!job.cancelled && !closed && bitmap != null) cache.put(job.key, bitmap)
-                job.listeners.toList().also { job.listeners.clear() }
+                // 一次把两类要图的人都交清楚：绑到 View 的按页面归属交（换页之后就不再交），
+                // 跨页面的那种直接交回调用方，它自己负责把图留在屏幕上。
+                val asked = job.callbacks.toList().also { job.callbacks.clear() }
+                val bound = job.listeners.toList().also { job.listeners.clear() }
+                asked to bound
             }
-            if (!job.cancelled && !closed) main.post {
+            if (!job.cancelled && !closed && (handed.first.isNotEmpty() || handed.second.isNotEmpty())) main.post {
+                handed.first.forEach { it(bitmap) }
                 if (job.owner == owner && !closed) {
-                    listeners.forEach { binding ->
+                    handed.second.forEach { binding ->
                         val view = binding.view.get()
                         if (view != null && bindings[view] === binding && binding.key == job.key) {
                             if (bitmap != null) apply(binding, view, bitmap)
