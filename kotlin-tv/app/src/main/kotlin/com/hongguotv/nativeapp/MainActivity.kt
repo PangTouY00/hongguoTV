@@ -180,6 +180,12 @@ class MainActivity: Activity() {
     // Phones and touch panels need a touch entry point; remote-only TVs keep the existing behaviour untouched.
     private val touchInput by lazy { packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN) }
     private lateinit var root: FrameLayout
+    /**
+     * 首页停留计时跨首页实例保留：用户从全屏里主动返回过哪一部，回到首页就不再被自动拽回去。
+     * 每次进首页新建 HomeFeedScreen 都会新建一份判断，这个记忆就丢了。
+     */
+    private val autoFullscreenGuard=AutoFullscreenGuard(30_000)
+    private val playbackTransition by lazy { PlaybackTransition(this) }
     private var generation=0
     private var screen="catalog"
     private var tab=0
@@ -565,7 +571,8 @@ class MainActivity: Activity() {
             homeFeedIdentity=cloudAccount.recommendationIdentity
             val feed=HomeFeedScreen(this,homeFeedState,nav.toList(),
                 { openDetail(it,false) },::accountFavoriteAction,cloudAccount::favoriteActionLabel,
-                PublicFeedBackend(library.maxQuality,account=cloudAccount.recommendationCredentials(),startupCache=FeedStartupCache(this)),Media3TrialPlayback(this))
+                PublicFeedBackend(library.maxQuality,account=cloudAccount.recommendationCredentials(),startupCache=FeedStartupCache(this)),Media3TrialPlayback(this),
+                { series,position -> autoEnterFullscreen(series,position) },autoFullscreenGuard)
             homeFeed=feed
             container.addView(feed,lp(-1,0).apply { weight=1f })
             feed.start(foreground,focusNav)
@@ -1225,7 +1232,16 @@ class MainActivity: Activity() {
             }
         })
     }
-    private fun openDetail(series: Series,resume: Boolean=false,autoplay: Boolean=true,cloudProgress: CloudProgress?=null,fromRelated: Boolean=false,forceRemote: Boolean=false) {
+    /**
+     * 首页停留够久自动进入全屏：从试播停下的位置接着播，并做「封面从卡片位置展开」的过渡。
+     * 过渡层必须在 openDetail 之后加——openDetail 会重建整个界面，先加会被一起清掉。
+     */
+    private fun autoEnterFullscreen(series: Series,position: Long) {
+        val from=homeFeed?.stageBounds()
+        openDetail(series,resume=true,autoplay=true,fromTrial=position)
+        if(from!=null) playbackTransition.start(from,resources.displayMetrics.widthPixels,resources.displayMetrics.heightPixels,series.cover) { view,url -> loadCover(view,url) }
+    }
+    private fun openDetail(series: Series,resume: Boolean=false,autoplay: Boolean=true,cloudProgress: CloudProgress?=null,fromRelated: Boolean=false,forceRemote: Boolean=false,fromTrial: Long?=null) {
         if(!fromRelated) detailTrail.clear()
         relatedSection=null; nextWorkOffer=null
         val accountScope=cloudAccount.historyScope
@@ -1243,7 +1259,8 @@ class MainActivity: Activity() {
             val progress=remote?.let { WatchProgress(it.series,it.episodeId,it.episodeIndex,it.position,it.duration,false,it.updatedAt) } ?: library.progress(series.id)
             val target=ResumePlayback.target(result.episodes,progress?.episodeId,progress?.position ?: 0,progress?.completed==true)
             episodeIndex=target.index; group=episodeIndex/20
-            if(resume) playEpisode(target.index,target.position,autoplay=detailAutoplay) else showDetail(false)
+            // 从首页试播自动进来的，接着试播停下的那一秒继续，不回到本机记录的位置。
+            if(resume) playEpisode(target.index,fromTrial ?: target.position,autoplay=detailAutoplay) else showDetail(false)
         }, { problem ->
             // 断网时不该只留一句「无法连接内容网站」：这部剧有缓存就把缓存列出来，能播就先播。
             val cached=offlineDetail(series)
@@ -1521,6 +1538,8 @@ class MainActivity: Activity() {
                     if(rendered==episodeIndex) {
                         if(!firstFrame) return
                         firstFrame=false
+                        // 画面真的出来了，才把「封面展开」的过渡交出去；在此之前播放器一直藏在封面后面。
+                        playbackTransition.finish()
                         // 首帧真的画出来了，这一集用的编码就是这台设备解得开的。记下来——
                         // 之后遇到同样的编码，取址不再为它多花那一次兼容请求（实测一次一秒上下）。
                         CodecCapabilities.notePlayableCodec(currentRendition?.codec)
@@ -2261,6 +2280,9 @@ private fun showEpisodePanel(anchor: View) {
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
     private fun returnToDetail(forceDetail: Boolean=false) {
+        // 主动从全屏里出来，就是「这一部先不看了」：回到首页不再被自动拽回同一部。
+        detail?.series?.let { autoFullscreenGuard.suppress(it.id) }
+        playbackTransition.cancel()
         sleepTimer.cancel(); sleepStopped=false; saveProgress(); library.flush(); invalidatePage(); releasePlayer()
         if(directPlayback && !forceDetail) showCatalog() else { directPlayback=false; showDetail(true) }
     }
