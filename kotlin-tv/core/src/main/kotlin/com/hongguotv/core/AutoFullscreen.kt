@@ -2,16 +2,19 @@
 package com.hongguotv.core
 
 /**
- * 首页停留计时：焦点停在同一部作品的预览上超过 dwellMs，就自动进入全屏播放。
+ * 首页空闲计时：用户在首页上没有任何操作超过 idleMs，就自动进入全屏播放当前这部作品。
  *
- * 这里只回答两件事——「从什么时候开始停留」和「哪些作品不再自动进入」。时间由调用方给（界面用
- * elapsedRealtime，测试用固定值），所以这一层可以在 JVM 测试里完整跑过，不碰 Android。
+ * 这里只回答两件事——「从哪一刻开始算没有操作」和「哪些作品不再自动进入」。时间由调用方给
+ * （界面用 elapsedRealtime，测试用固定值），所以这一层能在 JVM 测试里完整跑过，不碰 Android。
  *
- * 抑制名单是这条链路上最容易做错的地方：用户从全屏里主动返回，说明他刚刚明确地不想看这一部；
- * 如果回到首页又立刻重新计时，三十秒后会被强行送回同一个地方。所以「主动离开」只压制这一部，
- * 换到别的作品仍然正常计时。
+ * 每一次用户活动（切剧、按键、触摸）都会把这一部的计时重新开始：判断的是「人还在这页上操作」，
+ * 不是「焦点停在同一部多久」。
+ *
+ * 抑制名单是这条链路上最容易做错的地方：用户从全屏里主动返回、按了暂停或打开了操作面板，
+ * 说明他明确地不想看这一部；不压制的话二十秒后会被强行送回同一个地方。压制只针对这一部，
+ * 换到别的作品照常计时。
  */
-class AutoFullscreenGuard(val dwellMs: Long = 30_000) {
+class AutoFullscreenGuard(val idleMs: Long = 20_000) {
     private var watching: String? = null
     private var since = 0L
     private val suppressed = linkedSetOf<String>()
@@ -23,21 +26,17 @@ class AutoFullscreenGuard(val dwellMs: Long = 30_000) {
     /** 还剩多久触发；不在计时中返回 null。 */
     fun remaining(now: Long): Long? {
         val id = watching ?: return null
-        return (since + dwellMs - now).coerceAtLeast(0)
+        return (since + idleMs - now).coerceAtLeast(0)
     }
 
-    /** 开始停留计时；同一部作品重复调用不会把计时清零（换剧才会重新开始）。 */
-    fun arm(seriesId: String, now: Long) {
-        if (seriesId == watching) return
-        watching = seriesId
-        since = now
-    }
+    /** 用户此刻的活动落在这部作品上：重新开始这一部的空闲计时。 */
+    fun arm(seriesId: String, now: Long) { watching = seriesId; since = now }
 
-    /** 焦点离开、开始滚动、Activity 暂停：丢掉计时，但不压制这部作品。 */
+    /** 界面暂停或收起：丢掉计时，但不压制这部作品。 */
     fun cancel() { watching = null }
 
     /**
-     * 用户主动离开这一部：按了暂停、打开了操作面板、或从全屏里返回。
+     * 用户明确离开这一部：按了暂停、打开了操作面板、或从全屏里返回。
      * 这一部不再自动进入全屏，直到换到别的作品为止。
      */
     fun suppress(seriesId: String) {
@@ -52,7 +51,7 @@ class AutoFullscreenGuard(val dwellMs: Long = 30_000) {
     fun elapsed(now: Long): String? {
         val id = watching ?: return null
         if (suppressed(id)) { watching = null; return null }
-        if (now - since < dwellMs) return null
+        if (now - since < idleMs) return null
         watching = null
         return id
     }
