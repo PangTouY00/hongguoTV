@@ -181,10 +181,10 @@ class MainActivity: Activity() {
     private val touchInput by lazy { packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TOUCHSCREEN) }
     private lateinit var root: FrameLayout
     /**
-     * 首页停留计时跨首页实例保留：用户从全屏里主动返回过哪一部，回到首页就不再被自动拽回去。
+     * 首页空闲计时跨首页实例保留：用户从全屏里主动返回过哪一部，回到首页就不再被自动拽回去。
      * 每次进首页新建 HomeFeedScreen 都会新建一份判断，这个记忆就丢了。
      */
-    private val autoFullscreenGuard=AutoFullscreenGuard(30_000)
+    private val autoFullscreenGuard=AutoFullscreenGuard()   // 空闲二十秒，这个时长定义在 core 的默认值里
     private val playbackTransition by lazy { PlaybackTransition(this) }
     private var generation=0
     private var screen="catalog"
@@ -1238,7 +1238,8 @@ class MainActivity: Activity() {
      */
     private fun autoEnterFullscreen(series: Series,position: Long) {
         val from=homeFeed?.stageBounds()
-        openDetail(series,resume=true,autoplay=true,fromTrial=position)
+        // 用户正在看的就是屏幕上这一部、这一集：接着试播停下的那一秒播，不去读本机的观看进度。
+        openDetail(series,autoplay=true,fromTrial=position)
         if(from!=null) playbackTransition.start(from,resources.displayMetrics.widthPixels,resources.displayMetrics.heightPixels,series.cover) { view,url -> loadCover(view,url) }
     }
     private fun openDetail(series: Series,resume: Boolean=false,autoplay: Boolean=true,cloudProgress: CloudProgress?=null,fromRelated: Boolean=false,forceRemote: Boolean=false,fromTrial: Long?=null) {
@@ -1246,7 +1247,8 @@ class MainActivity: Activity() {
         relatedSection=null; nextWorkOffer=null
         val accountScope=cloudAccount.historyScope
         pendingDetail=series; detailAutoplay=autoplay
-        invalidatePage(); releaseCatalogViews(); screen="detail"; directPlayback=resume; detail=null; synopsisExpanded=false
+        // 自动进入全屏的也是「直接从预览里进来」：按返回回到首页，不落中间的详情页。
+        invalidatePage(); releaseCatalogViews(); screen="detail"; directPlayback=resume || fromTrial!=null; detail=null; synopsisExpanded=false
         // 本机下载里点开的剧本来就是「这台设备上已经有的内容」：直接由缓存拼出列表，不联网也能进、能播。
         if(!forceRemote && isLocalDownloads()) {
             offlineDetail(series)?.let { cached -> showOfflineDetail(series,cached,resume); return }
@@ -1256,11 +1258,15 @@ class MainActivity: Activity() {
             detail=result; library.observeFavorite(series.id,result.episodes.size,System.currentTimeMillis(),acknowledge=true)
             if(cloudProgress!=null && (accountScope!=cloudAccount.historyScope || !cloudAccount.signedIn)) { showCatalog(); return@work }
             val remote=if(resume) cloudProgress else null
-            val progress=remote?.let { WatchProgress(it.series,it.episodeId,it.episodeIndex,it.position,it.duration,false,it.updatedAt) } ?: library.progress(series.id)
+            // 从预览自动进来的这一部，起播位置由调用方给：不读本机或云端进度，也不跳到「上次看到」的那一集。
+            val progress=if(fromTrial!=null) null else remote?.let { WatchProgress(it.series,it.episodeId,it.episodeIndex,it.position,it.duration,false,it.updatedAt) } ?: library.progress(series.id)
             val target=ResumePlayback.target(result.episodes,progress?.episodeId,progress?.position ?: 0,progress?.completed==true)
             episodeIndex=target.index; group=episodeIndex/20
-            // 从首页试播自动进来的，接着试播停下的那一秒继续，不回到本机记录的位置。
-            if(resume) playEpisode(target.index,fromTrial ?: target.position,autoplay=detailAutoplay) else showDetail(false)
+            when {
+                fromTrial!=null -> playEpisode(target.index,fromTrial,autoplay=detailAutoplay)
+                resume -> playEpisode(target.index,target.position,autoplay=detailAutoplay)
+                else -> showDetail(false)
+            }
         }, { problem ->
             // 断网时不该只留一句「无法连接内容网站」：这部剧有缓存就把缓存列出来，能播就先播。
             val cached=offlineDetail(series)
