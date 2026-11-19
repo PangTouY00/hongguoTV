@@ -1155,7 +1155,7 @@ class MainActivity: Activity() {
         lateinit var defaultSpeed: TextView
         defaultSpeed=setting(playback,"默认倍速  ·  ${PlaybackSpeed.label(library.playbackSpeed)}") { showSpeedPicker(defaultSpeed,false) }
         lateinit var frame: TextView
-        frame=setting(playback,"画面模式  ·  ${library.frameMode.label}") { showFramePicker(frame,false) }
+        frame=setting(playback,"画面模式  ·  ${library.frameMode.labelWithZoom(library.frameZoom)}") { showFramePicker(frame,false) }
         lateinit var autoNextButton: TextView
         autoNextButton=setting(playback,"自动连播  ·  ${if(library.autoNext) "开启" else "关闭"}") {
             library.autoNext=!library.autoNext
@@ -1966,22 +1966,38 @@ class MainActivity: Activity() {
             if(anchor.tag!="playback-settings") anchor.text="定时 ${sleepTimer.label()}"; updatePlaybackText(); showHud()
         })
     }
-    private fun frameResizeMode()=when(library.frameMode) {
-        // 放大模式同样保持视频比例，超出屏幕的部分由放大本身裁掉，不再用 ZOOM 把画面撑满。
+    /** 画面上此刻生效的模式与倍数：面板里正在试的那一项优先于已经存下来的设置，窗口一关就回到库里的值。
+     *  预览不落盘，遥控器每按一次都改写 SharedPreferences 没有意义，也避免半途而废的试值被带进备份。 */
+    private var framePreview: Pair<VideoFrameMode,Float>?=null
+    private fun effectiveFrame()=framePreview ?: (library.frameMode to library.frameZoom)
+    private fun frameLabel()=effectiveFrame().first.labelWithZoom(effectiveFrame().second)
+    private fun frameResizeMode()=when(effectiveFrame().first) {
+        // 自定义放大保持视频比例，超出屏幕的部分由 view 缩放本身裁掉；裁剪铺满交给播放器按比例填满再裁切，
+        // 拉伸铺满不保比例。三种黑边处理走的是 Media3 现成的 resizeMode，只有放大倍数是自己乘上去的。
         VideoFrameMode.FIT, VideoFrameMode.ZOOM -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+        VideoFrameMode.CROP -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
         VideoFrameMode.FILL -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
     }
     /** 画面放大只作用在播放器上：弹幕、进度条与面板仍按原尺寸排布，遥控器焦点图也不受影响。 */
     private fun applyFrameScale() {
         val view=playerView ?: return
-        val scale=library.frameMode.frameScale
+        val mode=effectiveFrame().first
+        view.resizeMode=frameResizeMode()
+        val scale=if(mode==VideoFrameMode.ZOOM) effectiveFrame().second else 1f
         view.scaleX=scale; view.scaleY=scale
     }
     private fun showFramePicker(anchor: TextView,inPlayer: Boolean) {
-        tvTools.choose("全局画面模式",listOf("完整画面 · 保留比例与全部内容","放大 1.36 倍 · 减少黑边，会裁掉画面边缘","拉伸铺满 · 画面比例会改变"),anchor,{ index ->
-            library.frameMode=VideoFrameMode.entries[index]; playerView?.resizeMode=frameResizeMode(); applyFrameScale()
-            if(anchor.tag!="playback-settings") anchor.text=(if(inPlayer) "画面 " else "画面模式  ·  ")+library.frameMode.label
-        })
+        val labels=listOf("完整画面 · 保留比例与全部内容","自定义放大 · 按比例放大画面，黑边变窄",
+            "裁剪铺满 · 保留比例撑满屏幕，裁掉超出部分","拉伸铺满 · 画面比例会改变")
+        val frame=effectiveFrame()
+        // 焦点在哪一行画面就变成哪一行，倍数改的也是眼前这一帧；不确认就退出会退回打开之前的模式与倍数。
+        tvTools.frameModePicker("全局画面模式",labels,VideoFrameMode.ZOOM.ordinal,VideoFrameMode.entries.indexOf(frame.first),frame.second,anchor,
+            onPreview={ index,zoom -> framePreview=VideoFrameMode.entries[index] to VideoZoom.normalize(zoom); applyFrameScale() },
+            onCommit={ index,zoom ->
+                library.frameMode=VideoFrameMode.entries[index]; library.frameZoom=VideoZoom.normalize(zoom); framePreview=null; applyFrameScale()
+                if(anchor.tag!="playback-settings") anchor.text=(if(inPlayer) "画面 " else "画面模式  ·  ")+frameLabel()
+            },
+            onRevert={ _,_ -> framePreview=null; applyFrameScale() })
     }
     private fun seek(direction: Int,repeat: Int) {
         val p=player ?: return; if(!playbackReady) return
@@ -2003,7 +2019,7 @@ class MainActivity: Activity() {
         addButton(transport,if(touchLock) "🔒" else "🔓",touchLock) { touchLock=!touchLock; showPanel() }
         lateinit var more: TextView
         more=addButton(transport,"播放设置") {
-            tvTools.choose("播放设置",listOf("倍速 ${PlaybackSpeed.label(library.playbackSpeed)}","清晰度 ${library.maxQuality}P","画面 ${library.frameMode.label}","定时 ${sleepTimer.label()}","从头播放","重置设备能力记录","缓存管理 · 已缓存 ${episodeCache.records().size} 集"),more,{ choice ->
+            tvTools.choose("播放设置",listOf("倍速 ${PlaybackSpeed.label(library.playbackSpeed)}","清晰度 ${library.maxQuality}P","画面 ${library.frameMode.labelWithZoom(library.frameZoom)}","定时 ${sleepTimer.label()}","从头播放","重置设备能力记录","缓存管理 · 已缓存 ${episodeCache.records().size} 集"),more,{ choice ->
                 main.post {
                     if(screen=="player" && more.isAttachedToWindow) when(choice) {
                         0 -> showSpeedPicker(more)
