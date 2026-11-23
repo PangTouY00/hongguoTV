@@ -125,6 +125,7 @@ class PlaybackAccountIdentityTest {
         val failure = runCatching { repository.legacyStreamLadder("123") }.exceptionOrNull()
         assertTrue("未登录时应该报「需要登录红果账号」：$failure", failure is PlaybackLoginRequiredException)
         assertTrue("未登录却带上了账号 Cookie：$seen", seen.none { it?.contains("sessionid") == true })
-        assertTrue("未登录时不该退避重读四轮，新接口一次、旧接口一次就够：$seen", seen.size == 2)
+        // 三条入口按健康度各试一次，再兜底走一次旧接口；不该退避重读四轮。
+        assertTrue("未登录时该三条入口各一次再加旧接口一次：$seen", seen.size == PlayRetryPlan.hosts.size + 1)
     }
 }

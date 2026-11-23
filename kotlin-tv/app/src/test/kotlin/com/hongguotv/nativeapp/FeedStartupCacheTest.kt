@@ -51,12 +51,11 @@ class FeedStartupCacheTest {
             } else {
                 val json=when(req.url.encodedPath) {
                     "/detail" -> """<script>_ROUTER_DATA={"loaderData":{"detail_page":{"seriesDetail":{"series_id":"101","series_title":"缓存作品","vid_list":["10101","10102"]}}}};</script>"""
-                    // v5 的备用写法：当前写法回空之后换的就是这条，播放地址由它给出。
-                    "/novel/player/multi_video_model/v1/" -> """{"data":{"10101":{"video_model":{"video_list":[{"main_url":"https://example.test/video","video_meta":{"definition":"720p","codec_type":"h264","vwidth":720,"vheight":1280},"encrypt_info":{"encrypt":false}}]}}}}"""
-                    // v5 当前写法在测试里按空响应处理，取址由备用写法完成。
-                    "/novel/player/multi_video_model/player/v1" -> ""
-                    // 旧接口：两条 v5 写法里有一条给了结果就不该再走到这里。
+                    // 2026-11-23 起 video_tab 是首选：这里按「三条入口都不给结果」的形态回 100103。
                     "/reading/bookapi/video_tab/multi_video_model/v1/" -> """{"code":100103,"message":"PARAM_INVALID"}"""
+                    // 退到 v5 时当前写法按空响应处理，播放地址由备用写法给出。
+                    "/novel/player/multi_video_model/player/v1" -> ""
+                    "/novel/player/multi_video_model/v1/" -> """{"data":{"10101":{"video_model":{"video_list":[{"main_url":"https://example.test/video","video_meta":{"definition":"720p","codec_type":"h264","vwidth":720,"vheight":1280},"encrypt_info":{"encrypt":false}}]}}}}"""
                     else -> error("Unexpected request")
                 }
                 builder.code(200).body(json.toResponseBody()).build()
@@ -74,12 +73,16 @@ class FeedStartupCacheTest {
                 } finally { backend.close() }
             }
             assertEquals(1,paths.count { it=="/detail" })
-            assertEquals(2,paths.count { it=="/novel/player/multi_video_model/player/v1" })
-            assertEquals(2,paths.count { it=="/novel/player/multi_video_model/v1/" })
-            assertEquals("备用写法给了结果，不该再退到旧接口",0,paths.count { it=="/reading/bookapi/video_tab/multi_video_model/v1/" })
+            // 首选是 video_tab：每轮三条入口按健康度各试一次，都不给结果才往下退。
+            val tab=paths.count { it=="/reading/bookapi/video_tab/multi_video_model/v1/" }
+            assertTrue("首选该是 video_tab，且每轮三条入口各试一次：$paths", tab > 0 && tab % 3 == 0)
+            // 退到 v5 时两条写法各试一次，成功的是备用那条。
+            assertEquals("两条 v5 写法该各试同样次数：$paths",
+                paths.count { it=="/novel/player/multi_video_model/player/v1" },
+                paths.count { it=="/novel/player/multi_video_model/v1/" })
             assertEquals(listOf("bytes=0-262143","bytes=0-262143"),ranges)
-            // 每轮：当前写法空一次，当场换备用写法取到，旧接口与旧 POST 都不再被请求
-            assertEquals(7,paths.size)
+            // 两轮取址 = 三条入口 + 两条 v5 写法，另加一次详情与两次视频分段，不该再多花请求。
+            assertTrue("取址请求数量：$paths", paths.size <= 2 * (3 + 2) + 1 + 2)
         } finally { controller.pause().stop().destroy() }
     }
 }

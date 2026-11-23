@@ -17,22 +17,20 @@ import org.junit.Test
  * 2026-11-05 实测：同一台设备、同一个接口，不带签名的请求一律 `HTTP 200 + 0 字节`，
  * 带签名的请求回 `code 0` + 完整播放模型；换域名、换 UA、换出口 IP、补参数都不改变这一点。
  *
- * 2026-11-11 实测：`x-argus=base64(时间戳)` 那对占位 argus/ladon 不够，换成 `PlayerSigner`
- * 真算的那一份才通。当时把 `x-medusa` / `x-helios` 也一起去掉了，这一步是错的：
- * 同类项目 charlie901208/HGTV 的逐头篡改实测（docs/APP_SIGNING.md §11.2，2026-10-09）给出的结论是
- * 这条接口真正校验的是 `x-medusa`（绑定正文与设备身份）与 `x-helios`，
- * `x-gorgon` / `x-ladon` / `x-argus` / `x-ss-stub` / `x-khronos` 不发也行——它自己用的就是占位
- * argus/ladon。缺了 medusa 与 helios 时网关在业务处理前挡掉，回 `HTTP 200 + 0 字节`、连错误码
- * 都不给，与本机探针看到的「源站 origin 处理二十余毫秒后回空正文」一致。
- * 所以这里锁的是：真 argus/ladon 必须能解开，且 medusa/helios/gorgon 必须都在。
+ * 2026-11-23 四路对照（同一份新注册身份、同一个域名、同一份参数，只换签名头族）：
+ * `x-khronos` + `x-helios` + `x-medusa` 回 22070 字节完整模型；
+ * `x-argus` + `x-ladon` + `x-gorgon` + `x-khronos` 回 0 字节；不签名回 0 字节；
+ * v5 三头再额外补上 argus/ladon 仍然给数据。
+ * 决定因素是**有没有 medusa/helios**，不是「多带一个头就被判伪造」——此前按主仓库说法
+ * 停发 medusa/helios 的那一版（PR #51）正是取址全空的原因。
+ * 所以这里锁的是：v5 三头必须都在，旧族 argus/ladon/gorgon 一律不发。
  */
 class PlaybackRequestSignatureTest {
     private val tabPath = "/reading/bookapi/video_tab/multi_video_model/v1/"
     private val legacyPath = "/novel/player/multi_video_model/v1/"
-    private val signatureHeaders = listOf("x-argus", "x-ladon", "x-khronos", "x-ss-req-ticket")
-    // 逐头篡改实测里真正被校验的是 x-medusa（绑定正文与设备身份）与 x-helios，缺了它们
-    // 网关在业务处理前就把请求挡掉：HTTP 200 + content-length: 0，连错误码都不给。
-    private val verifiedHeaders = listOf("x-medusa", "x-helios", "x-gorgon")
+    private val signatureHeaders = listOf("x-khronos", "x-helios", "x-medusa")
+    // 2026-11-23 起这三个头一律不发：实测带它们的那一路回 0 字节。
+    private val stoppedHeaders = listOf("x-argus", "x-ladon", "x-gorgon")
 
     private fun row(url: String, quality: Int, height: Int) = JSONObject()
         .put("main_url", url)
@@ -73,12 +71,15 @@ class PlaybackRequestSignatureTest {
 
         val tab = requests.single { it.url.encodedPath == tabPath }
         for (name in signatureHeaders) assertNotNull("播放取址缺少签名头 $name", tab.header(name))
-        for (name in verifiedHeaders) assertNotNull("播放取址缺少服务端校验的签名头 $name", tab.header(name))
-        // x-khronos 与 URL 的 _rticket 同源，签名才对得上 query。
-        assertEquals(tab.url.queryParameter("_rticket")!!.toLong() / 1000, tab.header("x-khronos")!!.toLong())
-        // x-argus 必须是能解开的真 bean（占位值解不开），且带本次调用的随机 nonce。
-        assertNotNull("x-argus 不是可解开的真签名", Argus.decrypt551(tab.header("x-argus")!!))
-        assertNotNull("x-argus 缺少本次调用的 nonce 字段", Argus.recover551Field3(tab.header("x-argus")!!))
+        for (name in stoppedHeaders) assertNull("播放取址带了应当停发的签名头 $name", tab.header(name))
+        // x-khronos 是秒级时间戳，与 URL 的 _rticket 同源（签名器挑票据时最多跨一秒）。
+        val khronos = tab.header("x-khronos")!!.toLong()
+        assertTrue(khronos > 0)
+        assertTrue(Math.abs(tab.url.queryParameter("_rticket")!!.toLong() / 1000 - khronos) <= 1)
+        // medusa 是真签名（base64，内含 device_id 与进程 nonce），不是占位值。
+        val medusa = tab.header("x-medusa")!!
+        assertTrue("x-medusa 不像真签名", medusa.length > 40)
+        assertTrue("x-medusa 解不开", runCatching { java.util.Base64.getDecoder().decode(medusa) }.isSuccess)
         assertEquals("333", tab.url.queryParameter("device_id"))
         assertEquals("444", tab.url.queryParameter("iid"))
         assertEquals("123", tab.url.queryParameter("video_id"))
@@ -112,25 +113,23 @@ class PlaybackRequestSignatureTest {
 
         val legacy = requests.single { it.url.encodedPath == legacyPath }
         for (name in signatureHeaders) assertNotNull("旧播放接口缺少签名头 $name", legacy.header(name))
-        for (name in verifiedHeaders) assertNotNull("旧播放接口缺少服务端校验的签名头 $name", legacy.header(name))
-        // POST 的 body 参与签名：x-ss-stub 是 body 的 MD5，并作为 argus 的 body hash 输入。
+        for (name in stoppedHeaders) assertNull("旧播放接口带了应当停发的签名头 $name", legacy.header(name))
+        // POST 的 body 参与签名：x-ss-stub 是 body 的 MD5。
         assertNotNull(legacy.header("x-ss-stub"))
         // 大写十六进制（设备注册那条用的也是大写）：小写的那一份服务端按没给处理。
         assertTrue(legacy.header("x-ss-stub")!!.all { it.isDigit() || it in 'A'..'F' })
         assertNotNull(legacy.body)
-        assertNotNull("x-argus 不是可解开的真签名", Argus.decrypt551(legacy.header("x-argus")!!))
     }
 
-    /** 每一轮取址都要重新签名：同一个 argus 重放第二次还是会被拒。 */
+    /** 每一轮取址都要重新签名：同一份 medusa 重放第二次还是会被拒。 */
     @Test fun eachAddressRoundReSignsTheRequest() {
-        val tabArgus = mutableListOf<String?>()
+        val tabMedusa = mutableListOf<String?>()
         val repository = repository { request ->
-            if (request.url.encodedPath == tabPath) { tabArgus += request.header("x-argus"); tabPayload("123") } else "{}"
+            if (request.url.encodedPath == tabPath) { tabMedusa += request.header("x-medusa"); tabPayload("123") } else "{}"
         }
         repository.legacyStreamLadder("123", fresh = true)
         repository.legacyStreamLadder("123", fresh = true)
-        assertEquals(2, tabArgus.size)
-        assertNotEquals(tabArgus[0], tabArgus[1])
-        assertNotEquals(tabArgus[0]?.let { Argus.recover551Field3(it) }, tabArgus[1]?.let { Argus.recover551Field3(it) })
+        assertEquals(2, tabMedusa.size)
+        assertNotEquals(tabMedusa[0], tabMedusa[1])
     }
 }

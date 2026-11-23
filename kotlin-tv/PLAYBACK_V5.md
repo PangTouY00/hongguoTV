@@ -42,6 +42,36 @@
 
 **画面已真机验收。** 用户 2026-11-17 装本分支的调试包后可以正常播放，包括上面那三集只有 `bytevc1` 的。这条接口给的编码 `force_codec=h264`、`codec_type=0`、`use_os_player=true`、`need_mp4_align=true` 四种写法都不改变，而私有编码在这台设备上解得出来——此前「系统播放器解不出厂商私有编码」的判断不成立，具体走的是哪条解码路径没有查。取址与播放两条都通了。
 
+## 2026-11-23：这条改作后备，首选换回 video_tab
+
+同一条 v5 请求在 2026-11-17 回完整模型，到 2026-11-23 在同一台手机上对匿名请求回 `HTTP 200 + 0 字节`：同一份新注册身份、同一集号，`/novel/player/multi_video_model/player/v1` 与它的备用写法各试一次，全部空正文；`GET /reading/bookapi/video_tab/multi_video_model/v1/` 在 `api5-normal-sinfonlineb`、`api5-normal-hl`、`api5-normal-lf` 三条入口上各试一次，同样全部空正文。同一时刻用户已登录的 fork 版本能正常播放同一集。所以这条接口给不出结果的原因不在签名协议上，v5 的移植与对拍结论仍然成立，只是它不再能取到匿名身份下的清晰度。
+
+照主仓库 `tsukiyo-zero/hongguoTV` 现行实现把取址顺序换了过来：首选 video_tab GET、三条入口按健康度轮换、停发 `x-medusa`/`x-helios`/`x-gorgon`（主仓库把它们称作伪造痕迹，与 `PlayerSigner` 真头同时出现时整条请求被拒；本机带这几个头的两种写法在三条入口上全部回空）。这条 v5 保留作后备，排在带账号的 `POST /novel/player/video_model/v1/` 之后。域名表与「回空冷却 30 秒」的语义移植自 `PlayRetryPlan`，在 `PlayRetry.kt`。
+
+**这一段的「停发 medusa/helios」在同日被推翻，它本身就是取址全空的原因，见下一节。**
+
+## 2026-11-23 同日更正：全空的原因是签名头族
+
+同一台手机、同一份新注册身份、同一个域名、同一份参数，只换签名头族做四路对照：
+
+| 签名头 | 结果 |
+| --- | --- |
+| `x-argus` + `x-ladon` + `x-gorgon` + `x-khronos`（当时线上形态） | HTTP 200，0 字节 |
+| `x-khronos` + `x-helios` + `x-medusa` | HTTP 200，**22070 字节**，`code:0` 与完整 `video_model_data` |
+| 不签名 | HTTP 200，0 字节 |
+| v5 三头再额外补 `x-argus` / `x-ladon` | HTTP 200，22078 字节 |
+
+决定因素是**有没有 `x-medusa` / `x-helios`**。多带旧头不会让请求被拒，所以「与真头同时出现必然被拒」这条说法在 video_tab 上不成立。
+
+同日另外排除掉的变量（同一份新注册身份，注册返回 `new_user=true`）：
+
+- v5 那条的两写法 × 三个域名（`api5-normal-sinfonlinea`、`api5-normal-sinfonlineb`、`reading.snssdk.com`）× 三个上报版本号（7.4.3.32、7.4.5.32、7.3.9.32）共 18 个组合，全部 `HTTP 200 + 0 字节`。**版本号不是变量。**
+- 真机上带账号 Cookie 与不带账号 Cookie 的取址结果逐轮一致：`账号凭据=有` 那一轮同样三条入口全空。**账号不是变量。** 上一节里「同一时刻已登录的 fork 版本能正常播放」那次对照没有控制签名头族，结论不成立。
+
+改法：`PlaybackDeviceSession.Profile.signer` 改用 v5 形态的签名器；`playbackRequest` 只保留 `x-khronos` / `x-helios` / `x-medusa`（POST 带正文时仍带 `x-ss-stub` 与 `Content-Type`，GET 不带）；video_tab 那条 GET 固定用 App 的 UA。改完在本机走完整的 `streamLadder` 取到 `1080P bytevc1` 与真实 `main_url`。
+
+外部同期记录指向同一条结论：beilunyang/openhongguo#16、jackotom/hongguo-drama v7.7、aston314/hongguo-tv#76 三个互不相关的项目都写明 video_tab GET 要带 v5 签名族、正文摘要按空内容计算、不发 `x-ss-stub` 与旧 Argus/Ladon。
+
 ## 下一次
 
 「播不了」不止这一类。取址空正文、选不出可解码的档、业务码非 0、目录也空，是四类不同故障，分流与各自的路线写在 [PLAYBACK_DIAGNOSIS.md](PLAYBACK_DIAGNOSIS.md)。
