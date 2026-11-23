@@ -20,6 +20,7 @@
 
 - **签名头族不对时必然回空。** 不带 `x-medusa`/`x-helios` 的那几组写法（旧 Argus/Ladon/Gorgon 一族、或干脆不签名）在这条接口上一律 0 字节。
 - **带了 v5 三头也不保证给数据。** 同一台手机、同一集号、同一份探针代码，2026-11-23 上午四路里 B 回 22070 字节完整模型，同一天下午再跑四路全空。同一份注册身份一旦被拒会一直回空，换一份新身份或过一段时间才可能放行。
+- **2026-11-23 晚这一轮，这条接口对匿名身份直接要求登录。** 走完整取址链抛出来的是 `PlaybackLoginRequiredException`「播放需要登录红果账号」，不是静默空。同一轮用 [`tools/probes/PlaybackRedFruitReplica.kt`](tools/probes/PlaybackRedFruitReplica.kt) 把红果那条真实请求照抄下来做五路对照——30 个 query 参数、它的完整 Cookie（含 `odin_tt` / `passport_csrf_token`）、gzip 正文、旧族 + v5 两族签名、全套杂头，再分别去掉 passport 那几条 Cookie、正文不压缩、只带 v5 三头、不带 Cookie——五路全部 HTTP 200 + 0 字节。**请求形态不是变量。** 所以做这类对照之前先确认自己测的是匿名场景还是带账号场景：匿名探针测不到带账号那条通道，App 里对应的是 `ContentRepository.accountCookie`。集号本身有没有资源用 [`tools/probes/LiveChainProbe.kt`](tools/probes/LiveChainProbe.kt) 判：它走首页目录 → 剧集列表 → 第一集，这一轮取到的集号与旧日志里的集号完全一致，说明全空与集号无关。
 
 所以这一类的顺序是：**先固定签名形态（第 1 步），再换身份、换时段复测**，不要拿一次全空直接判定「签名错了」。
 
