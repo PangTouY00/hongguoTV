@@ -173,6 +173,17 @@ class ContentRepository(
     private val site = "https://hongguoduanju.com"
     private val PLAYER_HOST = "https://api5-normal-sinfonlineb.fqnovel.com"
     /**
+     * 取址域名的健康度，语义照主仓库的 `PlaybackRoutes`：候选是 [PlayRetryPlan.hosts] 那三条入口，
+     * 回空正文的那条冷却 30 秒、其它失败冷却 5 秒，取址按冷却最短的先试。
+     * 主仓库那份还区分 GET 路由与 POST 路由，本仓库这条接口只用 GET，所以只留域名这一层。
+     */
+    private val playbackHostBlocked = ConcurrentHashMap<String, Long>()
+    private fun playbackHosts(now: Long) = PlayRetryPlan.hosts.sortedBy { playbackHostBlocked.getOrDefault(it, 0L) }
+    private fun playbackHostFailed(host: String, now: Long, empty: Boolean) {
+        playbackHostBlocked[host] = now + if (empty) 30_000L else 5_000L
+    }
+    private fun playbackHostSucceeded(host: String) { playbackHostBlocked.remove(host) }
+    /**
      * 要靠厂商自带解码库才解得出视频轨的私有编码。官方 App 包里带着这两个解码器
      * （libByteVC1_dec.so、libbyteVC2dec.so）配它自己的播放器，系统播放器没有。
      */
@@ -441,13 +452,13 @@ class ContentRepository(
      * 直接回 HTTP 200 + 0 字节（详情、注册都正常，只有播放模型被静默丢弃）。
      * 所以这里按最终 query 用 `PlayerSigner`（fqapp 的 argus/ladon 移植）重生成 argus/ladon/khronos。
      *
-     * 当时顺手把 `x-medusa` / `x-helios` 也一起去掉了，这一步是错的。同类项目 charlie901208/HGTV
-     * 在 2026-10-09 做过逐头篡改实测（它的 docs/APP_SIGNING.md §11.2）：这条接口真正校验的是
-     * `x-medusa`（绑定正文与设备身份）与 `x-helios`，`x-gorgon` / `x-ladon` / `x-argus` /
-     * `x-ss-stub` / `x-khronos` 反而「发了不亏、不发也行」——它自己用的就是 `base64(时间戳)`
-     * 那对占位 argus/ladon。缺了 medusa 与 helios 时网关在业务处理前就把请求挡掉，
-     * 回的就是 HTTP 200 + content-length: 0，连错误码都不给（本机探针实测源站 origin 处理了
-     * 二十余毫秒后回空正文，换 HTTP/1.1 一样）。所以这两个头必须留着。
+     * 2026-11-23 起改回主仓库的做法：`x-gorgon` / `x-helios` / `x-medusa` 也一并停发，取址只带
+     * `PlayerSigner` 真算的那一组。依据是主仓库 tsukiyo-zero/hongguoTV 现行 `playbackRequest`
+     * 的实现与注释——它把这些头称作「伪造痕迹」，与真头同时出现必然被拒；本机同一集、同一份
+     * 新注册身份下的对照也一致：带 medusa/helios 的 video_tab GET 与旧 POST 一律 HTTP 200 + 0 字节。
+     *
+     * 早先这里引用 charlie901208/HGTV 的 docs/APP_SIGNING.md §11.2（2026-10-09）得出「medusa 与
+     * helios 必须留着」，那是那个项目自己那条接口的结论，照到主仓库这条接口上复测不成立。
      */
     private fun playbackRequest(
         base: String,
@@ -469,10 +480,10 @@ class ContentRepository(
         // x-khronos 必须与 URL 的 _rticket 同源，否则签名与 query 对不上。
         val real = if (ticket != null) PlayerSigner.headers(query, body, ts = ticket / 1000, ticket = ticket)
         else PlayerSigner.headers(query, body)
-        // 只把 argus/ladon/khronos 换成 PlayerSigner 真算的那一份；
-        // x-medusa / x-helios / x-gorgon 是 Signer 真算的，必须留下（依据见上面的接口实测记录）。
+        // 签名头只留 PlayerSigner 真算的那一组。Signer 的 medusa/helios/gorgon 与真头同时出现时
+        // 会被网关当作伪造痕迹整条拒掉（依据见上面的记录）。
         val replaced = setOf(
-            "x-argus", "x-ladon", "x-khronos",
+            "x-argus", "x-ladon", "x-khronos", "x-gorgon", "x-helios", "x-medusa",
             "x-ss-stub", "x-ss-req-ticket", "x-medias", "x-tt-dt",
         )
         val kept = signed.headers.filterKeys { it.lowercase() !in replaced }
@@ -524,7 +535,7 @@ class ContentRepository(
     @JvmOverloads fun streamLadder(id: String, fresh: Boolean = false): StreamLadder =
         cachedLadder(id, fresh) { fetchLadder(it) }
 
-    /** 旧传输（video_tab GET 与旧 POST）保留给离线回归与既有测试；正式播放只走 [streamLadder]。 */
+    /** 跳过 v5 那条后备，只走 video_tab GET 与 POST video_model；留给离线回归与既有测试。 */
     @JvmOverloads internal fun legacyStreamLadder(id: String, fresh: Boolean = false): StreamLadder =
         cachedLadder(id, fresh) { fetchLadder(it, allowV5 = false) }
 
@@ -557,11 +568,9 @@ class ContentRepository(
             // 带账号那轮失败再退回匿名，账号凭据失效时不至于整条路都走不通。
             val withAccount=account.isNotBlank() && round==0
             try {
-                // 先走 v5：2026-11-16 起只有这条实测能下发清晰度（同一接口同一身份只换签名，
-                // 旧签名回 0 字节、v5 回完整模型，见 kotlin-tv/PLAYBACK_V5.md）。它内部还带一次
-                // 当场换写法：当前写法没有结果时先换另一条 v5 写法（同一份正文与签名，只有 path 不同），
-                // 两条都不给结果才退回先前那两条：带账号先试 POST video_model，再试 video_tab GET。
-                val resolved=resolveLadder(id,withAccount,allowV5)
+                // 顺序见 [resolveLadder]：2026-11-23 起先走 video_tab GET（跨域名轮换、按健康度选路），
+                // 再是带账号的 POST video_model，最后才是 2026-11-16 加的 v5 那条（见 kotlin-tv/PLAYBACK_V5.md）。
+                val (resolved, firstError)=resolveLadder(id,withAccount,allowV5)
                 if(resolved!=null) {
                     val compatible=compatibleLadder(id,withAccount,resolved.ladder)
                     if(compatible!=null) {
@@ -573,8 +582,19 @@ class ContentRepository(
                     reportPlaybackAttempt(round,resolved.withAccountCookie,"取址成功：${resolved.origin}")
                     return resolved.ladder
                 }
+                // 三条接口都不给结果时留下第一条（video_tab）那个错误：后面读缓存失败时报的是它，
+                // 不是最后那条兜底请求的错误。
+                if(firstError!=null) tabError=firstError
                 reportPlaybackAttempt(round,withAccount,"没有清晰度")
-                break
+                // 未登录且三条接口都是「被拒」（空正文、110001）：这就是「去登录」，不是「暂时取不到」，
+                // 退避重读四轮只是让人对着屏幕等。网络类失败不算被拒，照旧换一份新身份重试。
+                if(account.isBlank() && firstError!=null && addressRefusal(firstError)) { anonymousRejected=true; break }
+                if(account.isBlank()) break
+                // 带账号那一轮没结果：账号凭据可能已经失效，照旧退回匿名再试一轮。
+                if(round==3) break
+                try { Thread.sleep(700L*(round+1)) } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt(); throw java.io.InterruptedIOException("请求已取消")
+                }
             } catch (error: IOException) {
                 tabError=error
                 reportPlaybackAttempt(round,withAccount,describeError(error))
@@ -602,12 +622,22 @@ class ContentRepository(
     }
     /** 取到的清晰度来自哪条请求、那条请求实际带没带账号 Cookie。日志要写的是这两件事本身。 */
     private class ResolvedLadder(val ladder: StreamLadder, val origin: String, val withAccountCookie: Boolean)
-    private fun resolveLadder(id: String, withAccount: Boolean, allowV5: Boolean): ResolvedLadder? =
-        (if (allowV5) v5Ladder(id)?.let { ResolvedLadder(it, "清晰度来自 v5 那条（这条请求不带任何 Cookie）", false) } else null)
-            ?: (if (withAccount) postVideoModel(id, withAccount)?.let { ResolvedLadder(it, "清晰度来自 POST video_model（带账号 Cookie）", true) } else null)
-            ?: tabLadder(id, withAccount)?.let {
-                ResolvedLadder(it, "清晰度来自 video_tab（${if (withAccount) "带" else "不带"}账号 Cookie）", withAccount)
-            }
+    /**
+     * 取址顺序，2026-11-23 起照主仓库：先 video_tab GET（跨域名轮换、按健康度选路），
+     * 它给不出结果才试带账号的 POST video_model，最后才是本仓库 2026-11-16 加的 v5 那条，保留作后备。
+     */
+    private fun resolveLadder(id: String, withAccount: Boolean, allowV5: Boolean): Pair<ResolvedLadder?, IOException?> {
+        val (tab, tabError) = tabLadder(id, withAccount)
+        tab?.let {
+            return ResolvedLadder(it, "清晰度来自 video_tab（${if (withAccount) "带" else "不带"}账号 Cookie）", withAccount) to null
+        }
+        val post = if (withAccount) postVideoModel(id, withAccount) else null
+        post?.let { return ResolvedLadder(it, "清晰度来自 POST video_model（带账号 Cookie）", true) to tabError }
+        if (allowV5) v5Ladder(id)?.let {
+            return ResolvedLadder(it, "清晰度来自 v5 那条（这条请求不带任何 Cookie）", false) to tabError
+        }
+        return null to tabError
+    }
     /** 取址被服务端拒（网络失败不算）：未登录时这就是「需要登录」的信号。 */
     private fun addressRefusal(error: IOException) =
         error is PlaybackRejectedException || error is EmptyPlaybackResponseException || error is EmptyContentException
@@ -698,7 +728,7 @@ class ContentRepository(
      * `compatible=true` 就是官方播放器对厂商私有编码的那条兼容请求（`codec_type=0` +
      * `force_codec=h264`）。参数不保证一定回 h264，取到之后仍按实际下发的 codec 选档。
      */
-    private fun tabLadder(id: String, withAccount: Boolean, compatible: Boolean = false): StreamLadder? {
+    private fun tabLadder(id: String, withAccount: Boolean, compatible: Boolean = false): Pair<StreamLadder?, IOException?> {
         val identity=playbackSession.profile(http)
         val params=linkedMapOf(
             "video_id" to id,"video_id_type" to "0","device_level" to "1",
@@ -706,23 +736,50 @@ class ContentRepository(
             "video_platform" to "1024","source" to "0","from_video_id" to "",
         )
         if(compatible) { params["codec_type"]="0"; params["force_codec"]="h264" }
-        // 这个接口和搜索、推荐一样要官方那套签名头。不带签名的请求自 2026-11-05 起一律回
-        // HTTP 200 + 0 字节：换域名、换 UA、换出口 IP、补参数都还是空，实测只有带签名两种回数据。
-        val signed=playbackRequest("$PLAYER_HOST/reading/bookapi/video_tab/multi_video_model/v1/",identity,params)
-        val headers=linkedMapOf<String,String>()
-        val cookie=playbackCookie(identity.cookie,if(withAccount) accountCookie() else "")
-        if(cookie.isNotBlank()) headers["Cookie"]=cookie
-        val body=text(signed.url,signed,headers=headers,retryTransient=true)
-        val json=runCatching { JSONObject(body) }.getOrNull() ?: throw IOException("播放接口返回了无法解析的数据")
-        val code=json.optInt("code",-1)
-        if(code!=0) throw playbackCodeError(code)
-        val models=json.optJSONObject("data")?.optJSONObject("video_model_data") ?: throw IOException("播放信息为空")
-        val entry=models.optJSONObject(id)
-            ?: models.keys().asSequence().mapNotNull { models.optJSONObject(it) }.firstOrNull()
-            ?: throw IOException("播放信息为空")
-        val raw=entry.opt("video_model") ?: throw IOException("播放信息为空")
-        val model=if(raw is JSONObject) raw else runCatching { JSONObject(raw.toString()) }.getOrNull() ?: throw IOException("播放信息格式已变化")
-        return ladderFromModel(model)
+        // 这个接口和搜索、推荐一样要签名头。不带签名的请求自 2026-11-05 起一律回 HTTP 200 + 0 字节。
+        // 2026-11-23 起照主仓库做：候选域名按健康度轮换（[playbackHosts]），一条回空就冷却它、换下一条，
+        // 不再对同一条域名反复撞空响应；全部失败时把最后那个错误照原样抛出去，上层还要靠它区分
+        // 「需要登录」与「网络不通」。兼容请求是额外的一次补充尝试（它自己带冷却），不值得为它
+        // 把三条入口各问一遍，所以只问当前最健康的那一条。
+        var last: IOException? = null
+        for (host in if (compatible) playbackHosts(clock()).take(1) else playbackHosts(clock())) {
+            val tag = PlayRetryPlan.tag(host)
+            val signed = playbackRequest("https://$host/reading/bookapi/video_tab/multi_video_model/v1/", identity, params)
+            val headers = linkedMapOf<String, String>()
+            val cookie = playbackCookie(identity.cookie, if (withAccount) accountCookie() else "")
+            if (cookie.isNotBlank()) headers["Cookie"] = cookie
+            try {
+                // 不在这里重试：换域名就是这条接口的重试路径，同一条入口再撞一次只是多付一秒。
+                val body = text(signed.url, signed, headers = headers)
+                val json = runCatching { JSONObject(body) }.getOrNull() ?: throw IOException("播放接口返回了无法解析的数据")
+                val code = json.optInt("code", -1)
+                if (code != 0) throw playbackCodeError(code)
+                val models = json.optJSONObject("data")?.optJSONObject("video_model_data") ?: throw IOException("播放信息为空")
+                val entry = models.optJSONObject(id)
+                    ?: models.keys().asSequence().mapNotNull { models.optJSONObject(it) }.firstOrNull()
+                    ?: throw IOException("播放信息为空")
+                val raw = entry.opt("video_model") ?: throw IOException("播放信息为空")
+                val model = if (raw is JSONObject) raw else runCatching { JSONObject(raw.toString()) }.getOrNull()
+                    ?: throw IOException("播放信息格式已变化")
+                val ladder = ladderFromModel(model)
+                if (ladder == null) {
+                    playbackHostFailed(host, clock(), empty = true)
+                    reportPlaybackAttempt(0, withAccount, "video_tab $tag 没有给出清晰度")
+                    last = IOException("播放信息没有可用资源")
+                    continue
+                }
+                playbackHostSucceeded(host)
+                return ladder to null
+            } catch (error: IOException) {
+                val empty = error is EmptyPlaybackResponseException || error is EmptyContentException
+                playbackHostFailed(host, clock(), empty = empty)
+                reportPlaybackAttempt(0, withAccount, "video_tab $tag 失败 ${describeError(error)}")
+                last = error
+            }
+        }
+        // 三条入口都不给结果时不抛：调用方还要试后面的两条接口。最后那个错误照原样带出去，
+        // 上层靠它区分「需要登录」与「网络不通」。
+        return null to (last ?: IOException("播放信息为空"))
     }
     /**
      * 官方播放器的另一条取址路径：`POST /novel/player/video_model/v1/`。
@@ -796,9 +853,10 @@ class ContentRepository(
             reportPlaybackAttempt(0,withAccount,"全档私有编码 → 兼容请求刚失败过，这一轮不再问")
             return null
         }
-        val alternative=try { tabLadder(id,withAccount,compatible = true) } catch (error: IOException) {
+        val (alternative, alternativeError) = tabLadder(id, withAccount, compatible = true)
+        if (alternativeError != null) {
             compatibleRetryBlockedUntil=clock()+compatibleRetryCooldownMs
-            reportPlaybackAttempt(0,withAccount,"全档私有编码，兼容请求失败 ${describeError(error)}")
+            reportPlaybackAttempt(0,withAccount,"全档私有编码，兼容请求失败 ${describeError(alternativeError)}")
             return null
         }
         if(alternative==null || alternative.renditions.isEmpty() ||

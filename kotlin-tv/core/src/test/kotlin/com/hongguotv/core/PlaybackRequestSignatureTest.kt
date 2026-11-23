@@ -18,21 +18,18 @@ import org.junit.Test
  * 带签名的请求回 `code 0` + 完整播放模型；换域名、换 UA、换出口 IP、补参数都不改变这一点。
  *
  * 2026-11-11 实测：`x-argus=base64(时间戳)` 那对占位 argus/ladon 不够，换成 `PlayerSigner`
- * 真算的那一份才通。当时把 `x-medusa` / `x-helios` 也一起去掉了，这一步是错的：
- * 同类项目 charlie901208/HGTV 的逐头篡改实测（docs/APP_SIGNING.md §11.2，2026-10-09）给出的结论是
- * 这条接口真正校验的是 `x-medusa`（绑定正文与设备身份）与 `x-helios`，
- * `x-gorgon` / `x-ladon` / `x-argus` / `x-ss-stub` / `x-khronos` 不发也行——它自己用的就是占位
- * argus/ladon。缺了 medusa 与 helios 时网关在业务处理前挡掉，回 `HTTP 200 + 0 字节`、连错误码
- * 都不给，与本机探针看到的「源站 origin 处理二十余毫秒后回空正文」一致。
- * 所以这里锁的是：真 argus/ladon 必须能解开，且 medusa/helios/gorgon 必须都在。
+ * 真算的那一份才通。当时又得出「medusa/helios 必须留着」（依据是同类项目 charlie901208/HGTV 的
+ * docs/APP_SIGNING.md §11.2，2026-10-09）；2026-11-23 在本机复测不成立——同一集、同一份新注册身份，
+ * 带 medusa/helios 的 video_tab GET 与旧 POST 在三条域名上全部 `HTTP 200 + 0 字节`。主仓库
+ * tsukiyo-zero/hongguoTV 现行实现也把这些头停发，只带 `PlayerSigner` 真算的那一组。
+ * 所以这里锁的是：真 argus/ladon 必须能解开，且 medusa/helios/gorgon 一律不发。
  */
 class PlaybackRequestSignatureTest {
     private val tabPath = "/reading/bookapi/video_tab/multi_video_model/v1/"
     private val legacyPath = "/novel/player/multi_video_model/v1/"
     private val signatureHeaders = listOf("x-argus", "x-ladon", "x-khronos", "x-ss-req-ticket")
-    // 逐头篡改实测里真正被校验的是 x-medusa（绑定正文与设备身份）与 x-helios，缺了它们
-    // 网关在业务处理前就把请求挡掉：HTTP 200 + content-length: 0，连错误码都不给。
-    private val verifiedHeaders = listOf("x-medusa", "x-helios", "x-gorgon")
+    // 2026-11-23 起这三个头一律不发：它们与 PlayerSigner 真头同时出现时，整条请求被当作带伪造痕迹拒掉。
+    private val stoppedHeaders = listOf("x-medusa", "x-helios", "x-gorgon")
 
     private fun row(url: String, quality: Int, height: Int) = JSONObject()
         .put("main_url", url)
@@ -73,7 +70,7 @@ class PlaybackRequestSignatureTest {
 
         val tab = requests.single { it.url.encodedPath == tabPath }
         for (name in signatureHeaders) assertNotNull("播放取址缺少签名头 $name", tab.header(name))
-        for (name in verifiedHeaders) assertNotNull("播放取址缺少服务端校验的签名头 $name", tab.header(name))
+        for (name in stoppedHeaders) assertNull("播放取址带了应当停发的签名头 $name", tab.header(name))
         // x-khronos 与 URL 的 _rticket 同源，签名才对得上 query。
         assertEquals(tab.url.queryParameter("_rticket")!!.toLong() / 1000, tab.header("x-khronos")!!.toLong())
         // x-argus 必须是能解开的真 bean（占位值解不开），且带本次调用的随机 nonce。
@@ -112,7 +109,7 @@ class PlaybackRequestSignatureTest {
 
         val legacy = requests.single { it.url.encodedPath == legacyPath }
         for (name in signatureHeaders) assertNotNull("旧播放接口缺少签名头 $name", legacy.header(name))
-        for (name in verifiedHeaders) assertNotNull("旧播放接口缺少服务端校验的签名头 $name", legacy.header(name))
+        for (name in stoppedHeaders) assertNull("旧播放接口带了应当停发的签名头 $name", legacy.header(name))
         // POST 的 body 参与签名：x-ss-stub 是 body 的 MD5，并作为 argus 的 body hash 输入。
         assertNotNull(legacy.header("x-ss-stub"))
         // 大写十六进制（设备注册那条用的也是大写）：小写的那一份服务端按没给处理。

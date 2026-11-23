@@ -90,11 +90,11 @@ class ContentRepositoryTest {
             assertTrue(error.message.orEmpty().contains("110001"))
         }
         for(request in requests) {
-            assertEquals("POST",request.method)
-            // 播放取址要的是真签名（argus/ladon 由 PlayerSigner 按最终 query 生成）；
-            // x-medusa / x-helios / x-gorgon 是服务端真正校验的那几个，缺了就只剩 HTTP 200 空正文，必须都在。
+            // 播放取址要的是真签名（argus/ladon 由 PlayerSigner 按最终 query 生成）。
             for(header in listOf("x-argus","x-ladon","x-khronos","x-ss-req-ticket")) assertNotNull(request.header(header))
-            for(header in listOf("x-gorgon","x-medusa","x-helios")) assertNotNull(request.header(header))
+            // 2026-11-23 起 x-medusa / x-helios / x-gorgon 一律不发：它们与真签名同时出现时整条请求
+            // 被当作带伪造痕迹拒掉，主仓库现行实现同样停发这三个头。
+            for(header in listOf("x-gorgon","x-medusa","x-helios")) assertNull(request.header(header))
             // 取址走的是播放器那一套请求形态（主仓库 2026-11-06 起同样如此），UA 用 PLAYER_UA。
             assertEquals(VendorConstants.PLAYER_UA,request.header("User-Agent"))
             for(key in listOf("iid","device_id")) {
@@ -105,6 +105,10 @@ class ContentRepositoryTest {
                 assertEquals(requests.first().url.queryParameter(key),value)
             }
             assertEquals(requests.first().url.queryParameter("cdid"),request.url.queryParameter("cdid"))
+        }
+        // 只有旧接口那条带正文（video_tab 是 GET）；正文里必须是这一集的号。
+        assertTrue("取址该在兜底时走一次旧接口：${requests.map { it.method }}", requests.any { it.method == "POST" })
+        requests.filter { it.method == "POST" }.forEach { request ->
             val body=okio.Buffer()
             request.body!!.writeTo(body)
             assertEquals("123",JSONObject(body.readUtf8()).getJSONObject("mixed_video_id_map").getJSONArray("1004").getString(0))
@@ -112,9 +116,21 @@ class ContentRepositoryTest {
     }
 
     @Test fun emptyPlaybackResponseReportsActionableError() {
-        val repo=repository { "   " }
-        val error=assertThrows(IOException::class.java) { repo.stream("123") }
-        assertTrue(error.message.orEmpty().contains("空响应"))
+        // 真实形态：未登录时三条入口一律回 0 字节正文（2026-11-23 三条域名各试一次，全部 HTTP 200 + 0 字节）。
+        // 这时可操作的那句话是「去登录」，不是「稍后重试」。共用的 repository() 辅助把 video_tab 固定成
+        // 100103，那是「这条接口拒绝」的形态、不是这里的形态，所以单独搭一个三条入口全空的。
+        val empty=ContentRepository(
+            OkHttpClient.Builder().addInterceptor { chain ->
+                Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                    .body("".toResponseBody()).build()
+            }.build(),
+            System::currentTimeMillis,
+            PlaybackDeviceSession { DeviceRegister.Registered("333", "444") },
+        )
+        assertThrows(PlaybackLoginRequiredException::class.java) { empty.stream("123") }
+        // 正文非空却什么都读不出来时，说的仍是「空响应／暂不可用」那一类，不冒充登录问题。
+        val garbled=assertThrows(IOException::class.java) { repository { "   " }.stream("123") }
+        assertTrue(garbled.message.orEmpty().contains("空响应") || garbled.message.orEmpty().contains("暂不可用"))
     }
 
     private fun streamRepository(vararg variants: Triple<Int,String,String>) = repository { request ->
