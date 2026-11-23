@@ -132,4 +132,40 @@ class PlaybackRequestSignatureTest {
         assertEquals(2, tabMedusa.size)
         assertNotEquals(tabMedusa[0], tabMedusa[1])
     }
+
+    private fun repositoryWithRegistrationCookies(respond: (Request) -> String) = ContentRepository(
+        OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK")
+                .body(respond(request).toResponseBody("application/json; charset=utf-8".toMediaType())).build()
+        }.build(),
+        System::currentTimeMillis,
+        // 这一份注册结果带着平台下发的 store-region 那对 Cookie，播放请求要照着它写头。
+        PlaybackDeviceSession { DeviceRegister.Registered("333", "444", cookies = mapOf(
+            "install_id" to "555", "ttreq" to "1abc",
+            "store-region" to "cn-sd", "store-region-src" to "did")) }
+    )
+
+    /**
+     * 2026-11-23 用 Frida 直接读到了官方取址请求的真实头（见 tmp/hongguo-net/红果播放链路抓包分析.md §9）：
+     * 它带 `x-reading-request`，值的前半就是本次请求的 `_rticket`；还带 `x-tt-store-region(-src)`，
+     * 值就是设备注册下发的那对 Cookie（实测省级 `cn-sd`，不是写死的 `cn`）。
+     * 这里锁住这两条，免得以后又被当作可省的杂头删掉。
+     */
+    @Test fun playbackRequestCarriesTheReadingAndRegionHeaders() {
+        val requests = mutableListOf<Request>()
+        val repository = repositoryWithRegistrationCookies { request ->
+            requests += request
+            if (request.url.encodedPath == tabPath) tabPayload("123") else "{}"
+        }
+        repository.legacyStreamLadder("123")
+        val tab = requests.single { it.url.encodedPath == tabPath }
+        val ticket = tab.url.queryParameter("_rticket")
+        assertNotNull(ticket)
+        val reading = tab.header("x-reading-request")
+        assertNotNull(reading)
+        assertEquals(ticket, reading!!.substringBefore('-'))
+        assertEquals("cn-sd", tab.header("x-tt-store-region"))
+        assertEquals("did", tab.header("x-tt-store-region-src"))
+    }
 }

@@ -7,6 +7,7 @@ import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlin.random.Random
 import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
@@ -480,7 +481,25 @@ class ContentRepository(
             "x-argus", "x-ladon", "x-gorgon", "x-medias", "x-tt-dt",
             "x-ss-req-ticket", "x-xs-from-web", "sdk-version",
         )
-        val kept = signed.headers.filterKeys { it.lowercase() !in dropped }
+        val kept = linkedMapOf<String, String>().apply {
+            putAll(signed.headers.filterKeys { it.lowercase() !in dropped })
+        }
+        // 2026-11-23 用 Frida 直接读到了官方取址请求的真实头（见 tmp/hongguo-net/红果播放链路抓包分析.md §9）。
+        // 其中两条是我们没有、且值可以就地得到的：
+        //   x-reading-request: <本次请求票据>-<随机数>
+        //   x-tt-store-region(-src): 就是设备注册下发的那对 Cookie，值是省级的（实测 cn-sd），不是写死的 cn
+        // 签名不受影响——medusa/helios 只吃 query 与正文。官方还带的 x-vc-bdturing-sdk-version、
+        // passport-sdk-version、lc、Content-Encoding: gzip 没有照搬：本函数上面那条实测结论是
+        // 「播放器会话的杂头同时出现时这条接口回 0 字节」，加没验证过的头要先过一轮对照。
+        Regex("[?&]_rticket=(\\d+)").find(signed.url)?.groupValues?.get(1)?.let { ticket ->
+            kept["x-reading-request"] = "$ticket-${Random.nextInt(1_000_000_000)}"
+        }
+        Regex("store-region=([^;]+)").find(identity.cookie)?.groupValues?.get(1)?.let { region ->
+            kept["x-tt-store-region"] = region
+        }
+        Regex("store-region-src=([^;]+)").find(identity.cookie)?.groupValues?.get(1)?.let { source ->
+            kept["x-tt-store-region-src"] = source
+        }
         return signed.copy(headers = kept)
     }
     /**
