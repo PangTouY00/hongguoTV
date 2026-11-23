@@ -90,13 +90,13 @@ class ContentRepositoryTest {
             assertTrue(error.message.orEmpty().contains("110001"))
         }
         for(request in requests) {
-            // 播放取址要的是真签名（argus/ladon 由 PlayerSigner 按最终 query 生成）。
-            for(header in listOf("x-argus","x-ladon","x-khronos","x-ss-req-ticket")) assertNotNull(request.header(header))
-            // 2026-11-23 起 x-medusa / x-helios / x-gorgon 一律不发：它们与真签名同时出现时整条请求
-            // 被当作带伪造痕迹拒掉，主仓库现行实现同样停发这三个头。
-            for(header in listOf("x-gorgon","x-medusa","x-helios")) assertNull(request.header(header))
-            // 取址走的是播放器那一套请求形态（主仓库 2026-11-06 起同样如此），UA 用 PLAYER_UA。
-            assertEquals(VendorConstants.PLAYER_UA,request.header("User-Agent"))
+            // 播放取址要的是 v5 那一族真签名（四路对照见 PlaybackRequestSignatureTest 的类注释）。
+            for(header in listOf("x-khronos","x-helios","x-medusa")) assertNotNull(request.header(header))
+            // 旧族 argus/ladon/gorgon 一律不发：实测带它们的那一路回 HTTP 200 + 0 字节。
+            for(header in listOf("x-argus","x-ladon","x-gorgon")) assertNull(request.header(header))
+            // GET video_tab 用 App 的 UA，POST 那条用播放器 UA——两条各自实测给数据的那一路。
+            val expectedUa=if(request.url.encodedPath.contains("video_tab")) VendorConstants.APP_UA else VendorConstants.PLAYER_UA
+            assertEquals(expectedUa,request.header("User-Agent"))
             for(key in listOf("iid","device_id")) {
                 val value=request.url.queryParameter(key)!!
                 // 播放只认注册下发的身份，不再自己编 19 位随机数字。

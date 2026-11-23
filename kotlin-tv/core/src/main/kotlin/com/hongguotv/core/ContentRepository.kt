@@ -448,17 +448,19 @@ class ContentRepository(
      * 版本参数与 UA 换成播放器那一套（主仓库 2026-11-06 起同样如此），query 不再带 `ts`。
      *
      * 2026-11-11 起服务端进一步校验**真签名**：`Signer` 那套 `x-argus` 只是 `base64(时间戳)`，
-     * 当时和占位的 `x-gorgon` / `x-helios` / `x-medusa` 一起出现时请求被判不可信，
-     * 直接回 HTTP 200 + 0 字节（详情、注册都正常，只有播放模型被静默丢弃）。
-     * 所以这里按最终 query 用 `PlayerSigner`（fqapp 的 argus/ladon 移植）重生成 argus/ladon/khronos。
+     * 当时和占位的 `x-gorgon` 一起出现时请求被判不可信，直接回 HTTP 200 + 0 字节
+     * （详情、注册都正常，只有播放模型被静默丢弃）。
      *
-     * 2026-11-23 起改回主仓库的做法：`x-gorgon` / `x-helios` / `x-medusa` 也一并停发，取址只带
-     * `PlayerSigner` 真算的那一组。依据是主仓库 tsukiyo-zero/hongguoTV 现行 `playbackRequest`
-     * 的实现与注释——它把这些头称作「伪造痕迹」，与真头同时出现必然被拒；本机同一集、同一份
-     * 新注册身份下的对照也一致：带 medusa/helios 的 video_tab GET 与旧 POST 一律 HTTP 200 + 0 字节。
+     * 2026-11-23 起取址只带 v5 那一族：`x-khronos` / `x-helios` / `x-medusa`，正文摘要按空内容算，
+     * 不带 `x-argus` / `x-ladon` / `x-gorgon`。依据是同一份新注册身份、同一个域名、同一份参数下
+     * 只换签名头族的四路对照（见 kotlin-tv/PLAYBACK_V5.md 的 2026-11-23 一节）：
+     * v5 三头回 22070 字节完整模型；`argus`+`ladon`+`gorgon`+`khronos` 回 0 字节；不签名回 0 字节；
+     * v5 三头再额外补上 `argus`/`ladon` 仍然给数据——所以决定因素是**有没有 medusa/helios**，
+     * 不是「多带一个头就被判伪造」。
      *
-     * 早先这里引用 charlie901208/HGTV 的 docs/APP_SIGNING.md §11.2（2026-10-09）得出「medusa 与
-     * helios 必须留着」，那是那个项目自己那条接口的结论，照到主仓库这条接口上复测不成立。
+     * 这里更正两条此前的记录：本函数曾按主仓库 tsukiyo-zero/hongguoTV 的说法把 medusa/helios
+     * 称作「伪造痕迹」并停发（PR #51），也在更早的版本引用过 charlie901208/HGTV 的相反结论。
+     * 两次都只在一部分请求形态上成立；本次四路对照下，停发 medusa/helios 正是取址全空的原因。
      */
     private fun playbackRequest(
         base: String,
@@ -472,22 +474,14 @@ class ContentRepository(
             "version_name" to "7.3.9.32",
         )
         val signed = identity.signer(clock, profile).signPlayback(base, profile + extra, body, now = clock())
-        val query = signed.url.substringAfter('?', "")
-        val ticket = query.split('&')
-            .firstOrNull { it.startsWith("_rticket=") }
-            ?.substringAfter('=')
-            ?.toLongOrNull()
-        // x-khronos 必须与 URL 的 _rticket 同源，否则签名与 query 对不上。
-        val real = if (ticket != null) PlayerSigner.headers(query, body, ts = ticket / 1000, ticket = ticket)
-        else PlayerSigner.headers(query, body)
-        // 签名头只留 PlayerSigner 真算的那一组。Signer 的 medusa/helios/gorgon 与真头同时出现时
-        // 会被网关当作伪造痕迹整条拒掉（依据见上面的记录）。
-        val replaced = setOf(
-            "x-argus", "x-ladon", "x-khronos", "x-gorgon", "x-helios", "x-medusa",
-            "x-ss-stub", "x-ss-req-ticket", "x-medias", "x-tt-dt",
+        // v5 形态下 Signer 已经把签名头收窄成 x-khronos / x-helios / x-medusa。这里再把旧族和
+        // 播放器会话的杂头清掉：它们同时出现时这条接口回的是 0 字节，不是错误码。
+        val dropped = setOf(
+            "x-argus", "x-ladon", "x-gorgon", "x-medias", "x-tt-dt",
+            "x-ss-req-ticket", "x-xs-from-web", "sdk-version",
         )
-        val kept = signed.headers.filterKeys { it.lowercase() !in replaced }
-        return signed.copy(headers = kept + real)
+        val kept = signed.headers.filterKeys { it.lowercase() !in dropped }
+        return signed.copy(headers = kept)
     }
     /**
      * 读取一集的播放信息。
@@ -503,7 +497,8 @@ class ContentRepository(
         var last: IOException?=null
         for(attempt in 0 until 3) {
             val signed=playbackRequest("$PLAYER_HOST/novel/player/multi_video_model/v1/",identity,body=payload)
-            val headers=linkedMapOf<String,String>()
+            // v5 形态的签名器只交三个签名头，UA 要由调用方给：这条 POST 用的是播放器 UA。
+            val headers=linkedMapOf<String,String>("User-Agent" to VendorConstants.PLAYER_UA)
             val cookie=playbackCookie(identity.cookie,accountCookie())
             if(cookie.isNotBlank()) headers["Cookie"]=cookie
             try {
@@ -745,7 +740,9 @@ class ContentRepository(
         for (host in if (compatible) playbackHosts(clock()).take(1) else playbackHosts(clock())) {
             val tag = PlayRetryPlan.tag(host)
             val signed = playbackRequest("https://$host/reading/bookapi/video_tab/multi_video_model/v1/", identity, params)
-            val headers = linkedMapOf<String, String>()
+            // 实测给数据的那一路用的是 App 的 UA（不是播放器 UA），这里把它固定下来，
+            // 不让它落到 text() 的默认值上。
+            val headers = linkedMapOf<String, String>("User-Agent" to VendorConstants.APP_UA)
             val cookie = playbackCookie(identity.cookie, if (withAccount) accountCookie() else "")
             if (cookie.isNotBlank()) headers["Cookie"] = cookie
             try {
