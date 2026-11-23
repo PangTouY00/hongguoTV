@@ -20,9 +20,13 @@
 
 - **签名头族不对时必然回空。** 不带 `x-medusa`/`x-helios` 的那几组写法（旧 Argus/Ladon/Gorgon 一族、或干脆不签名）在这条接口上一律 0 字节。
 - **带了 v5 三头也不保证给数据。** 同一台手机、同一集号、同一份探针代码，2026-11-23 上午四路里 B 回 22070 字节完整模型，同一天下午再跑四路全空。同一份注册身份一旦被拒会一直回空，换一份新身份或过一段时间才可能放行。
-- **2026-11-23 晚这一轮，这条接口对匿名身份直接要求登录。** 走完整取址链抛出来的是 `PlaybackLoginRequiredException`「播放需要登录红果账号」，不是静默空。同一轮用 [`tools/probes/PlaybackRedFruitReplica.kt`](tools/probes/PlaybackRedFruitReplica.kt) 把红果那条真实请求照抄下来做五路对照——30 个 query 参数、它的完整 Cookie（含 `odin_tt` / `passport_csrf_token`）、gzip 正文、旧族 + v5 两族签名、全套杂头，再分别去掉 passport 那几条 Cookie、正文不压缩、只带 v5 三头、不带 Cookie——五路全部 HTTP 200 + 0 字节。**请求形态不是变量。** 所以做这类对照之前先确认自己测的是匿名场景还是带账号场景：匿名探针测不到带账号那条通道，App 里对应的是 `ContentRepository.accountCookie`。集号本身有没有资源用 [`tools/probes/LiveChainProbe.kt`](tools/probes/LiveChainProbe.kt) 判：它走首页目录 → 剧集列表 → 第一集，这一轮取到的集号与旧日志里的集号完全一致，说明全空与集号无关。
+- **2026-11-23 晚这一轮，全空与请求形态无关。** 同一轮用 [`tools/probes/PlaybackRedFruitReplica.kt`](tools/probes/PlaybackRedFruitReplica.kt) 把红果那条真实请求照抄下来做五路对照——30 个 query 参数、它的完整 Cookie（含 `odin_tt` / `passport_csrf_token`）、gzip 正文、旧族 + v5 两族签名、全套杂头，再分别去掉 passport 那几条 Cookie、正文不压缩、只带 v5 三头、不带 Cookie——五路全部 HTTP 200 + 0 字节。**请求形态不是变量。** 所以做这类对照之前先确认自己测的是匿名场景还是带账号场景：匿名探针测不到带账号那条通道，App 里对应的是 `ContentRepository.accountCookie`。集号本身有没有资源用 [`tools/probes/LiveChainProbe.kt`](tools/probes/LiveChainProbe.kt) 判：它走首页目录 → 剧集列表 → 第一集，这一轮取到的集号与旧日志里的集号完全一致，说明全空与集号无关。
+- **全空时签名也不是变量，而且空响应是源站给的，不是 CDN 拦的。** 22:39 用 [`tools/probes/SignatureAcceptProbe.kt`](tools/probes/SignatureAcceptProbe.kt) 在同一份新注册身份、同一集、同一域名上跑三路：签名原样发出、把 `x-medusa` 改坏最后一个字符、整个去掉 `x-medusa`——三路响应头逐条一致：`HTTP 200`、`content-type: application/json`、`content-length: 0`，并且带 `x-dsa-origin-status: 200` 与 `server-timing: origin;dur=47~88`。请求确实打到了源站，源站自己返回空正文。所以「签名头族不对必然回空」这条只在**别的条件能让它给数据时**才成立（上午那次 B 给 22070 字节、A/C 空就是那种情况下的对照）；四路已经全空时再换签名头族不会有任何结果。
+- **那句「播放需要登录红果账号」不能当服务端的信号读。** 它只在 `account.isBlank()` 的分支里才可能被抛出来（[ContentRepository.kt](core/src/main/kotlin/com/hongguotv/core/ContentRepository.kt) 里 `anonymousRejected` 的赋值条件），是我们对「匿名 + 三条接口都被拒」做的分类，不是服务端回了登录错误码。22:22 真机日志里 `账号凭据=有`、带账号那一轮同样是 HTTP 200 + 0 字节，与匿名那轮没有区别——**这一轮不能把全空归因于登录态**，除非先独立证明那份账号凭据已经失效（看 App 里账号资料、收藏能不能取到）。
+- **首页试播用的集号来源是对的。** [`tools/probes/IdSourceProbe.kt`](tools/probes/IdSourceProbe.kt) 实测：推荐卡片自带的 `first_vid` 与同一作品剧集列表里的第一集是同一个 id（`两个 id 是否同一个 = true`），所以 `FeedPlayback.trial` 命中 trialHint 时跳过剧集列表直接取址没有取错集。
+- **同一时刻目录、推荐、榜单都正常**（真机日志 `Rank prefetch board=综合 ok=true items=100`，探针同一轮推荐 `items=3 trialHints=3`），全空只发生在播放模型上。
 
-所以这一类的顺序是：**先固定签名形态（第 1 步），再换身份、换时段复测**，不要拿一次全空直接判定「签名错了」。
+所以这一类的顺序是：**先固定签名形态（第 1 步），再换身份、换时段复测**，不要拿一次全空直接判定「签名错了」。已经全空时先做三路签名对照（`tools/probes/SignatureAcceptProbe.kt`）确认它不是变量，再确认同一时刻已登录的红果能不能播——只有「红果能播、我们空」成立，继续拆请求形态才有意义。
 
 固定做法，按顺序：
 
