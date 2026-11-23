@@ -18,6 +18,9 @@ internal class Signer(
         .withoutPadding()
         .encodeToString(ByteArray(18).also(java.security.SecureRandom()::nextBytes)),
     private val mobileV5: Boolean = false,
+    // 第 21 字段可注入只服务于对照实验（同一份身份下分别按 377 与 312 各发一次）。
+    // 生产调用不传这个参数，取 V5Constants.field21。
+    private val field21: Int = V5Constants.field21,
 ) {
     private val processStarted: Long = clock()
     data class Request(val url: String, val headers: Map<String, String>, val body: ByteArray?)
@@ -391,7 +394,7 @@ internal class Signer(
             f(7, version), f(8, "v04.10.03-ml-android"), f(9, 0x040a0300, "sint"),
             f(10, flags), f(12, ts, "sint"), f(13, f13), f(14, query.copyOf(6)),
             f(15, proto(f(1, 1, "sint"), f(2, 1, "sint"), f(3, 1, "sint"), f(5, 1, "sint"))),
-            f(17, ts, "sint"), f(20, "none"), f(21, 377, "sint"), f(23, env),
+            f(17, ts, "sint"), f(20, "none"), f(21, field21, "sint"), f(23, env),
             f(24, """{"cmr":16777216,"cmr2":16777216,"un_h":11,"vpn":0,"kd":0,"dyn":"","do":1,"tk":true}"""),
         )
         val nonce = rand()
