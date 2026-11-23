@@ -27,7 +27,7 @@
 
 1. **先做「只换签名头族」的四路对照。** 同一份新注册身份、同一个域名、同一份参数，只有签名头不同：A 当前线上正在发的那一组、B 只带 `x-khronos`/`x-helios`/`x-medusa`、C 不签名、D 在 v5 三头上再额外补 `x-argus`/`x-ladon`。工具在 [`tools/probes/PlaybackSignatureProbe.kt`](tools/probes/PlaybackSignatureProbe.kt)，本机不用 Gradle 就能跑，用法写在文件头上。判读：只有 B 给数据 → 变量就是签名头族，照 B 的形态改请求；四路全空 → 先换一份新注册身份、隔十分钟再跑一遍，两轮都全空才转向别的分支（这一类同时受身份与时段影响，见本节开头第二条）；D 也给数据 → 多带旧头不会被拒，别把「少发一个头」当修复方向。2026-11-23 这一轮的结果是 A 与 C 回 0 字节、B 回 22070 字节完整模型、D 回 22078 字节，改的就是 B 那一组（见 [PLAYBACK_V5.md](PLAYBACK_V5.md) 的「同日更正」一节）。
 
-   这一轮实测过、下次不必重测的变量：**域名**（`api5-normal-sinfonlinea`、`api5-normal-sinfonlineb`、`reading.snssdk.com` 三条一样）、**上报版本号**（7.4.3.32 / 7.4.5.32 / 7.3.9.32 三档一样）。**账号身份不是能一次性写死的变量**：2026-11-23 上午带账号与不带账号一样全空，同一天下午匿名四路全空、完整 `streamLadder` 报「播放需要登录红果账号」，而同一时刻装了改后包的用户能正常播放（App 走的是带账号 Cookie 那一轮）。两轮都要试，并把各自的结果连时刻一起记下来。
+   这一轮实测过、下次不必重测的变量：**域名**（`api5-normal-sinfonlinea`、`api5-normal-sinfonlineb`、`reading.snssdk.com` 三条一样）、**上报版本号**（7.4.3.32 / 7.4.5.32 / 7.3.9.32 三档一样）、**`x-reading-request` 与 `x-tt-store-region` 这两组头**（带与不带三路完全一致，见第 6 步）。**账号身份不是能一次性写死的变量**：2026-11-23 上午带账号与不带账号一样全空，同一天下午匿名四路全空、完整 `streamLadder` 报「播放需要登录红果账号」，而同一时刻装了改后包的用户能正常播放（App 走的是带账号 Cookie 那一轮）。两轮都要试，并把各自的结果连时刻一起记下来。
 
    同一份对照在不同时刻会给出不同结果，所以**一次全空不能当结论**：换一份新注册身份、隔十分钟再跑一遍，两轮都全空才转向别的分支。上游在 11 月反复开关不同请求形态（`tsukiyo-zero/hongguoTV` 的 PR #113 / #116 / #125 在 11-20 到 11-22 之间三次反向切换），写死单一路径或单一形态的客户端每次都要发版。
 2. **同一条接口有两种 path 写法，先分清用的是哪一种。** `POST /novel/player/multi_video_model/player/v1` 与 `POST /novel/player/multi_video_model/v1/`（不带 `player` 那一段、结尾带斜杠）共用同一份 gzip 正文与同一套 v5 签名，服务端对它们的反应不同：2026-11-17 的对照里前者在三个域名上一律 HTTP 200 + 0 字节，后者一律回 code=0 与五档模型。App 里当前写法没有结果时会当场换另一条（`ContentRepository.v5Ladder`，测试见 [PlaybackPathFallbackTest.kt](core/src/test/kotlin/com/hongguotv/core/PlaybackPathFallbackTest.kt)），所以诊断日志里出现「当前取址写法没有结果 → 换 …」紧接着取到，是预期行为。反过来，做签名对照时必须固定在同一条写法上，别把两条写法的差异读成签名的差异。
@@ -48,6 +48,9 @@
    - 这台手机上读红果 `base.apk` 的 dex 字符串（`pm path com.phoenix.read` 取路径，python 解可打印字符串），能拿到接口 path、参数名、版本号；
    - 读 logcat 里红果自己打的 tag；
    - 官方 SDK 的摘要可以用 VM 类研究工具观察（v5 就是这么找到的：`it00021hot/hongguo-desktop` 的 VM 工具当 oracle，把 VM 里的分支归约成普通旋转/加法/XOR/查表写回 `Signer.hashF13`，那份实现是 PolyForm 许可，不复制进仓库）。
+6. **杂头加不加会不会改变结果，用三路对照测，别靠猜。** 官方取址请求里还有 `x-reading-request`（值的前半就是本次 `_rticket`）与 `x-tt-store-region` / `x-tt-store-region-src`。2026-11-23 用 [`tools/probes/PlaybackHeaderProbe.kt`](tools/probes/PlaybackHeaderProbe.kt) 在同一份注册身份、同一集上跑三路：不带这两条、两条都带、只带 region —— 三路都是 HTTP 200 + 0 字节，一模一样。所以这两条头**不是**这条接口的变量：带上它们不会让请求变得更坏，也不会把空响应变成有数据。App 里照红果带上它们（`ContentRepository.playbackRequest`，测试见 [PlaybackRequestSignatureTest.kt](core/src/test/kotlin/com/hongguotv/core/PlaybackRequestSignatureTest.kt) 的 `playbackRequestCarriesTheReadingAndRegionHeaders`）是为了与官方形态一致，不是为了让取址出数据，别把它当修复。
+
+   同一轮顺带确认一个容易写错的对应关系：设备注册 `Set-Cookie` 下发的是 `store-region=cn-sd`（省级，随注册身份变），请求头名却是 `x-tt-store-region`：**两个名字不同**，取值要照 Cookie，不能写死 `cn`。探针第二参数可以复用一个已知的 device_id（注册照做、只换身份编号），用来把「身份」这个变量按住不动，只测请求头。
 
    这台手机上不用 Gradle 也能跑真实取址：探针放 `$DSH_WORKSPACE/.toolchain/probe/<Name>.kt`，用 `scripts/run-any-probe.sh <Name>` 编译并运行，`REPO=` 指向要测的仓库。
 
