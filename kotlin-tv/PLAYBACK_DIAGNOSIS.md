@@ -51,9 +51,22 @@
 
    这台手机上不用 Gradle 也能跑真实取址：探针放 `$DSH_WORKSPACE/.toolchain/probe/<Name>.kt`，用 `scripts/run-any-probe.sh <Name>` 编译并运行，`REPO=` 指向要测的仓库。
 
-6. **同一时刻把「被拒」的取址和「能通」的 feed 一起跑，能看出这是不是权限判定。** 2026-11-23 傍晚这一轮：取址接口对匿名身份一律 HTTP 200 + 0 字节，而同一份身份请求 feed 接口（`GET /reading/bookapi/bookmall/tab/v1/`）回的是 `{"code":110,"message":"ILLEGAL_ACCESS"}`——服务端明确说了这份身份没有访问权限，不是超时、不是解析失败。同一时刻官方红果 App（已登录）能正常播放，本仓库 App 里的目录、搜索、详情页也正常，只有取址不行。这一轮又排除了：`device_token` 的四种带法（`x-tt-dt` 原文、base64、放 Cookie、同时带）；把注册 payload、请求参数、User-Agent 三处完全对齐到这台手机的真实型号（Redmi 24117RK2CC / Android 16）与官方当前版本号 7.4.5.32；两条从没测过的路径 `POST /novel/player/video_model/v1/` 与带场景段的 `POST /novel/player/multi_video_model/<dr_scene>/v1/`（试了 `video_player`、`video_playback`、`default`、`short_play`）。工具在 [`tools/probes/FeedToPlaybackProbe.kt`](tools/probes/FeedToPlaybackProbe.kt)、[`tools/probes/UntestedPlaybackPathsProbe.kt`](tools/probes/UntestedPlaybackPathsProbe.kt)、[`tools/probes/LocalIdentityProbe.kt`](tools/probes/LocalIdentityProbe.kt)。
+6. **同一时刻把「被拒」的取址和「能通」的 feed 一起跑，能看出这是不是权限判定。** 2026-11-23 傍晚这一轮：取址接口对匿名身份一律 HTTP 200 + 0 字节，而同一份身份请求 feed 接口（`GET /reading/bookapi/bookmall/tab/v1/`）回的是 `{"code":110,"message":"ILLEGAL_ACCESS"}`——服务端明确说了这份身份没有访问权限，不是超时、不是解析失败。**这条对照当时是错的，11-23 晚上更正**：那条探针用的是 `VendorConstants.device` 里那份硬编码 `device_id`，而且不带任何 Cookie，所以它证明的只是「那份固定身份没有访问权限」，不能读成「这台设备被整体拒绝」——同一时刻真机 App 的推荐请求（`Home recommendations elapsedMs=789`）是正常的。探针已改成先注册一份新身份、feed 与取址共用它和它拿到的 Cookie。同一时刻官方红果 App（已登录）能正常播放，本仓库 App 里的目录、搜索、详情页也正常，只有取址不行。这一轮又排除了：`device_token` 的四种带法（`x-tt-dt` 原文、base64、放 Cookie、同时带）；把注册 payload、请求参数、User-Agent 三处完全对齐到这台手机的真实型号（Redmi 24117RK2CC / Android 16）与官方当前版本号 7.4.5.32；两条从没测过的路径 `POST /novel/player/video_model/v1/` 与带场景段的 `POST /novel/player/multi_video_model/<dr_scene>/v1/`（试了 `video_player`、`video_playback`、`default`、`short_play`）。工具在 [`tools/probes/FeedToPlaybackProbe.kt`](tools/probes/FeedToPlaybackProbe.kt)、[`tools/probes/UntestedPlaybackPathsProbe.kt`](tools/probes/UntestedPlaybackPathsProbe.kt)、[`tools/probes/LocalIdentityProbe.kt`](tools/probes/LocalIdentityProbe.kt)。
 
-   **这一轮没有闭合的地方要写清楚**：本机探针拿不到 App 的真实账号 Cookie（存在 App 私有目录，没有 root 读不到），所以「带账号 Cookie 的取址请求」这一条在本机复现不了——而它恰好是 App 里唯一可能与服务端放行条件匹配的那一条。要拿它只能让 App 自己说：给取址路径加一段临时日志（请求形态、Cookie 是否非空、响应码与字节数）写进 logcat，装调试包播一次再读。在此之前，不要把「匿名请求全空」写成「带账号也全空」。
+   **这一轮当时没有闭合的地方，11-23 晚上已经闭合**：本机探针拿不到 App 的真实账号 Cookie（存在 App 私有目录，没有 root 读不到），所以当时只能让 App 自己说。App 已经说了——设置页的「诊断日志」把每一轮用的哪条请求、带没带账号 Cookie、响应码与字节数都交了出来（见下面第 7 条）。结果是：**带账号 Cookie 的那一轮同样全空，播通的那一轮反而不带账号 Cookie**，所以它并不是当时猜的那条「唯一可能匹配放行条件」的请求。「不要把匿名全空写成带账号也全空」这句话仍然成立，只是现在两边都有实测了。
+
+7. **同一集在几十秒内既播通又全空时，变量不在请求形态上。** 2026-11-23 晚上用户装上 0.1.28 后反馈「一会能播放一会不能播放」，设置页的「诊断日志」交出了完整一轮。工具是 [`tools/probes/RepeatAddressProbe.kt`](tools/probes/RepeatAddressProbe.kt)：照线上形态重发同一条取址请求（GET video_tab、v5 三头、App 的 UA、只带注册下发的设备 Cookie），每组换一份新注册身份。真机那一轮的事实是：
+
+   - 16:36:51 起对 `video_id=7691249364097829913` 连打三轮，`video_tab` 三条入口与 `POST video_model` 全部 `HTTP 200 + 0 字节`；**16:36:56 第 3 轮取到 1080P bytevc1，16:36:57 出首帧（405ms）**。
+   - 同一个 `video_id`，16:38:18 起再取，四轮加备用接口全部 `HTTP 200 + 0 字节`，10995ms 后放弃。
+   - 成功那一轮日志写的是「不带账号 Cookie」，带账号的那一轮反而全空——账号不是这一轮的变量。
+   - App 每一轮都先 `playbackSession.invalidate()` 换一份新注册身份（`ContentRepository.fetchLadder`），成功落在第 3 份身份上；失败那次 4 份身份全空。
+
+   本机探针复现它：5 秒内换 20 份新身份全空；每 30 秒一次、每次换一份新身份，连续 20 次（10 分钟）全空。这一轮又排除了两个从没测过的变量。**Cookie 集合**：注册下发的本来就只有 `install_id`/`ttreq`/`store-region`/`store-region-src` 四个，带全部与只带这四个结果相同。**medusa 里的身份与 query 是否一致**：`mobileV5` 分支下 `Signer.medusa` 用的就是 `signPlayback` 传入的那份 values，不存在两套身份。
+
+   同一时刻用同一份新注册身份对照两个接口，是这一轮最有用的一条：**feed（`GET /reading/bookapi/bookmall/tab/v1/`）回 171243 字节 `code=0 SUCCESS`，取址回 0 字节**。所以这不是这台设备或这份身份被整体拒绝，是取址这一条接口单独不放行。
+
+   结论：**这一类里客户端能改的东西已经改完了**，剩下的是服务端对取址接口的间歇放行。客户端能做的是不要把「这一刻不给」写成「这一集播不了」——真机日志里 16:36 撞中、16:38 落败，两次之间请求形态完全相同。
 
 ## B. 取到模型，但没有能解码的档
 

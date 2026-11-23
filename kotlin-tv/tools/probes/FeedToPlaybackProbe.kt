@@ -14,14 +14,32 @@ package com.hongguotv.core
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import okhttp3.OkHttpClient
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 
 object FeedToPlaybackProbe {
     private const val OLD_ID = "7691249364097829913"   // 之前所有实验用的那个 id
 
     @JvmStatic fun main(args: Array<String>) {
         val http = OkHttpClient.Builder().connectTimeout(8, TimeUnit.SECONDS).readTimeout(20, TimeUnit.SECONDS).build()
-        val identity = VendorConstants.device
+        // 原本这里直接用 VendorConstants.device 里那份硬编码 device_id、也不带任何 Cookie。
+        // 那样跑出来的 feed `code=110 ILLEGAL_ACCESS` 只说明那份固定身份没有访问权限，
+        // 不能当成「这台设备被整体拒绝」——真机日志里 App 自己的推荐请求同一时刻是正常的。
+        // 这里改成先注册一份新身份，feed 与取址共用它和它拿到的 Cookie，对照才成立。
+        val registerBody = DeviceRegister.payload(VendorConstants.device)
+        val registerCall = Request.Builder().url(DeviceRegister.url())
+        DeviceRegister.headers(registerBody, VendorConstants.device).forEach { (k, v) -> registerCall.header(k, v) }
+        registerCall.post(registerBody.toRequestBody("application/octet-stream;tt-data=a".toMediaType()))
+        val registered = http.newCall(registerCall.build()).execute().use { response ->
+            DeviceRegister.parse(String(response.body?.bytes() ?: ByteArray(0), Charsets.UTF_8), response.headers("Set-Cookie"))
+        } ?: run { println("注册失败，先查注册域名（log.snssdk.com 可能直接回 444）"); return }
+        println("新注册身份 device_id=${registered.deviceId} iid=${registered.installId}")
+        val cookie = registered.cookies.entries.joinToString("; ") { (k, v) -> "$k=$v" }
+        val identity = VendorConstants.device + mapOf(
+            "device_id" to registered.deviceId, "iid" to registered.installId,
+            "cdid" to UUID.randomUUID().toString(),
+        )
 
         // 1) feed：与 ContentRepository 里那条能正常工作的请求同一形态
         val params = LinkedHashMap(identity).apply {
@@ -33,6 +51,7 @@ object FeedToPlaybackProbe {
         val feedRequest = Request.Builder().url(feedSigned.url)
             .header("User-Agent", "com.dragon.read/73532 (Linux; U; Android 16; zh_CN; 25053RT47C)")
             .header("Accept", "application/json").header("X-XS-From-Web", "0").header("Sdk-Version", "2")
+            .header("Cookie", cookie)
             .apply { feedSigned.headers.forEach { (k, v) -> header(k, v) } }
             .build()
         val feedText = http.newCall(feedRequest).execute().use { response ->
@@ -58,6 +77,7 @@ object FeedToPlaybackProbe {
             val signed = Signer(mobileV5 = true).signPlayback(base, profile + query, null, System.currentTimeMillis())
             val request = Request.Builder().url(signed.url)
                 .header("User-Agent", VendorConstants.APP_UA)
+                .header("Cookie", cookie)
                 .apply { signed.headers.forEach { (k, v) -> header(k, v) } }
                 .build()
             try {
