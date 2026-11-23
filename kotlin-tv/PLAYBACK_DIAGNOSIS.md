@@ -51,6 +51,10 @@
 
    这台手机上不用 Gradle 也能跑真实取址：探针放 `$DSH_WORKSPACE/.toolchain/probe/<Name>.kt`，用 `scripts/run-any-probe.sh <Name>` 编译并运行，`REPO=` 指向要测的仓库。
 
+6. **同一时刻把「被拒」的取址和「能通」的 feed 一起跑，能看出这是不是权限判定。** 2026-11-23 傍晚这一轮：取址接口对匿名身份一律 HTTP 200 + 0 字节，而同一份身份请求 feed 接口（`GET /reading/bookapi/bookmall/tab/v1/`）回的是 `{"code":110,"message":"ILLEGAL_ACCESS"}`——服务端明确说了这份身份没有访问权限，不是超时、不是解析失败。同一时刻官方红果 App（已登录）能正常播放，本仓库 App 里的目录、搜索、详情页也正常，只有取址不行。这一轮又排除了：`device_token` 的四种带法（`x-tt-dt` 原文、base64、放 Cookie、同时带）；把注册 payload、请求参数、User-Agent 三处完全对齐到这台手机的真实型号（Redmi 24117RK2CC / Android 16）与官方当前版本号 7.4.5.32；两条从没测过的路径 `POST /novel/player/video_model/v1/` 与带场景段的 `POST /novel/player/multi_video_model/<dr_scene>/v1/`（试了 `video_player`、`video_playback`、`default`、`short_play`）。工具在 [`tools/probes/FeedToPlaybackProbe.kt`](tools/probes/FeedToPlaybackProbe.kt)、[`tools/probes/UntestedPlaybackPathsProbe.kt`](tools/probes/UntestedPlaybackPathsProbe.kt)、[`tools/probes/LocalIdentityProbe.kt`](tools/probes/LocalIdentityProbe.kt)。
+
+   **这一轮没有闭合的地方要写清楚**：本机探针拿不到 App 的真实账号 Cookie（存在 App 私有目录，没有 root 读不到），所以「带账号 Cookie 的取址请求」这一条在本机复现不了——而它恰好是 App 里唯一可能与服务端放行条件匹配的那一条。要拿它只能让 App 自己说：给取址路径加一段临时日志（请求形态、Cookie 是否非空、响应码与字节数）写进 logcat，装调试包播一次再读。在此之前，不要把「匿名请求全空」写成「带账号也全空」。
+
 ## B. 取到模型，但没有能解码的档
 
 特征是：`video_list` 有内容、`main_url` 与 `spade_a` 都在，播放器仍然失败。这时签名是对的，别再动签名。
