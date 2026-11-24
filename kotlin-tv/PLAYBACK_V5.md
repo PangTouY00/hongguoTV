@@ -72,6 +72,33 @@
 
 外部同期记录指向同一条结论：beilunyang/openhongguo#16、jackotom/hongguo-drama v7.7、aston314/hongguo-tv#76 三个互不相关的项目都写明 video_tab GET 要带 v5 签名族、正文摘要按空内容计算、不发 `x-ss-stub` 与旧 Argus/Ladon。
 
+## 2026-11-23 第二次更正：Medusa 第 21 字段从 377 改成 312
+
+上一节改完头族后，当天上午确实取到了 22070 字节完整模型；当天下午同一台手机、同一份代码再跑就全空了。当时据此写下「全空时签名也不是变量」（见 [PLAYBACK_DIAGNOSIS.md](PLAYBACK_DIAGNOSIS.md) A 节），**这条现在被推翻**：它成立的前提是我们当时发的 medusa 里第 21 字段是 377。把这一个字段换成 312，同一份身份、同一份参数立刻恢复取址。
+
+来源是上游 [N3urda/hongguoTV 的 PR #107](https://github.com/N3urda/hongguoTV/pull/107)（2026-11-23 合并，随 0.16.14 发布）。它的排查方法值得照抄：先固定 URL、gzip 正文、匿名身份、时间戳与传输，只替换签名头，把失败范围收敛到 Medusa；再独立解包 Medusa、只替换指定字段重新封装，逐字段做 A/B——原生签名换成我们的 F13、F10、F15、F23、F24 都仍然成功，只有换成我们的 F21 时回空；反过来把我们的 F21 换成原生的那个值就恢复。官方 App 7.4.5.32 与独立 SDK 在这两个样本上给出的原始 protobuf 数值都是 624，即 zigzag 有符号值 **312**；当时两边的 Kotlin 写的都是 **377**。这个字段在 SDK 内部代表什么仍未查明，它不随设备或会话变化，所以按协议常量固定，不叫它版本号也不叫校验值。
+
+改法：`V5Constants.field21 = 312`，`Signer.medusaV5` 用它（`Signer` 多一个带默认值的 `field21` 参数，只为了让对照探针能把同一个签名器按两个值各发一次，生产调用不传）。
+
+验证分两步，顺序不能颠倒：
+
+1. **离线逐字节对拍。** 上游随 PR 一起给出 `core/src/test/resources/signing-v5-playback-312.json`：合成身份、固定时钟与进程 nonce、完整的 `x-medusa` / `x-helios` / `x-khronos` / `x-ss-stub` / `Content-Type` 与最终 URL。我们的签名器在 312 下与它逐字节一致，在 377 下 `x-medusa` 不一致——这同时证明移植没有连带改动别的字段或封装，也证明这个字段确实进入签名。测试是 `SignerV5Test.matchesVerifiedPlaybackWireContractWithSyntheticIdentity`。
+2. **联网 A/B（[`tools/probes/Field21Probe.kt`](tools/probes/Field21Probe.kt)）。** 同一份新注册身份、同一固定时间戳、同一固定随机量与进程 nonce，只有第 21 字段不同，三个上游 issue #102 样本各跑一遍：
+
+| 第 21 字段 | 三个样本的结果 |
+| --- | --- |
+| 377（改前的线上写法） | 三条全部 `HTTP 200 + 0 字节` |
+| 312 | 三条全部 `code=0`，22752 / 14833 / 21127 字节，**各 5 档 `main_url`，最高 1920×1080**（前两档为 `bytevc1`，中间那集给的是 `bytevc2`，响应带 `fallback_api`） |
+
+同一轮里带与不带注册下发的设备 Cookie 结果一致，与上一节的结论相同。
+
+两点保留：
+
+- 第一轮跑这个对照时，312 那一路回的是 `code=100103`（参数无效）而不是模型，换一份新注册身份后同样的请求就给出五档。所以「同一份身份一旦被拒会一直回空」这条仍然成立，判读前要先换身份。
+- 我们的两条 `POST /novel/player/multi_video_model/...` 写法在 312 下仍然全空（探针第 4、5、6 路）。上游成功的那条用的是 App 的完整公共参数与 `preload/v1`，本探针只照我们的参数形态构造，不构成对上游形态的复现。当前取址首选是 video_tab GET，它已经恢复，所以不动 POST 那条。
+
+真机播放尚未验收：本机只验证到「取到五档与真实 `main_url`」。
+
 ## 下一次
 
 「播不了」不止这一类。取址空正文、选不出可解码的档、业务码非 0、目录也空，是四类不同故障，分流与各自的路线写在 [PLAYBACK_DIAGNOSIS.md](PLAYBACK_DIAGNOSIS.md)。

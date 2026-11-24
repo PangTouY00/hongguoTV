@@ -4,10 +4,32 @@ package com.hongguotv.core
 
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
 
 class SignerV5Test {
+    /**
+     * 上游 N3urda/hongguoTV 随 PR #107 一起给出的完整签名固定向量（合成身份，第 21 字段 = 312）。
+     * 逐字节对得上，才说明这次把 377 换成 312 没有连带改动别的字段或封装；对不上先修移植，不要开始试网络。
+     */
+    @Test fun matchesVerifiedPlaybackWireContractWithSyntheticIdentity() {
+        val fixture = JSONObject(javaClass.getResource("/signing-v5-playback-312.json")!!.readText())
+        val values = fixture.getJSONObject("identity")
+        val order = fixture.getJSONArray("queryOrder")
+        val identity = (0 until order.length())
+            .associate { order.getString(it).let { key -> key to values.getString(key) } }
+        val signer = Signer({ 1800000000000 }, identity, { 0.5 }, "synthetic", mobileV5 = true)
+        val actual = signer.signPlayback(
+            "https://example.test/model", identity,
+            java.util.Base64.getDecoder().decode(fixture.getString("body")), 1800000000000L,
+        )
+        assertEquals(fixture.getString("url"), actual.url)
+        val expected = fixture.getJSONObject("headers")
+        assertEquals(expected.keys().asSequence().toSet(), actual.headers.keys)
+        expected.keys().forEach { assertEquals(it, expected.getString(it), actual.headers[it]) }
+    }
+
     @Test fun matchesCarrierVectorsAcrossAllFourTimestampVariants() {
         val rows = JSONArray(javaClass.getResource("/signing-v5-carrier.json")!!.readText())
         for (i in 0 until rows.length()) {
