@@ -1899,16 +1899,16 @@ class MainActivity: Activity() {
         }
     }
     /** 右上角那个时钟说的是「现在几点」，它属于播放这一屏的 HUD，所以显隐完全跟着 HUD 走，
-     *  不设自己的开关。字号比标题小一档（电视 20、手机 15）：要读得清，但不和剧集标题争。
-     *  数字走等宽，免得分钟位一变整块宽度就跳；12/24 小时制跟系统设置，不自己定规矩。
-     *  底是 TvStyle.overlayGlass 那层薄玻璃——它盖在真实画面上，只压暗，不把身后那一块挡住。 */
+     *  不设自己的开关。屏幕上是纯数字、不铺任何底色，字号比剧集标题更大一档（电视 28、手机 20）——
+     *  它是播放期间唯一的读数，该显眼。数字走等宽，免得分钟位一变整块宽度就跳；12/24 小时制跟系统设置。 */
     private fun addPlaybackClock(container: FrameLayout) {
         clockFormat=android.text.format.DateFormat.getTimeFormat(this)
-        val clock=text("",if(touchInput) 15f else 20f,white).apply {
+        val clock=text("",if(touchInput) 20f else 28f,white).apply {
             setTypeface(Typeface.MONOSPACE); letterSpacing=.02f; gravity=Gravity.END
-            setPadding(dp(11),dp(5),dp(11),dp(6))
-            // View 不是 Context 的子类：apply 块里的 this 是那个 TextView，要上下文只能写外层这个 Activity。
-            background=TvStyle.shape(this@MainActivity,TvStyle.overlayGlass,TvStyle.edge,radius=8,borderDp=1f)
+            // 纯白数字压在浅色画面上（白墙、天空、雪花屏）会糊掉，所以只留一圈柔和投影把数字托出来，不铺色块。
+            // TextView 的文字阴影在 API 28 以下不跟硬件加速共存，本项目最低 API 23，强制软件层保证各机型表现一致。
+            setShadowLayer(9f,0f,2f,Color.argb(115,0,0,0))
+            setLayerType(View.LAYER_TYPE_SOFTWARE,null)
             isFocusable=false; isFocusableInTouchMode=false; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
             visibility=View.GONE
         }
