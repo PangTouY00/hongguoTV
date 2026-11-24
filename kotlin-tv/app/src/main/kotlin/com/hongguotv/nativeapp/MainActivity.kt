@@ -224,6 +224,10 @@ class MainActivity: Activity() {
     private lateinit var playbackText: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var controls: LinearLayout
+    // 播放界面右上角的时钟。它和进度条是同一组东西：只在人还在动这一屏的时候出现，
+    // HUD 收起它就收起，所以显隐一律走 setHudVisible，不给它自己的开关。
+    private var playbackClock: TextView?=null
+    private var clockFormat: java.text.DateFormat?=null
     private var panel=false
     private var transportPlay: TextView?=null
     private var sleepButton: TextView?=null
@@ -247,7 +251,7 @@ class MainActivity: Activity() {
             if(!foreground || isDestroyed) return
             if(screen=="player") {
                 if(sleepTimer.poll()) stopForSleep()
-                if(hud.visibility==View.VISIBLE) updatePlaybackText()
+                if(hud.visibility==View.VISIBLE) { updateClock(); updatePlaybackText() }
                 maybePrefetch()
                 val now=android.os.SystemClock.elapsedRealtime()
                 if(player?.isPlaying==true && now-lastSaved>5000) { saveProgress(); lastSaved=now }
@@ -1497,7 +1501,7 @@ class MainActivity: Activity() {
                         val duration=player?.duration ?: 0L
                         if(fromUser && !touchLock && playbackReady && duration>0) playbackText.text="跳转到 ${formatTime(value.toLong()*duration/1000)} · 松手生效"
                     }
-                    override fun onStartTrackingTouch(bar: SeekBar) { main.removeCallbacks(hideHud); hud.visibility=View.VISIBLE }
+                    override fun onStartTrackingTouch(bar: SeekBar) { main.removeCallbacks(hideHud); setHudVisible(true) }
                     override fun onStopTrackingTouch(bar: SeekBar) {
                         if(touchLock) { updatePlaybackText(); return }
                         val duration=player?.duration ?: 0L; if(playbackReady && duration>0) seekTo(bar.progress.toLong()*duration/1000)
@@ -1509,6 +1513,7 @@ class MainActivity: Activity() {
             if(touchInput) root.addView(PlaybackTouchLayer(this),FrameLayout.LayoutParams(-1,-1))
             val glyph=PauseGlyph(this).apply { visibility=View.GONE }; pauseGlyph=glyph; root.addView(glyph,FrameLayout.LayoutParams(dp(96),dp(96),Gravity.CENTER))
             root.addView(ScrollView(this).apply { isVerticalScrollBarEnabled=false; addView(hud) },FrameLayout.LayoutParams(-1,-2,Gravity.BOTTOM))
+            addPlaybackClock(root)
         }
         playbackTitle.text="${data.series.title}  ·  第 ${episodeNumber(data,episodeIndex)} 集"
         playbackText.text="正在获取播放地址…"; progressBar.progress=0; progressBar.visibility=View.VISIBLE; hidePlaybackOverlay(); pauseGlyph?.visibility=View.GONE
@@ -1763,7 +1768,7 @@ class MainActivity: Activity() {
         }
         // 这一轮播不起来了，界面有话要说：先把「封面展开」那层撤掉，否则重试按钮和说明都被盖在黑底下。
         playbackTransition.cancel()
-        playError=true; player?.pause(); progressBar.visibility=View.GONE; hud.visibility=View.VISIBLE; controls.removeAllViews(); controls.visibility=View.VISIBLE; panel=true
+        playError=true; player?.pause(); progressBar.visibility=View.GONE; setHudVisible(true); controls.removeAllViews(); controls.visibility=View.VISIBLE; panel=true
         val decoding=problem is PlaybackException && problem.errorCode in 3000..4999
         // 源里给的每一档都解不了，和「暂时取不到」是两件事：前者再试一百次也一样，
         // 挂着自动重试只会让人对着屏幕等，所以它不进重试路径，也不给「试更低清晰度」这个按钮。
@@ -1893,13 +1898,40 @@ class MainActivity: Activity() {
             canvas.drawRoundRect(w/2f+gap/2f,h*0.28f,w/2f+gap/2f+bar,h*0.72f,radius,radius,paint)
         }
     }
+    /** 右上角那个时钟说的是「现在几点」，它属于播放这一屏的 HUD，所以显隐完全跟着 HUD 走，
+     *  不设自己的开关。字号比标题小一档（电视 20、手机 15）：要读得清，但不和剧集标题争。
+     *  数字走等宽，免得分钟位一变整块宽度就跳；12/24 小时制跟系统设置，不自己定规矩。
+     *  底是 TvStyle.overlayGlass 那层薄玻璃——它盖在真实画面上，只压暗，不把身后那一块挡住。 */
+    private fun addPlaybackClock(container: FrameLayout) {
+        clockFormat=android.text.format.DateFormat.getTimeFormat(this)
+        val clock=text("",if(touchInput) 15f else 20f,white).apply {
+            setTypeface(Typeface.MONOSPACE); letterSpacing=.02f; gravity=Gravity.END
+            setPadding(dp(11),dp(5),dp(11),dp(6))
+            // View 不是 Context 的子类：apply 块里的 this 是那个 TextView，要上下文只能写外层这个 Activity。
+            background=TvStyle.shape(this@MainActivity,TvStyle.overlayGlass,TvStyle.edge,radius=8,borderDp=1f)
+            isFocusable=false; isFocusableInTouchMode=false; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            visibility=View.GONE
+        }
+        playbackClock=clock
+        updateClock()
+        container.addView(clock,FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.END).apply { topMargin=dp(20); rightMargin=dp(widthDp()*.05f) })
+    }
+    private fun updateClock() {
+        val clock=playbackClock ?: return; val format=clockFormat ?: return
+        clock.text=format.format(java.util.Date())
+    }
+    /** HUD 唯一的显隐入口：标题、进度条、控制面板和右上角时钟是一组东西，不该出现一半亮一半灭。 */
+    private fun setHudVisible(visible: Boolean) {
+        hud.visibility=if(visible) View.VISIBLE else View.GONE
+        playbackClock?.visibility=if(visible) View.VISIBLE else View.GONE
+    }
     private fun hidePlaybackOverlay() {
         main.removeCallbacks(hideHud)
-        panel=false; controls.visibility=View.GONE; controls.clearFocus(); hud.visibility=View.GONE
+        panel=false; controls.visibility=View.GONE; controls.clearFocus(); setHudVisible(false)
     }
     private fun showHud() {
         if(screen!="player") return
-        hud.visibility=View.VISIBLE; updatePlaybackText(); main.removeCallbacks(hideHud)
+        setHudVisible(true); updateClock(); updatePlaybackText(); main.removeCallbacks(hideHud)
         if(!panel && player?.isPlaying==true) main.postDelayed(hideHud,4500)
     }
     private fun updatePlaybackText() {
@@ -2320,6 +2352,8 @@ private fun showEpisodePanel(anchor: View) {
         playerListener?.let { player?.removeListener(it) }; playerListener=null
         video?.close(); video=null; playerView?.player=null; playerView=null; player?.release(); player=null; playbackReady=false; transportPlay=null; sleepButton=null
         pauseGlyph=null; boostSpeed=false
+        // 时钟和这一屏的其它控件一起退场：留着它，下一次起播会往一个已经不在树上的视图里写文字。
+        playbackClock?.let { (it.parent as? ViewGroup)?.removeView(it) }; playbackClock=null; clockFormat=null
         closeTransport(playbackHttp); playbackHttp=null
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
