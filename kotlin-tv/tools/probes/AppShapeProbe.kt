@@ -138,12 +138,15 @@ object AppShapeProbe {
         extraHeaders: Map<String, String>,
         cookie: String,
         stub: String,
+        // 默认用线上形态的 v5 签名器；换签名族时由调用方给签名器与「保留哪些签名头」的过滤。
+        signerInstance: Signer = signer(),
+        signedFilter: (Map<String, String>) -> Map<String, String> = { it },
     ) {
-        val signed = signer().signPlayback(HOST + PATH, query, body, FIXED_NOW)
+        val signed = signerInstance.signPlayback(HOST + PATH, query, body, FIXED_NOW)
         val builder = Request.Builder().url(signed.url)
         // 先放被测的形态头，再放签名头：签名头始终由签名器给，形态各路只在非签名部分不同。
         (extraHeaders + mapOf("x-ss-stub" to stub, "Content-Type" to "application/json; charset=utf-8")).forEach { (k, v) -> builder.header(k, v) }
-        signed.headers.forEach { (k, v) -> builder.header(k, v) }
+        signedFilter(signed.headers).forEach { (k, v) -> builder.header(k, v) }
         if (cookie.isNotBlank()) builder.header("Cookie", cookie)
         try {
             http.newCall(builder.post(body.toRequestBody("application/json; charset=utf-8".toMediaType())).build())
@@ -216,16 +219,27 @@ object AppShapeProbe {
             "is_android_pad_screen" to "0",
         )
 
-        println("=== 二分：窄 query 加上哪一组就通了（上一轮已证：设备描述与业务开关都可整组删掉，只剩核心 13 项时回 0 字节） ===")
-        attempt("k 核心 13 项 + manifest_version_code",
-            http, narrow + mapOf("manifest_version_code" to "74332"), gz, withContentEncoding, "", stub)
-        attempt("l 核心 13 项 + 8 项业务开关", http, narrow + flags, gz, withContentEncoding, "", stub)
-        attempt("m 核心 13 项 + manifest_version_code + 8 项业务开关",
-            http, narrow + flags + mapOf("manifest_version_code" to "74332"), gz, withContentEncoding, "", stub)
-        attempt("n 完整 34 项但去掉 manifest_version_code（反向确认）",
-            http, full.filterKeys { it != "manifest_version_code" }, gz, withContentEncoding, "", stub)
-        attempt("o 完整 34 项但 manifest_version_code 与 version_code 不一致（74332 对 74532）",
-            http, full + mapOf("manifest_version_code" to "74332"), gz, withContentEncoding, "", stub)
+        // 基准是上一轮定下的「能通的最小形态」：核心 13 项 + manifest_version_code。
+        // 这一组只换签名族，query、正文、时间戳、随机量、进程 nonce 全部同一份。
+        val minimal = narrow + mapOf("manifest_version_code" to "74332")
+        val legacySigner = Signer(
+            clock = { FIXED_NOW }, random = FIXED_RANDOM, processNonce = FIXED_NONCE, mobileV5 = false,
+        )
+        val legacyHeaders = legacySigner.signPlayback(HOST + PATH, minimal, gz, FIXED_NOW).headers
+        val oldFamily = legacyHeaders.filterKeys { it.lowercase() in setOf("x-ladon", "x-argus", "x-gorgon") }
+        println("旧族样本 X-Ladon=${oldFamily["x-ladon"]} X-Argus=${oldFamily["x-argus"]} X-Gorgon=${oldFamily["x-gorgon"]?.take(24)}…")
+
+        println("=== 签名族实验：在带 manifest_version_code 的最小形态上只换签名 ===")
+        attempt("S1 只 v5 三头（x-khronos/x-helios/x-medusa，锚点）", http, minimal, gz, withContentEncoding, "", stub)
+        attempt("S2 v5 三头 + 旧族（x-ladon/x-argus/x-gorgon 一起带，官方就是两套同时带）",
+            http, minimal, gz, withContentEncoding + oldFamily, "", stub)
+        attempt("S3 完全不带任何签名头", http, minimal, gz, withContentEncoding, "", stub,
+            signedFilter = { emptyMap() })
+        attempt("S4 只旧族 + x-khronos（拿掉 x-helios/x-medusa）",
+            http, minimal, gz, withContentEncoding, "", stub, legacySigner,
+            signedFilter = { h -> h.filterKeys { it.lowercase() !in setOf("x-helios", "x-medusa") } })
+        attempt("S5 完整旧签名形态（legacy 全套，含 legacy 版 helios/medusa）",
+            http, minimal, gz, withContentEncoding, "", stub, legacySigner)
     }
 
     private fun stubOf(body: ByteArray) =
