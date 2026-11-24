@@ -50,8 +50,15 @@ internal object MobilePlayback {
                path: String = PRIMARY_PATH): JSONObject {
         require(id.matches(Regex("[0-9]{1,30}")))
         RequestScope.ensureActive()
+        // `manifest_version_code` 是这条接口的必需参数：2026-11-24 在 Debian 上用官方 7.4.5.32 的抓包
+        // 对照探针（`.toolchain/probe/AppShapeProbe.kt`，结论记在 `tmp/hongguo-net/红果播放链路抓包分析.md` 第 12 节）逐项二分——
+        // 同一份注册身份、同一集、同一签名与正文，只在 query 里加或不去这一个参数：
+        //   带 manifest_version_code → code=0、五档清晰度；不带 → HTTP 200 + 0 字节。
+        // 其余 20 项公共参数（resolution/dpi/device_brand/rom_version/pv_player/业务开关…）全都可有可无，
+        // 整组删掉照样给完整模型；`manifest_version_code` 与 `version_code` 不同值也能通过。
+        // 之前把「一律回空」归到签名族、域名或 path 写法，都是这个缺失参数造成的假象。
         val query = linkedMapOf("aid" to "8662", "app_name" to "novelread",
-            "version_code" to "74332", "version_name" to "7.4.3.32",
+            "version_code" to "74332", "version_name" to "7.4.3.32", "manifest_version_code" to "74332",
             "channel" to "vivo_8662_64", "device_platform" to "android",
             "device_type" to "PGT-AN10", "os_version" to "12", "update_version_code" to "74332",
             "iid" to device.getValue("iid"), "cdid" to device.getValue("cdid"),
