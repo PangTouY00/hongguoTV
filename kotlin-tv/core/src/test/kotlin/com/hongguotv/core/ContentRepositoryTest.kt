@@ -194,6 +194,46 @@ class ContentRepositoryTest {
         assertEquals(1080,ladder.select(1080) { !(it.width==1080 && it.height==1920) }!!.quality)
     }
 
+    /**
+     * 2026-11-27 起站方官网详情页的 `vid_list` 只剩几条 `v1_` 混淆串，同一页的 `episode_cnt` 仍是 300。
+     * 分集要退回站方 App 的目录接口，元信息仍来自官网详情页，不能让整部剧直接报「分集数据异常」。
+     */
+    @Test fun detailFallsBackToAppDirectoryWhenWebVidListIsObfuscated() {
+        val requested=mutableListOf<Pair<String,String>>()
+        val repo=repository { request ->
+            requested+=request.url.host to request.url.encodedPath
+            when(request.url.encodedPath) {
+                // 详情页那份数据在真实页面里是嵌在 `_ROUTER_DATA` 里的，解析按这个标记取。
+                "/detail" -> "window._ROUTER_DATA=" + JSONObject().put("loaderData",JSONObject().put("detail_page",JSONObject().put("seriesDetail",
+                    JSONObject().put("series_id","7701226234214108185").put("series_name","聚宝仙盆之杂灵根才是真BOSS第十五季")
+                        .put("series_cover","https:\\u002F\\u002Fexample.com/c.jpg").put("series_intro","简介").put("episode_cnt",300)
+                        .put("vid_list",JSONArray().put("v1_QMelE5ysHOf0nDNPVKvRGd5V1fk").put("v1_2kYKQ8wRy8iAqZ1H7nGmQ4bZ0Jc")
+                            .put("v1_7mPQ2nVbK0hGxT9sLdRfW3yUeCv"))))).toString()
+                "/reading/bookapi/directory/all_items/v/" -> JSONObject().put("code",0).put("message","SUCCESS")
+                    .put("data",JSONObject().put("item_data_list",JSONArray()
+                        .put(JSONObject().put("item_id","7701227778389068824")).put(JSONObject().put("item_id","7701227781400579096")))).toString()
+                else -> error("未预期的请求 ${request.url.encodedPath}")
+            }
+        }
+        val detail=repo.detail("7701226234214108185")
+        assertEquals(listOf("7701227778389068824","7701227781400579096"),detail.episodes)
+        // 剧名、封面这些还是从官网详情页读出来的，回退不换成另一套元信息。
+        assertEquals("聚宝仙盆之杂灵根才是真BOSS第十五季",detail.series.title)
+        assertTrue(requested.any { it.first.endsWith("fqnovel.com") && it.second=="/reading/bookapi/directory/all_items/v/" })
+    }
+
+    /** 目录接口也给出非纯数字 id 时不硬接，照旧报「分集数据异常」，不要把混淆串当成可播的集。 */
+    @Test fun detailKeepsRefusingEpisodesWhenNeitherSourceGivesNumericIds() {
+        val repo=repository { request ->
+            if(request.url.encodedPath=="/detail") "window._ROUTER_DATA=" + JSONObject().put("loaderData",JSONObject().put("detail_page",
+                JSONObject().put("seriesDetail",JSONObject().put("series_id","123").put("series_name","测试剧")
+                    .put("vid_list",JSONArray().put("v1_abc"))))).toString()
+            else JSONObject().put("code",0).put("data",JSONObject().put("item_data_list",
+                JSONArray().put(JSONObject().put("item_id","v1_abc")))).toString()
+        }
+        assertEquals("分集数据异常",assertThrows(IOException::class.java){ repo.detail("123") }.message)
+    }
+
     /** 未单独准备的测试一律把新接口当成不可用，让它们继续走旧接口的回退链路。 */
     private fun repository(clock: () -> Long = System::currentTimeMillis, respond: (Request) -> String) = ContentRepository(
         OkHttpClient.Builder().addInterceptor { chain ->

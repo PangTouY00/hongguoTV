@@ -432,10 +432,54 @@ class ContentRepository(
     fun detail(id: String): Detail {
         require(id.matches(Regex("[0-9]{1,30}")))
         val o=router("$site/detail?series_id=$id").optJSONObject("detail_page")?.optJSONObject("seriesDetail") ?: throw IOException("剧集详情暂不可用")
-        val raw=o.optJSONArray("vid_list") ?: throw IOException("分集暂不可用")
-        val episodes=(0 until raw.length()).map { raw.getString(it) }
-        if(episodes.isEmpty() || episodes.any { !it.matches(Regex("[0-9]{1,30}")) } || episodes.distinct().size!=episodes.size) throw IOException("分集数据异常")
+        val raw=o.optJSONArray("vid_list")
+        val numeric=Regex("[0-9]{1,30}")
+        val webEpisodes=raw?.let { rows -> (0 until rows.length()).map { rows.optString(it) } }.orEmpty()
+        val episodes=if(webEpisodes.isNotEmpty() && webEpisodes.all { it.matches(numeric) } && webEpisodes.distinct().size==webEpisodes.size) {
+            webEpisodes
+        } else {
+            // 2026-11-27 起站方官网详情页的 `vid_list` 换成了只有几条的 `v1_` 混淆串，不再下发全集纯数字 id
+            // （本机与上游实测都是 3 条，而同一页的 `episode_cnt` 仍写着 300）。
+            // 剧集元信息继续用官网详情页，分集改走站方 App 自己在用的目录接口。
+            directoryEpisodes(id) ?: throw IOException("分集数据异常")
+        }
         return Detail(card(o).copy(id=id),episodes)
+    }
+    /**
+     * 站方 App 目录接口 `/reading/bookapi/directory/all_items/v/?book_id=&need_version=true`。
+     *
+     * 只要 v4 那一族签名，不需要注册设备、不需要账号，也不消耗发号配额。
+     * 实测对首页现取的 12 部真实剧集全部给出全量纯数字分集（88 到 1000 集），
+     * 与详情页自称的 `episode_cnt` 一致。
+     */
+    private fun directoryEpisodes(bookId: String): List<String>? {
+        val values=VendorConstants.device.toMutableMap().apply { put("book_id",bookId); put("need_version","true") }
+        for(host in PlayRetryPlan.hosts) {
+            try {
+                val request=signer.sign("https://$host/reading/bookapi/directory/all_items/v/",values)
+                parseDirectoryEpisodes(text(request.url,request))?.let { return it }
+            } catch(problem: Exception) {
+                if(Thread.currentThread().isInterrupted) throw problem
+            }
+        }
+        return null
+    }
+    /** 这条接口有两种响应形态：带 `code=0` 的，和没有 `code` 字段但 `message=SUCCESS` 的。 */
+    private fun parseDirectoryEpisodes(raw: String): List<String>? {
+        if(raw.isBlank()) return null
+        val root=runCatching { JSONObject(raw) }.getOrNull() ?: return null
+        if(root.has("code") && root.optInt("code",-1)!=0) return null
+        if(!root.has("code") && !root.optString("message").equals("SUCCESS",ignoreCase=true)) return null
+        val items=root.optJSONObject("data")?.optJSONArray("item_data_list") ?: return null
+        if(items.length()==0) return null
+        val numeric=Regex("[0-9]{1,30}")
+        val ids=linkedSetOf<String>()
+        for(index in 0 until items.length()) {
+            val itemId=items.optJSONObject(index)?.optString("item_id")?.trim().orEmpty()
+            if(!itemId.matches(numeric)) return null
+            ids+=itemId
+        }
+        return if(ids.isEmpty()) null else ids.toList()
     }
     fun stream(id: String, maxQuality: Int = 1080, failed: (Rendition) -> Boolean = { false }): StreamInfo {
         val selected=streamLadder(id).select(maxQuality,failed) ?: throw IOException("没有电视可播放的清晰度，请稍后再试或选择其他剧集")

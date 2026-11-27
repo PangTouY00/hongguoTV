@@ -10,11 +10,13 @@ import org.junit.Test
 
 class SignerV5Test {
     /**
-     * 上游 N3urda/hongguoTV 随 PR #107 一起给出的完整签名固定向量（合成身份，第 21 字段 = 312）。
-     * 逐字节对得上，才说明这次把 377 换成 312 没有连带改动别的字段或封装；对不上先修移植，不要开始试网络。
+     * 上游随 PR #107 给出第 21 字段 = 312 的固定向量，随后 PR #122 补全了 medusa 的设备信封
+     * （flags、补到 field 38 的 36 项设备字段、f5/f16 设备令牌、env 与 nested）。这份 envelope
+     * 向量是上游按 #122 的形态从同一份 312 向量重新封装的合成样本，保留它的 query/body 摘要与熵。
+     * 逐字节对得上，才说明补字段集没有连带改动别的字段或封装；对不上先修移植，不要开始试网络。
      */
     @Test fun matchesVerifiedPlaybackWireContractWithSyntheticIdentity() {
-        val fixture = JSONObject(javaClass.getResource("/signing-v5-playback-312.json")!!.readText())
+        val fixture = JSONObject(javaClass.getResource("/signing-v5-playback-envelope.json")!!.readText())
         val values = fixture.getJSONObject("identity")
         val order = fixture.getJSONArray("queryOrder")
         val identity = (0 until order.length())
