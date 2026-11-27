@@ -519,7 +519,13 @@ class ContentRepository(
         )
         val signed = identity.signer(clock, profile).signPlayback(base, profile + extra, body, now = clock())
         // v5 形态下 Signer 已经把签名头收窄成 x-khronos / x-helios / x-medusa。这里再把旧族和
-        // 播放器会话的杂头清掉：它们同时出现时这条接口回的是 0 字节，不是错误码。
+        // 播放器会话的杂头清掉。
+        //
+        // 旧注释说「旧族与新族同时出现这条接口回 0 字节」，那条归因在 2026-11-24 的对照实验里被推翻：
+        // 同一份身份与正文下，只 v5 三头、以及 v5 三头再同时带 x-ladon/x-argus/x-gorgon（官方形态），
+        // 两路都给 code=0 与完整清晰度；回 0 字节的原因是 query 缺 manifest_version_code，与签名族无关
+        // （见 tmp/hongguo-net/红果播放链路抓包分析.md 第 12–13 节）。
+        // 保留这段过滤只是为了不把 A 的签名头和 B 的会话头混在一请求里，不是正确性条件。
         val dropped = setOf(
             "x-argus", "x-ladon", "x-gorgon", "x-medias", "x-tt-dt",
             "x-ss-req-ticket", "x-xs-from-web", "sdk-version",
